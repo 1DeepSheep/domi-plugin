@@ -59,7 +59,7 @@ Codex 的安装与登录说明见 [OpenAI Codex 官方文档](https://developers
 
 两种模式复用同一套项目分类、研究和写作规范。Domi 在执行前读取用户当前选择，再把结果写入相应后端。
 
-从本地模式切换到飞书时，客户端可以先把项目 Markdown 和文档内图片迁移到对应的 Wiki 目录，再回填 Watching List。只有全部在线文档回读验证成功后才完成后端切换；本地文件始终保留。
+从本地模式切换到飞书时，客户端可以先迁移本地资料：项目 Markdown 和文档内图片进入对应 Wiki，项目、人脉、行业动态分别进入 Watching List、People Base 和行业动态 Base。每条内容都会按业务键去重并回读验证；只有全部通过后才完成后端切换，本地 SQLite、Markdown 和附件始终保留。
 
 PLAUD 是可选连接。如果用户跳过，插件不会启动 PLAUD worker、读取浏览器状态或检查录音队列。
 
