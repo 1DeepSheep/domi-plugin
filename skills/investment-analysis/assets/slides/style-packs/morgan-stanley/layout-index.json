@@ -1,0 +1,92 @@
+{
+  "default_style_pack": "morgan-stanley",
+  "metric_strip_policy": {
+    "status": "optional_component",
+    "max_non_appendix_page_ratio": 0.3,
+    "max_consecutive_pages": 1,
+    "allowed_when": [
+      "the cards add a different analytical layer from the main exhibit",
+      "the page needs a compact takeaway strip after a dense exhibit",
+      "the metrics are independent and not already repeated in the main body"
+    ],
+    "avoid_when": [
+      "used only to fill blank space",
+      "main exhibit already has a clear conclusion note",
+      "the cards repeat the same numbers from the table or chart"
+    ]
+  },
+  "layouts": [
+    {
+      "id": "cover-with-findings",
+      "use_for": ["cover", "front page"],
+      "primary_evidence": "findings",
+      "metric_strip": "never"
+    },
+    {
+      "id": "full-table-plus-sidebar",
+      "use_for": ["customers", "suppliers", "financing history", "source list", "risk register"],
+      "primary_evidence": "wide table",
+      "metric_strip": "avoid"
+    },
+    {
+      "id": "left-data-right-analysis",
+      "use_for": ["UE", "revenue quality", "financial quality", "working capital", "pricing validation"],
+      "primary_evidence": "table or chart plus analysis",
+      "metric_strip": "optional"
+    },
+    {
+      "id": "top-chart-bottom-table",
+      "use_for": ["revenue mix", "margin trend", "customer concentration", "supplier concentration", "usage trend"],
+      "primary_evidence": "main chart plus support table",
+      "metric_strip": "avoid"
+    },
+    {
+      "id": "two-exhibit-plus-note",
+      "use_for": ["two comparable exhibits", "growth versus quality", "revenue versus cost"],
+      "primary_evidence": "two exhibits",
+      "metric_strip": "avoid"
+    },
+    {
+      "id": "asymmetric-main-plus-minis",
+      "use_for": ["market size plus peers", "business model plus KPIs", "valuation chart plus model table"],
+      "primary_evidence": "one dominant exhibit plus small multiples",
+      "metric_strip": "optional"
+    },
+    {
+      "id": "four-exhibit-grid",
+      "use_for": ["small multiples", "peer comparison", "multi-indicator trend"],
+      "primary_evidence": "four compact exhibits",
+      "metric_strip": "never"
+    },
+    {
+      "id": "timeline-plus-table",
+      "use_for": ["financing sequence", "roadmap", "lock-up schedule", "milestones"],
+      "primary_evidence": "timeline and table",
+      "metric_strip": "optional"
+    },
+    {
+      "id": "waterfall-plus-bridge",
+      "use_for": ["margin bridge", "cash flow bridge", "valuation bridge", "return formation"],
+      "primary_evidence": "bridge chart and assumption table",
+      "metric_strip": "avoid"
+    },
+    {
+      "id": "valuation-table-with-callouts",
+      "use_for": ["peer valuation", "investor return", "scenario valuation"],
+      "primary_evidence": "valuation table",
+      "metric_strip": "avoid"
+    },
+    {
+      "id": "risk-matrix-table",
+      "use_for": ["ratings", "upside downside", "risk register"],
+      "primary_evidence": "risk matrix table",
+      "metric_strip": "never"
+    },
+    {
+      "id": "financial-statement-dense",
+      "use_for": ["income statement", "balance sheet", "cash flow", "financial appendix"],
+      "primary_evidence": "dense financial table",
+      "metric_strip": "never"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deal Negotiation"
+  short_description: "投资交易谈判、条款博弈、SAFE 与交易文件梳理助手。"
+  default_prompt: "Use $deal-negotiation to design a term-sheet negotiation strategy for this investment scenario."

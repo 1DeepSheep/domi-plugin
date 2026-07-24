@@ -1,0 +1,4 @@
+interface:
+  display_name: "Investment Radar"
+  short_description: "追踪投资新闻，并优先提醒重点项目与人脉的实质动态。"
+  default_prompt: "Use $investment-radar to scan the latest investment news, load priority projects from the local snapshot, cross-check deep-tracking people, archive verified events, and proactively surface priority alerts."

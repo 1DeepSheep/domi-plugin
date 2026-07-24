@@ -1,0 +1,4 @@
+interface:
+  display_name: "IC Memo"
+  short_description: "根据项目材料撰写投委会上会用的正式 IC 决策报告。"
+  default_prompt: "Use $ic-memo to draft an investment committee memo from these project materials."

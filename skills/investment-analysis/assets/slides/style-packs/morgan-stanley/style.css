@@ -1,0 +1,10 @@
+@import url("../../ms-research.css");
+
+/* Morgan Stanley default style pack.
+   Keep this file intentionally thin: the shared implementation lives in
+   ../../ms-research.css, while style-lock.yml and chart-recipes.md define the
+   non-CSS decisions that make the style stable. */
+
+:root {
+  --style-pack: "morgan-stanley";
+}

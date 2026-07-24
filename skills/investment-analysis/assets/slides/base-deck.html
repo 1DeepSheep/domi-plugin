@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{deck_title}}</title>
+  <link rel="stylesheet" href="./style-packs/morgan-stanley/style.css">
+</head>
+<body>
+  <main class="deck">
+    <section class="slide cover">
+      <div class="brand">{{brand_left}}</div>
+      <div class="report-tag">{{report_tag}}</div>
+      <div class="cover-grid">
+        <div>
+          <div class="cover-kicker">{{date}}<br><br>{{category}}</div>
+          <h1 class="cover-title">{{deck_title}}</h1>
+          <div class="cover-findings">
+            <strong>核心结论</strong><br>
+            {{cover_findings}}
+          </div>
+        </div>
+        <aside class="cover-side">
+          <p>{{deck_subtitle}}</p>
+          <p>基于 {{primary_source}} 整理</p>
+          <div class="side-band">{{sector_tag}}</div>
+          <p>{{report_type}}</p>
+        </aside>
+      </div>
+      <div class="footer"><span>{{brand_footer}}</span><span>1</span></div>
+    </section>
+  </main>
+</body>
+</html>
