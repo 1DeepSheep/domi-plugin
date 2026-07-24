@@ -1,0 +1,20 @@
+{
+  "name": "plaud-cli",
+  "version": "1.0.0",
+  "description": "Private PLAUD Web API wrapper using local Tabbit session",
+  "main": "src/plaud.js",
+  "bin": {
+    "plaud": "src/cli.js"
+  },
+  "scripts": {
+    "link": "npm link",
+    "check": "node src/cli.js auth"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.59.1"
+  }
+}

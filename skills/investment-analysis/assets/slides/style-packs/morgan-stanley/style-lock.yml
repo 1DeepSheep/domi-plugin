@@ -1,0 +1,162 @@
+style_pack: morgan-stanley
+default: true
+
+page:
+  size: letter-landscape
+  width: 11in
+  height: 8.5in
+  pdf_points: "792 x 612"
+  margin_left: 0.46in
+  margin_right: 0.46in
+  margin_top: 0.34in
+  margin_bottom: 0.30in
+  overflow_policy: "no hidden overflow except slide clipping; fix layout if content is clipped"
+
+typography:
+  chinese: ["KaiTi", "Kaiti SC", "STKaiti", "Songti SC", "SimSun"]
+  english_numbers: ["Calibri", "Aptos", "Arial", "Helvetica"]
+  title:
+    color: "#002f7f"
+    size: 25pt
+    weight: 700
+    font_stack: ["Calibri", "DeckCJKTitle", "DeckCJK", "sans-serif"]
+    cjk_bold_font: ["Kaiti SC Bold", "STKaitiSC-Bold", "楷体-简 粗体"]
+    rule: "must be thesis / finding title, not section label"
+    real_bold_gate: "PDF font table must include a true bold CJK title font; font-weight:700 on regular Kai is insufficient."
+  body:
+    size: 14.5-16.5pt
+    line_height: 1.32-1.38
+  source:
+    size: 8.5pt
+    required: true
+
+colors:
+  navy: "#002f7f"
+  black: "#000000"
+  ink: "#171717"
+  muted: "#666666"
+  rule: "#9c9c9c"
+  light_rule: "#d7d7d7"
+  panel: "#f2f2f2"
+  note: "#eaf4fb"
+  negative: "#e00000"
+  primary_chart_blue: "#2f7fbd"
+  secondary_chart_blue: "#9bb8d5"
+
+layout:
+  default_page_rhythm: balanced
+  allowed_page_rhythm: [dense, balanced, breathing]
+  layout_recipes: assets/slides/style-packs/morgan-stanley/layout-recipes.md
+  layout_index: assets/slides/style-packs/morgan-stanley/layout-index.json
+  diversity_rule: "For decks longer than 12 pages, use at least five layout families and avoid more than two consecutive pages with the same data-template."
+  metric_strip_policy:
+    status: optional_component
+    max_non_appendix_page_ratio: 0.20
+    max_consecutive_pages: 1
+    rule: "Use metric strips only when the cards add a new analytical layer; never use four cards only to fill blank space. If the main exhibit already contains the numbers, move the useful interpretation into a sidebar, chart annotation, or compact proof row."
+    preferred_alternatives:
+      - metric-strip compact-ribbon
+      - chart-pair-only
+      - callout-stack sidebar
+      - enlarged primary exhibit
+  preferred_structures:
+    - cover-with-findings
+    - left-data-right-analysis
+    - two-exhibit-plus-note
+    - full-table-plus-sidebar
+    - single-stock-memo
+    - thematic-table-plus-trends
+    - top-chart-bottom-table
+    - asymmetric-main-plus-minis
+    - four-exhibit-grid
+    - timeline-plus-table
+    - waterfall-plus-bridge
+    - valuation-table-with-callouts
+    - risk-matrix-table
+    - full-width-disclosure-table
+    - ms-financial-statement
+    - market-views-vs-validation
+    - exhibit-grid-2x2
+    - chart-pair-only
+    - compact-ribbon-proof-strip
+  avoid:
+    - low-information divider pages
+    - decorative fills
+    - repeated KPI cards used only to fill blank space
+    - consecutive bottom four-card endings
+    - page-bottom cards used as a habitual template ending
+    - unusual aspect ratios unless requested
+
+tables:
+  financial_data:
+    class: ms-table
+    style: white background, horizontal rules, bold subtotal rows
+    use_for:
+      - financial statements
+      - operating metrics
+      - valuation and return calculations
+      - customer or supplier monetary tables
+      - working capital analysis
+  text_information:
+    class: info-table
+    style: black header, bordered grid
+    use_for:
+      - source lists
+      - financing transaction descriptions
+      - governance or lock-up explanations
+      - long text risk tables
+      - qualitative external view matrices
+
+charts:
+  palette: ["#2f7fbd", "#9bb8d5", "#d62728", "#7f7f7f", "#f28e2b"]
+  required_elements: [title, unit, axis_or_scale, data_labels, source]
+  label_policy: "label the key point directly on the chart; avoid decorative legends when direct labels work"
+  negative_policy: "show a minus sign; do not rely only on parentheses"
+  minimum_plot_heights:
+    main_exhibit_svg: "180px"
+    support_chart_svg: "150px"
+    evidence_bottom_chart_svg: "150px"
+    rule: "chart readability is a visual gate, not only an overflow gate; if a chart becomes a thumbnail, enlarge it, merge charts, or change the layout."
+  visual_fail_conditions:
+    - crooked_chart_labels
+    - missing_axis_numbers
+    - missing_data_labels
+    - x_axis_overlaps_bars_or_labels
+    - charts_in_same_row_or_column_not_aligned
+  number_policy:
+    thousands_separator: true
+    currency_space: true
+    examples: ["RMB 55.3m", "HKD 1,200m", "USD 2.4bn"]
+
+qa:
+  html_script: scripts/qa_deck.js
+  export_script: scripts/export_pdf.js
+  sample_render_pages: [cover, chart, table, financial_statement, source]
+  fail_on:
+    - overflow
+    - clipped content
+    - missing source on data pages
+    - wrong page size
+    - inconsistent brand
+    - title_cjk_not_real_bold
+    - unreadable_evidence_chart
+    - chart_label_or_axis_overlap
+    - footer_or_brand_overlap
+  warn_on:
+    - used_height_ratio_below_0.72
+    - title_without_number_or_judgment
+    - chart_without_axis_or_label
+    - table_too_small_to_read
+    - excessive_metric_strip_ratio
+    - consecutive_same_template
+    - low_layout_diversity
+    - bottom_chart_looks_like_thumbnail
+    - left_right_exhibits_not_aligned
+    - unnecessary_horizontal_or_vertical_rules
+  manual_regression_checklist:
+    - "Blue page titles use true bold CJK, visually matching Calibri-Bold English/numbers."
+    - "No chart is too small to read; bottom charts carrying evidence are not thumbnails."
+    - "Chart axes, labels, legends, and value numbers are visible, straight, and non-overlapping."
+    - "Multiple exhibits on one page align by top/bottom edges or share an intentional rhythm."
+    - "Sources align to their related exhibit; notes do not overlap footer or brand."
+    - "No forced four-card footer, divider line, or vertical separator remains unless it adds structure."

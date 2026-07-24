@@ -1,0 +1,4 @@
+interface:
+  display_name: "Desk Research"
+  short_description: "投研桌面研究、公司深度画像与行业赛道扫描综合编排器。"
+  default_prompt: "Use $desk-research to build a sourced company profile and investment research brief."

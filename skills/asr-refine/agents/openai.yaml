@@ -1,0 +1,4 @@
+interface:
+  display_name: "ASR Refine"
+  short_description: "将 ASR 粗转写做实体核验与深度纠错，输出可发布的高质量完整记录稿。"
+  default_prompt: "Refine an ASR transcript in two stages: verify entities/terms via web search, then correct and polish while preserving speaker structure."

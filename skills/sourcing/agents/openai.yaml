@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sourcing"
+  short_description: "Google-backed sourcing and relationship CRM"
+  default_prompt: "Use $sourcing to run Google-backed founder sourcing, check backgrounds, and update the 1.1 People relationship base."

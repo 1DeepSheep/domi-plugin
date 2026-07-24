@@ -1,0 +1,4 @@
+interface:
+  display_name: "Investment Review"
+  short_description: "快速输出有立场的投不投判断、关键问题、评分与评级。"
+  default_prompt: "Use $investment-review to evaluate this project and give a score, rating, and key decision questions."

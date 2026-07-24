@@ -1,0 +1,269 @@
+<!-- Morgan Stanley default templates.
+     These wrappers use classes from ../../ms-research.css. Copy snippets into a deck
+     initialized from base-deck.html and replace placeholders. -->
+
+<section class="slide" data-template="ms-cover-with-findings">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <div class="cover-grid">
+    <div>
+      <div class="cover-kicker">{{date}}<br><br>{{category}}</div>
+      <h1 class="cover-title">{{deck_title}}</h1>
+      <div class="cover-findings">
+        <strong>核心结论</strong><br>
+        {{5_to_7_findings}}
+      </div>
+    </div>
+    <aside class="cover-side">
+      <p>{{subtitle}}</p>
+      <p>基于 {{primary_source}} 整理</p>
+      <div class="side-band">{{sector_tag}}</div>
+      <p>{{report_type}}</p>
+    </aside>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-left-data-right-analysis">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content two-col left-wide">
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{data_table_or_chart_title}}</h3>
+      {{primary_data_table_or_chart}}
+      <div class="source">来源：{{source}}</div>
+    </div>
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">分析：{{question}}</h3>
+      <div class="analysis-copy compact">
+        <p><strong>{{point_1}}</strong><br>{{evidence_1}}</p>
+        <p><strong>{{point_2}}</strong><br>{{evidence_2}}</p>
+        <p><strong>{{point_3}}</strong><br>{{evidence_3}}</p>
+      </div>
+      <div class="note-box compact">{{investment_implication}}</div>
+    </div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-two-exhibit-plus-note">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content">
+    <div class="two-col">
+      <div class="exhibit-panel with-rule">
+        <h3 class="exhibit-title">{{left_exhibit_title}}</h3>
+        {{left_exhibit}}
+        <div class="source">来源：{{left_source}}</div>
+      </div>
+      <div class="exhibit-panel with-rule">
+        <h3 class="exhibit-title">{{right_exhibit_title}}</h3>
+        {{right_exhibit}}
+        <div class="source">来源：{{right_source}}</div>
+      </div>
+    </div>
+    <div class="note-box" style="margin-top:0.18in;">{{conclusion}}</div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-financial-statement">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <div class="content fill" style="margin-top:0.58in;">
+    <h3 class="exhibit-title">{{statement_title}}</h3>
+    <div class="source" style="font-weight:700;margin-bottom:0.14in;">{{unit}}</div>
+    <table class="ms-table compact">
+      {{financial_statement_rows}}
+    </table>
+    <div class="source">来源：{{source}}</div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-market-views-vs-validation">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{market_disagreement_thesis}}</h2>
+  <div class="title-rule"></div>
+  <div class="content two-col right-wide">
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">外部观点</h3>
+      <table class="info-table">
+        {{external_view_rows}}
+      </table>
+      <div class="source">来源：{{external_sources}}</div>
+    </div>
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">我们的校验</h3>
+      <table class="ms-table large">
+        {{validation_rows}}
+      </table>
+      <div class="note-box compact" style="margin-top:0.12in;">{{investment_implication}}</div>
+    </div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-full-table-plus-sidebar">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content two-col table-sidebar">
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{wide_table_title}}</h3>
+      {{wide_table}}
+      <div class="source">来源：{{source}}</div>
+    </div>
+    <aside class="sidebar-stack">
+      <div class="note-box compact">{{main_implication}}</div>
+      <div class="callout"><div class="value">{{key_metric_1}}</div>{{metric_1_readout}}</div>
+      <div class="callout"><div class="value">{{key_metric_2}}</div>{{metric_2_readout}}</div>
+      <div class="callout">{{caveat_or_follow_up}}</div>
+    </aside>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-top-chart-bottom-table">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content top-bottom">
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{main_chart_title}}</h3>
+      <div class="chart-box">{{main_chart}}</div>
+      <div class="source">来源：{{chart_source}}</div>
+    </div>
+    <div class="split-note-grid">
+      <div class="exhibit-panel with-rule">
+        <h3 class="exhibit-title">{{support_table_title}}</h3>
+        {{support_table}}
+      </div>
+      <div class="note-box">{{conclusion_and_implication}}</div>
+    </div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-asymmetric-main-plus-minis">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content asymmetric-grid">
+    <div class="exhibit-panel with-rule span-rows">
+      <h3 class="exhibit-title">{{dominant_exhibit_title}}</h3>
+      {{dominant_exhibit}}
+      <div class="source">来源：{{dominant_source}}</div>
+    </div>
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{mini_exhibit_1_title}}</h3>
+      {{mini_exhibit_1}}
+    </div>
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{mini_exhibit_2_title}}</h3>
+      {{mini_exhibit_2}}
+      <div class="source">来源：{{mini_source}}</div>
+    </div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-four-exhibit-grid">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content exhibit-grid-2x2">
+    <div class="exhibit-panel with-rule"><h3 class="exhibit-title">{{exhibit_1_title}}</h3>{{exhibit_1}}</div>
+    <div class="exhibit-panel with-rule"><h3 class="exhibit-title">{{exhibit_2_title}}</h3>{{exhibit_2}}</div>
+    <div class="exhibit-panel with-rule"><h3 class="exhibit-title">{{exhibit_3_title}}</h3>{{exhibit_3}}</div>
+    <div class="exhibit-panel with-rule"><h3 class="exhibit-title">{{exhibit_4_title}}</h3>{{exhibit_4}}</div>
+  </div>
+  <div class="source">来源：{{source}}</div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-timeline-plus-table">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content two-col chart-sidebar">
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{timeline_title}}</h3>
+      <div class="timeline">
+        {{timeline_rows}}
+      </div>
+      <div class="source">来源：{{timeline_source}}</div>
+    </div>
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{quant_table_title}}</h3>
+      {{quant_table}}
+      <div class="note-box compact" style="margin-top:0.12in;">{{sequence_implication}}</div>
+    </div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-waterfall-plus-bridge">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content two-col left-wide">
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{bridge_chart_title}}</h3>
+      <div class="chart-box">{{bridge_or_waterfall_chart}}</div>
+      <div class="source">来源：{{chart_source}}</div>
+    </div>
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{assumption_table_title}}</h3>
+      {{assumption_or_bridge_table}}
+      <div class="note-box compact" style="margin-top:0.12in;">{{bridge_readout}}</div>
+    </div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-valuation-table-with-callouts">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content two-col right-wide">
+    <div class="exhibit-panel with-rule">
+      <h3 class="exhibit-title">{{valuation_table_title}}</h3>
+      {{valuation_table}}
+      <div class="source">来源：{{source}}</div>
+    </div>
+    <aside class="callout-stack">
+      <div class="callout"><div class="value">{{callout_value_1}}</div>{{callout_text_1}}</div>
+      <div class="callout"><div class="value">{{callout_value_2}}</div>{{callout_text_2}}</div>
+      <div class="note-box compact">{{valuation_implication}}</div>
+    </aside>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>
+
+<section class="slide" data-template="ms-risk-matrix-table">
+  <div class="brand">{{brand_left}}</div>
+  <div class="report-tag">{{report_tag}}</div>
+  <h2 class="page-title">{{thesis_title_with_number_or_judgment}}</h2>
+  <div class="title-rule"></div>
+  <div class="content fill">
+    <table class="info-table large risk-table">
+      {{risk_matrix_rows}}
+    </table>
+    <div class="note-box compact" style="margin-top:0.16in;">{{risk_or_rating_implication}}</div>
+    <div class="source">来源：{{source}}</div>
+  </div>
+  <div class="footer"><span>{{brand_footer}}</span><span>{{page}}</span></div>
+</section>

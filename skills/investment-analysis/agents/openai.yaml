@@ -1,0 +1,4 @@
+interface:
+  display_name: "Investment Analysis"
+  short_description: "Research and build Morgan Stanley HTML/PDF slide reports"
+  default_prompt: "Use $investment-analysis to research this company and make it into a Morgan Stanley-style slides report, delivering HTML and PDF by default and PPTX only when I explicitly request an editable PowerPoint source file."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mac 录音"
+  short_description: "安全录制 Mac 麦克风；默认绑定快速讨论，可明确仅本地。"
+  default_prompt: "Use $mac-recording to start a Mac microphone recording tagged for quick discussion by default, unless I explicitly request local-only recording."
