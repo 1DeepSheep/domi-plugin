@@ -33,6 +33,8 @@ LOCAL_DATABASE_PATH="$(node -e 'const path=require("node:path"); const c=require
 
 `STORAGE_BACKEND=feishu` 时 Base、Wiki 与 `LOCAL_LIBRARY_DIR` 本地材料目录为必需值；`STORAGE_BACKEND=local` 时只要求 `LOCAL_REPOSITORY_DIR` 资料库根目录和数据库路径。两个目录是独立配置，禁止把飞书模式已经指向 `3.项目库` 的材料目录直接当作本地模式根目录。任一当前后端的必需值为空时停止，并提示用户到豆米“设置 → 资料连接”补充；不得从 Skill 内容、历史对话或他人配置中猜测。
 
+当用户从本地资料库切换到飞书并要求迁移文档时，必须执行 `storage-backends.md` 的“本地 → 飞书的显式迁移”契约。普通后端切换不得冒充迁移；迁移未全部验证成功时不得把当前后端改成飞书。
+
 ## ⚠️ 关键字段名映射（必读）
 
 Bitable 中项目名称的字段名是 **`公司名称`**（不是"项目"）。搜索/过滤项目时必须使用此字段名，否则 API 静默返回空结果。
