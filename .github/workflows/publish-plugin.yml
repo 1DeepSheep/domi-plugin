@@ -1,0 +1,88 @@
+name: Publish signed Domi plugin update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".codex-plugin/**"
+      - "assets/**"
+      - "scripts/**"
+      - "skills/**"
+      - ".github/workflows/publish-plugin.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-domi-plugin
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      DOMI_PLUGIN_SIGNING_PRIVATE_KEY: ${{ secrets.DOMI_PLUGIN_SIGNING_PRIVATE_KEY }}
+      DOMI_PLUGIN_SIGNING_PUBLIC_KEY_DER_B64: ${{ vars.DOMI_PLUGIN_SIGNING_PUBLIC_KEY_DER_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate public plugin contents
+        run: node scripts/public-release-check.cjs
+
+      - name: Run plugin tests
+        run: |
+          node scripts/domi-repo.test.cjs
+          node scripts/build-plugin-release.test.cjs
+
+      - name: Build deterministic plugin archive
+        run: |
+          mkdir -p dist
+          git archive --format=tar --prefix=domi/ HEAD .codex-plugin assets scripts skills \
+            | gzip -n > dist/domi-plugin.tar.gz
+
+      - name: Resolve release metadata
+        id: metadata
+        shell: bash
+        run: |
+          VERSION="$(node -p 'require("./.codex-plugin/plugin.json").version')"
+          SAFE_VERSION="$(printf '%s' "$VERSION" | tr -c 'A-Za-z0-9._-' '-')"
+          TAG="plugin-${SAFE_VERSION}-${GITHUB_SHA:0:12}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Sign release manifest
+        run: |
+          node scripts/build-plugin-release.cjs \
+            --archive dist/domi-plugin.tar.gz \
+            --output dist \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --tag "${{ steps.metadata.outputs.tag }}" \
+            --min-client-version "0.3.0"
+
+      - name: Publish immutable plugin release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="${{ steps.metadata.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              dist/domi-plugin.tar.gz dist/latest.json dist/latest.json.sig \
+              --clobber
+          else
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Domi plugin ${{ steps.metadata.outputs.version }} ($GITHUB_SHA)" \
+              --notes "Signed automatic plugin update from main at $GITHUB_SHA." \
+              --latest \
+              dist/domi-plugin.tar.gz dist/latest.json dist/latest.json.sig
+          fi
