@@ -48,7 +48,7 @@ function buildReleaseArtifacts(options) {
   const pluginManifestPath = path.resolve(options.pluginManifestPath);
   const pluginManifest = JSON.parse(fs.readFileSync(pluginManifestPath, "utf8"));
   if (pluginManifest.name !== "domi" || !pluginManifest.version) {
-    throw new Error("Invalid Domi plugin manifest.");
+    throw new Error("Invalid domi plugin manifest.");
   }
 
   const privateKey = crypto.createPrivateKey(options.privateKeyPem);
@@ -121,7 +121,7 @@ if (require.main === module) {
   try {
     main();
   } catch (error) {
-    console.error(`Domi plugin release build failed: ${error.message}`);
+    console.error(`domi plugin release build failed: ${error.message}`);
     process.exit(1);
   }
 }

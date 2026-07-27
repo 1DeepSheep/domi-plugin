@@ -71,7 +71,7 @@ scripts/mac-recording.js
 ## 权限与错误
 
 - 权限为 `not_determined`：只有明确的 `start` 才请求。
-- 权限为 `denied/restricted`：停止重试，告诉用户前往“系统设置 → 隐私与安全性 → 麦克风”允许 Domi Mac Recording（部分系统可能显示为 Codex）；用户修复后需再次明确开始。
+- 权限为 `denied/restricted`：停止重试，告诉用户前往“系统设置 → 隐私与安全性 → 麦克风”允许 domi Mac Recording（部分系统可能显示为 Codex）；用户修复后需再次明确开始。
 - helper 编译、启动或封装失败：报告返回的 `code`、简短错误和保留的日志／partial 文件路径；不得声称成功。
 - 只有带正确会话 ID 与令牌的停止请求、预设时长结束或 recorder 正常完成才可记为成功；外部 `SIGINT/SIGTERM` 只用于尽量保全音频，必须标记为中断而非成功。
 - 发出停止请求前，状态文件与实际进程身份（PID、用户、可执行文件、会话令牌、输出路径及启动时间）不一致时，拒绝控制未知进程，报告为 stale/unsafe。

@@ -8,13 +8,16 @@ const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 
 const SCHEMA_VERSION = 1;
-const DEFAULT_CONFIG_PATH = path.join(
-  os.homedir(),
-  "Library",
-  "Application Support",
-  "豆米",
-  "domi-plugin-config.json"
-);
+function defaultConfigPath(homeDir = os.homedir(), exists = fs.existsSync) {
+  const applicationSupport = path.join(homeDir, "Library", "Application Support");
+  const current = path.join(applicationSupport, "domi", "domi-plugin-config.json");
+  const legacy = path.join(
+    applicationSupport,
+    String.fromCodePoint(0x8c46, 0x7c73),
+    "domi-plugin-config.json"
+  );
+  return !exists(current) && exists(legacy) ? legacy : current;
+}
 
 function fail(message, code = "repository_error") {
   process.stdout.write(`${JSON.stringify({ ok: false, code, error: message })}\n`);
@@ -27,9 +30,9 @@ function resolveHomePath(value) {
 }
 
 function readConfig() {
-  const configPath = resolveHomePath(process.env.DOMI_CONFIG_PATH || DEFAULT_CONFIG_PATH);
+  const configPath = resolveHomePath(process.env.DOMI_CONFIG_PATH || defaultConfigPath());
   if (!fs.existsSync(configPath)) {
-    throw new Error("没有找到 Domi 资料库配置。请先在豆米“设置 → 资料连接”中选择资料库模式。");
+    throw new Error("没有找到 domi 资料库配置。请先在 domi“设置 → 资料连接”中选择资料库模式。");
   }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const backend = config.storageBackend === "local" ? "local" : "feishu";
@@ -155,7 +158,7 @@ class DomiRepository {
       );
     }
     if (!config.libraryDir || !config.databasePath) {
-      throw new Error("本地资料库缺少目录或数据库路径。请回到豆米设置重新保存资料连接。");
+      throw new Error("本地资料库缺少目录或数据库路径。请回到 domi 设置重新保存资料连接。");
     }
     this.config = config;
     this.libraryDir = path.resolve(config.libraryDir);
@@ -782,6 +785,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  defaultConfigPath,
   DomiRepository,
   SCHEMA_VERSION,
   normalizedName,

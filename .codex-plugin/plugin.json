@@ -1,9 +1,9 @@
 {
   "name": "domi",
-  "version": "0.2.0+codex.20260724142704",
+  "version": "0.2.1+codex.20260727150000",
   "description": "Personal investment and work assistant for industry news radar, founder sourcing, people relationship management, quick discussions, recordings, startup project intake, structured research, Morgan Stanley-style HTML/PDF slides reports, investment reviews, documentation, and deal-flow management.",
   "author": {
-    "name": "Domi Team"
+    "name": "domi"
   },
   "license": "Apache-2.0",
   "keywords": [
@@ -27,7 +27,7 @@
     "displayName": "domi",
     "shortDescription": "\u7f16\u6392\u5f55\u97f3\u3001\u884c\u4e1a\u96f7\u8fbe\u3001\u9879\u76ee\u4e0e\u4eba\u7269\u7814\u7a76\u5165\u5e93\u53ca\u6295\u7814\u5f52\u6863\u95ed\u73af\u3002",
     "longDescription": "domi \u6c47\u96c6\u4e2a\u4eba\u6295\u8d44\u4e0e\u5de5\u4f5c Skill\u3002\u65e0\u4fee\u9970\u5730\u8bf4\u201c\u5f00\u59cb\u5f55\u97f3\u201d\u65f6\uff0c\u9ed8\u8ba4\u628a Mac \u9ea6\u514b\u98ce\u5f55\u97f3\u8fde\u7eed\u5904\u7406\u4e3a PLAUD \u6587\u5b57\u7a3f\u3001\u7ed3\u6784\u5316\u7eaa\u8981\u3001\u6838\u5fc3\u8981\u70b9\u548c\u8ddf\u8fdb\u4e8b\u9879\uff1b\u660e\u786e\u8bf4\u201c\u5f00\u59cb\u672c\u5730\u5f55\u97f3\u201d\u65f6\u624d\u53ea\u4fdd\u5b58\u6587\u4ef6\u3002\u4e5f\u53ef\u5904\u7406\u8d26\u6237\u5185 PLAUD \u5f55\u97f3\uff0c\u4ece\u9879\u76ee\u540d\u79f0\u3001\u622a\u56fe\u3001\u94fe\u63a5\u3001BP \u6216\u521b\u59cb\u4eba\u8bbf\u8c08\u51fa\u53d1\u5b8c\u6210\u9879\u76ee\u7814\u7a76\u3001\u8bc4\u7ea7\u3001\u98de\u4e66 Wiki\u3001OneDrive \u4e0e Watching List \u5f52\u6863\uff1b\u8fd8\u53ef\u6309\u8d5b\u9053\u53d1\u73b0\u6f5c\u5728\u521b\u59cb\u4eba\u3001\u5f62\u6210\u516c\u5f00\u4eba\u7269\u753b\u50cf\u4e0e\u5173\u7cfb\u8def\u5f84\uff0c\u5e76\u5728\u786e\u8ba4\u548c\u67e5\u91cd\u540e\u5199\u5165\u300a1.1 People\u4eba\u9645\u5173\u7cfb\u7ba1\u7406\u300b\u3002",
-    "developerName": "Domi Team",
+    "developerName": "domi",
     "category": "Productivity",
     "capabilities": [
       "Interactive",

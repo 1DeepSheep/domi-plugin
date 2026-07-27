@@ -20,7 +20,7 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 
 进入任何 PLAUD 阶段前，读取 `DOMI_CONFIG_PATH` 中的 `plaudConnectionMode`：
 
-- `disabled`：不得采用 `plaud` Skill，不得运行 `doctor`、`queue`、上传、生成或下载。用户明确要求 PLAUD 处理时，请其先在豆米“设置 → 录音转写”中开启。
+- `disabled`：不得采用 `plaud` Skill，不得运行 `doctor`、`queue`、上传、生成或下载。用户明确要求 PLAUD 处理时，请其先在 domi“设置 → 录音转写”中开启。
 - `enabled`：按本 Router 与 `plaud` Skill 的授权规则继续。
 - 字段缺失：按旧版本兼容处理，但不构成上传或生成授权。
 

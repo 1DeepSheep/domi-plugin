@@ -13,7 +13,7 @@
 
 ## 用户配置目标
 
-Base、Table 和字段 ID 都属于用户运行配置，不得写入插件。运行前从 `$DOMI_CONFIG_PATH` 读取 `projectBaseToken / projectTableId / radarBaseToken / radarTableId`，再通过 `field-list` 按字段名动态解析「领域」和「子领域」字段 ID。配置缺失时停止并提示用户到豆米“设置 → 资料连接”补充。
+Base、Table 和字段 ID 都属于用户运行配置，不得写入插件。运行前从 `$DOMI_CONFIG_PATH` 读取 `projectBaseToken / projectTableId / radarBaseToken / radarTableId`，再通过 `field-list` 按字段名动态解析「领域」和「子领域」字段 ID。配置缺失时停止并提示用户到 domi“设置 → 资料连接”补充。
 
 项目表的选项名是运行时 canonical 词表；[taxonomy.md](taxonomy.md) 维护父子关系和别名；新闻表以项目表为镜像。跨 Base 的 option ID 不相同，只比较规范化名称和显示颜色。历史记录仍引用的 orphan 是临时安全例外：保留到迁移完成，但禁止新记录继续使用。
 

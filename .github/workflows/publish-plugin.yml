@@ -1,4 +1,4 @@
-name: Publish signed Domi plugin update
+name: Publish signed domi plugin update
 
 on:
   push:
@@ -81,7 +81,7 @@ jobs:
           else
             gh release create "$TAG" \
               --target "$GITHUB_SHA" \
-              --title "Domi plugin ${{ steps.metadata.outputs.version }} ($GITHUB_SHA)" \
+              --title "domi plugin ${{ steps.metadata.outputs.version }} ($GITHUB_SHA)" \
               --notes "Signed automatic plugin update from main at $GITHUB_SHA." \
               --latest \
               dist/domi-plugin.tar.gz dist/latest.json dist/latest.json.sig
