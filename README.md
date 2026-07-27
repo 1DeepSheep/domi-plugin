@@ -9,14 +9,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/1DeepSheep/domi-releases/releases/latest">安装 domi 客户端</a>
+  <a href="https://github.com/1DeepSheep/domi/releases/latest">安装 domi 客户端</a>
   ·
-  <a href="https://github.com/1DeepSheep/domi-workbench">查看客户端源码</a>
+  <a href="https://github.com/1DeepSheep/domi">查看客户端源码</a>
 </p>
 
 ## 推荐安装方式
 
-普通用户直接安装 [domi Mac 客户端](https://github.com/1DeepSheep/domi-releases/releases/latest) 即可。客户端会安装与当前版本匹配的 domi 插件，并在升级时同步更新；不需要手动复制 Skills 或修改 Codex 配置。
+普通用户直接安装 [domi Mac 客户端](https://github.com/1DeepSheep/domi/releases/latest) 即可。客户端会安装与当前版本匹配的 domi 插件，并在升级时同步更新；不需要手动复制 Skills 或修改 Codex 配置。
 
 当前公开安装包面向 Apple Silicon Mac。使用前请先安装并登录 Codex：
 
