@@ -57,4 +57,4 @@ try {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
 }
 
-console.log("Domi plugin release build tests passed.");
+console.log("domi plugin release build tests passed.");

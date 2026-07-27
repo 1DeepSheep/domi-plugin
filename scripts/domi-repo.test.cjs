@@ -3,7 +3,17 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { DomiRepository } = require("./domi-repo.cjs");
+const { defaultConfigPath, DomiRepository } = require("./domi-repo.cjs");
+
+test("config path prefers domi and falls back to the legacy application directory", () => {
+  const homeDir = "/Users/example";
+  const current = path.join(homeDir, "Library", "Application Support", "domi", "domi-plugin-config.json");
+  const legacyName = String.fromCodePoint(0x8c46, 0x7c73);
+  const legacy = path.join(homeDir, "Library", "Application Support", legacyName, "domi-plugin-config.json");
+  assert.equal(defaultConfigPath(homeDir, (candidate) => candidate === current), current);
+  assert.equal(defaultConfigPath(homeDir, (candidate) => candidate === legacy), legacy);
+  assert.equal(defaultConfigPath(homeDir, () => false), current);
+});
 
 function createRepository(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-repository-"));

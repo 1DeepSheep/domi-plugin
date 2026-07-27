@@ -5,7 +5,7 @@ description: Investment sourcing workflow for discovering potential founders, ma
 
 # Sourcing
 
-Use this skill to turn ad hoc founder leads and relationship notes into a disciplined sourcing system: discover people, verify background signals, map relationship paths, and keep the current Domi people repository current.
+Use this skill to turn ad hoc founder leads and relationship notes into a disciplined sourcing system: discover people, verify background signals, map relationship paths, and keep the current domi people repository current.
 
 When the task reads or writes internal people data, first read `../investment-mgmt/references/storage-backends.md` and resolve the explicit backend. Use `lark-base` only in Feishu mode; in local mode use the plugin-level `scripts/domi-repo.cjs person search/upsert` commands and never require Feishu authorization.
 
