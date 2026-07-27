@@ -1,25 +1,25 @@
 ---
 name: investment-mgmt
 description: |
-  管理 Domi 投资资料库。资料库可由用户明确选择为飞书模式（Watching List + Wiki + 本地材料）或完全本地模式（SQLite + Markdown + 本地材料）；负责项目、人脉、行业事件、文档与资料文件的一致性。也涵盖分类统计、领域/子领域维护、新闻与项目分类词表同步、受控新增子领域、进展状态、项目评级、投资机构、最后更新时间和数据质量。
+  管理 domi 投资资料库。资料库可由用户明确选择为飞书模式（Watching List + Wiki + 本地材料）或完全本地模式（SQLite + Markdown + 本地材料）；负责项目、人脉、行业事件、文档与资料文件的一致性。也涵盖分类统计、领域/子领域维护、新闻与项目分类词表同步、受控新增子领域、进展状态、项目评级、投资机构、最后更新时间和数据质量。
   当用户提到以下内容时触发：Watching List、项目分类、领域/子领域、补填子领域、分类概览、项目统计、投资项目管理、行业分类、项目领域、新闻分类对齐、taxonomy 同步、新子领域、进展状态、项目评级、投资机构、最后更新时间、更新时间、交流文档链接、本地资料库、项目文件整理、三系统一致性、deal flow、投资管道、新增项目、补录项目、Wiki查漏、文档库项目检查。
 ---
 
 # 投资管理
 
-管理 Domi 投资资料库及其分类体系。每次运行先完整读取并执行 [references/storage-backends.md](references/storage-backends.md)，根据用户明确选择的后端工作：
+管理 domi 投资资料库及其分类体系。每次运行先完整读取并执行 [references/storage-backends.md](references/storage-backends.md)，根据用户明确选择的后端工作：
 
 - 飞书模式：Watching List + Wiki + 本地材料目录；飞书操作必须使用 `lark-cli`，禁止使用 MCP 工具操作飞书。
 - 本地模式：SQLite + Markdown + 本地材料目录；禁止要求飞书授权或调用飞书写入。
 
 ## 本机配置（必读）
 
-真实 Base、Wiki 标识和本地资料库路径属于用户运行数据，禁止写入 Skill、Git、日志或任务产物。豆米首次安装时把员工自己的配置写入 `$DOMI_CONFIG_PATH`；直接在 Codex 中使用插件时，默认读取 `~/Library/Application Support/豆米/domi-plugin-config.json`。
+真实 Base、Wiki 标识和本地资料库路径属于用户运行数据，禁止写入 Skill、Git、日志或任务产物。domi 首次安装时把员工自己的配置写入 `$DOMI_CONFIG_PATH`；直接在 Codex 中使用插件时，默认读取 `~/Library/Application Support/domi/domi-plugin-config.json`。
 
 执行飞书或本地资料库操作前先加载配置：
 
 ```bash
-export DOMI_CONFIG_PATH="${DOMI_CONFIG_PATH:-$HOME/Library/Application Support/豆米/domi-plugin-config.json}"
+export DOMI_CONFIG_PATH="${DOMI_CONFIG_PATH:-$HOME/Library/Application Support/domi/domi-plugin-config.json}"
 STORAGE_BACKEND="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.storageBackend==="local"?"local":"feishu")')"
 PROJECT_BASE_TOKEN="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.projectBaseToken||"")')"
 PROJECT_TABLE_ID="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.projectTableId||"")')"
@@ -31,7 +31,7 @@ LOCAL_REPOSITORY_DIR="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); 
 LOCAL_DATABASE_PATH="$(node -e 'const path=require("node:path"); const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.localDatabasePath||path.join(path.dirname(process.env.DOMI_CONFIG_PATH),"domi-repository.sqlite3"))')"
 ```
 
-`STORAGE_BACKEND=feishu` 时 Base、Wiki 与 `LOCAL_LIBRARY_DIR` 本地材料目录为必需值；`STORAGE_BACKEND=local` 时只要求 `LOCAL_REPOSITORY_DIR` 资料库根目录和数据库路径。两个目录是独立配置，禁止把飞书模式已经指向 `3.项目库` 的材料目录直接当作本地模式根目录。任一当前后端的必需值为空时停止，并提示用户到豆米“设置 → 资料连接”补充；不得从 Skill 内容、历史对话或他人配置中猜测。
+`STORAGE_BACKEND=feishu` 时 Base、Wiki 与 `LOCAL_LIBRARY_DIR` 本地材料目录为必需值；`STORAGE_BACKEND=local` 时只要求 `LOCAL_REPOSITORY_DIR` 资料库根目录和数据库路径。两个目录是独立配置，禁止把飞书模式已经指向 `3.项目库` 的材料目录直接当作本地模式根目录。任一当前后端的必需值为空时停止，并提示用户到 domi“设置 → 资料连接”补充；不得从 Skill 内容、历史对话或他人配置中猜测。
 
 当用户从本地资料库切换到飞书并要求迁移文档时，必须执行 `storage-backends.md` 的“本地 → 飞书的显式迁移”契约。普通后端切换不得冒充迁移；迁移未全部验证成功时不得把当前后端改成飞书。
 

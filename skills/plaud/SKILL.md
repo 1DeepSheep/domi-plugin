@@ -21,7 +21,7 @@ scripts/plaud.js
 
 运行任何 PLAUD 命令前，先读取环境变量 `DOMI_CONFIG_PATH` 指向的 JSON 配置（只读取，不在输出中打印配置内容）：
 
-- `plaudConnectionMode: "disabled"`：立即停止，不运行 `doctor`、`queue`、上传、生成、下载或任何其他 PLAUD 命令；告诉用户可在豆米“设置 → 录音转写”中开启。
+- `plaudConnectionMode: "disabled"`：立即停止，不运行 `doctor`、`queue`、上传、生成、下载或任何其他 PLAUD 命令；告诉用户可在 domi“设置 → 录音转写”中开启。
 - `plaudConnectionMode: "enabled"`：继续本 Skill。
 - 配置文件或该字段不存在：仅视为旧版本兼容状态；仍须遵循下方授权与安全边界，不得把缺失配置解释为新的上传授权。
 

@@ -5,10 +5,10 @@
 Radar 在运行时读取：
 
 ```text
-~/Library/Application Support/豆米/investment-radar/priority-watchlist.md
+~/Library/Application Support/domi/investment-radar/priority-watchlist.md
 ```
 
-该文件由豆米在本机初始化，或由用户明确执行“同步重点项目名单”时生成。文件不存在或无法解析时，Radar 才可以回源读取 Watching List；普通扫描不得为刷新名单而重新读取项目表。
+该文件由 domi 在本机初始化，或由用户明确执行“同步重点项目名单”时生成。文件不存在或无法解析时，Radar 才可以回源读取 Watching List；普通扫描不得为刷新名单而重新读取项目表。
 
 运行时文件至少包含：
 

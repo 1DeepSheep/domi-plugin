@@ -1,6 +1,6 @@
 # Quick Scan Contract
 
-用于豆米首页手动刷新，目标是在保证原文核验和事件级去重的前提下，将一次刷新控制在 6 分钟内。
+用于 domi 首页手动刷新，目标是在保证原文核验和事件级去重的前提下，将一次刷新控制在 6 分钟内。
 
 ## 固定范围
 
@@ -11,7 +11,7 @@
 
 ## 最小读取
 
-1. 本机 `~/Library/Application Support/豆米/investment-radar/priority-watchlist.md`。
+1. 本机 `~/Library/Application Support/domi/investment-radar/priority-watchlist.md`。
 2. 调用方提供的本机缓存 A/S 重点人物别名索引（若有）；关系进展只作消歧，不作为准入条件。
 3. 新闻事件表目标 token、表 ID、必填字段和整个发现窗口的事件索引。
 4. 研究评分规则中的采纳门槛、证据状态和稳定事件 ID 规则。

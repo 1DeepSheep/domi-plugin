@@ -21,7 +21,7 @@
 }
 ```
 
-豆米首次安装会在本机生成该配置。直接使用插件时默认路径为 `~/Library/Application Support/豆米/domi-plugin-config.json`。飞书模式正常 `scan` 必须复用用户配置目标；目标不可访问或结构不一致时停止写入，不得另建同名 Base，也不得改写项目 Watching List。
+domi 首次安装会在本机生成该配置。直接使用插件时默认路径为 `~/Library/Application Support/domi/domi-plugin-config.json`。飞书模式正常 `scan` 必须复用用户配置目标；目标不可访问或结构不一致时停止写入，不得另建同名 Base，也不得改写项目 Watching List。
 
 `references/priority-watchlist.md` 是 `priority_watch` 的默认项目来源，《1.1 People人际关系管理》是人脉侧只读来源。普通扫描不得为了建立项目名单重新读取 Watching List 项目记录，也不得因新闻命中而修改两表的评级、跟踪状态、最后更新时间、Notes、互动记录或其他字段。
 

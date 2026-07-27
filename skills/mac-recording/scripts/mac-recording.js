@@ -32,17 +32,17 @@ const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleDisplayName</key><string>Domi Mac Recording</string>
+  <key>CFBundleDisplayName</key><string>domi Mac Recording</string>
   <key>CFBundleExecutable</key><string>DomiMacRecorder</string>
   <key>CFBundleIdentifier</key><string>com.domi.mac-recording</string>
-  <key>CFBundleName</key><string>Domi Mac Recording</string>
+  <key>CFBundleName</key><string>domi Mac Recording</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Domi uses the microphone only when you explicitly start a local recording.</string>
+  <string>domi uses the microphone only when you explicitly start a local recording.</string>
 </dict>
 </plist>
 `;
@@ -262,7 +262,7 @@ function helperPermission(request) {
   if (request && result.status !== 0) {
     throw new CliError('MIC_PERMISSION_DENIED', 'Microphone permission was not granted', {
       permission: payload?.permission || 'denied',
-      remediation: 'System Settings → Privacy & Security → Microphone → Domi Mac Recording (or Codex)',
+      remediation: 'System Settings → Privacy & Security → Microphone → domi Mac Recording (or Codex)',
     }, 3);
   }
   if (!payload) {

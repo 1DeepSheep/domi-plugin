@@ -12,18 +12,18 @@ description: 按需追踪并整理投资所需的最新行业新闻、项目融�
 ## 运行模式
 
 - **scan**：默认模式。检索指定领域的最新信息，核验、去重、评分、写入当前行业事件库，再返回值得关注项。
-- **quick_scan**：豆米首页手动刷新专用的快速增量模式。使用 48 小时重叠回看发现迟发、迟索引信号，复用本地重点项目快照、调用方传入的 A/S 人物别名索引、缓存分类和一次性去重索引；不全量扫描重点对象。
+- **quick_scan**：domi 首页手动刷新专用的快速增量模式。使用 48 小时重叠回看发现迟发、迟索引信号，复用本地重点项目快照、调用方传入的 A/S 人物别名索引、缓存分类和一次性去重索引；不全量扫描重点对象。
 - **brief**：从已收录事件中生成指定时间窗的摘要，不重新抓取时必须明确说明。
 - **explain**：解释某条事件的评分、证据状态、投资含义或去重判断。
 - **setup**：仅在用户明确要求初始化或修复时使用。正常扫描不得创建新 Base、移动节点或修改字段。
 
-完整 `scan` 或 setup 读写前，完整读取 [references/base-schema.md](references/base-schema.md)、[references/priority-watchlist.md](references/priority-watchlist.md)、本机 `~/Library/Application Support/豆米/investment-radar/priority-watchlist.md` 与 [../sourcing/SKILL.md](../sourcing/SKILL.md)，并读取 [../investment-mgmt/references/taxonomy.md](../investment-mgmt/references/taxonomy.md) 与 [../investment-mgmt/references/taxonomy-sync.md](../investment-mgmt/references/taxonomy-sync.md)。执行联网检索、评分、分类、重点对象匹配或去重前，完整读取 [references/research-and-scoring.md](references/research-and-scoring.md)。向 Router 或其他 Skill 交付结果前，读取 [references/output-contract.md](references/output-contract.md)。
+完整 `scan` 或 setup 读写前，完整读取 [references/base-schema.md](references/base-schema.md)、[references/priority-watchlist.md](references/priority-watchlist.md)、本机 `~/Library/Application Support/domi/investment-radar/priority-watchlist.md` 与 [../sourcing/SKILL.md](../sourcing/SKILL.md)，并读取 [../investment-mgmt/references/taxonomy.md](../investment-mgmt/references/taxonomy.md) 与 [../investment-mgmt/references/taxonomy-sync.md](../investment-mgmt/references/taxonomy-sync.md)。执行联网检索、评分、分类、重点对象匹配或去重前，完整读取 [references/research-and-scoring.md](references/research-and-scoring.md)。向 Router 或其他 Skill 交付结果前，读取 [references/output-contract.md](references/output-contract.md)。
 
 `quick_scan` 不走上述全量预读。它只读取 [references/quick-scan.md](references/quick-scan.md)、[references/base-schema.md](references/base-schema.md) 中的目标表与必填字段段落、本机重点项目快照，以及 [references/research-and-scoring.md](references/research-and-scoring.md) 中的采纳门槛与事件 ID 段落。调用方若提供来自本机缓存的 A/S 人物别名索引，可直接用于候选匹配与身份消歧，但不得逐人搜索。除非写入返回 schema/选项错误，否则不得加载 taxonomy-sync；除非用户明确要求人物雷达，否则不得读取 People 表或 sourcing；除非重点项目快照缺失或损坏，否则不得查询 Watching List。
 
 ## Quick Scan 快速增量流程
 
-豆米首页刷新默认采用该流程，目标 6 分钟内完成：
+domi 首页刷新默认采用该流程，目标 6 分钟内完成：
 
 1. 使用调用方给出的 `discovery_from / checked_after / checked_through`：`discovery_from` 默认取 `max(checked_after - 48 小时, checked_through - 72 小时)`；缺失时扫描最近 72 小时。重叠窗口中水位之前发布但此前未收录的迟索引事件仍可新增；不得仅按发布时间排除。零新增时不得扩大到 7 天或 30 天。
 2. 读取本机重点项目快照，并接收调用方提供的 A/S 重点人物别名索引；两者仅用于候选事件实体匹配和消歧。人物关系进展不是准入条件。不得逐一对全部重点项目或人物发起搜索。
@@ -51,7 +51,7 @@ description: 按需追踪并整理投资所需的最新行业新闻、项目融�
 - 7 天内没有合格事件时，可扩大到 30 天，但必须在结果中说明。
 - 未指定地域时默认全球；同时使用中英文检索。
 - 默认覆盖项目融资、行业趋势、公司动态和投资机构动态，并按领域补充政策、技术、并购、财务或人事事件。
-- 每次 `scan` 固定追加“重点对象覆盖”：项目侧直接读取本机 `~/Library/Application Support/豆米/investment-radar/priority-watchlist.md`，只纳入评级 A 及以上且状态为“深度跟踪”的对象；人脉侧只读加载评级 A 及以上的对象，关系进展只作身份与关系背景，不作为人物雷达准入条件。`A 及以上` 按 `A / S` 处理；若字段明确存在 `A+` 等更高等级，也一并纳入，B 不纳入。
+- 每次 `scan` 固定追加“重点对象覆盖”：项目侧直接读取本机 `~/Library/Application Support/domi/investment-radar/priority-watchlist.md`，只纳入评级 A 及以上且状态为“深度跟踪”的对象；人脉侧只读加载评级 A 及以上的对象，关系进展只作身份与关系背景，不作为人物雷达准入条件。`A 及以上` 按 `A / S` 处理；若字段明确存在 `A+` 等更高等级，也一并纳入，B 不纳入。
 - 普通 `scan` 禁止为了建立重点项目列表而查询《1.0 项目Watching List》项目记录。只有用户明确要求“同步／刷新重点项目名单”、快照缺失或无法解析时，才允许回源读取一次项目记录并重建名单；快照日期较旧不自动触发回源，只写入覆盖缺口。
 - 指定领域扫描时，优先覆盖与该领域、子领域或用户主题相关的重点对象；全局雷达扫描覆盖全部重点对象。不得因对象数量多而静默跳过，批次受限时列出未覆盖对象。
 - 领域与子领域优先匹配 `1.0 项目Watching List` 的 canonical 词表，并按 `investment-mgmt` taxonomy 校验父子关系。用户原词保留在扫描范围中，但 Base 只写 canonical 名称。
@@ -70,7 +70,7 @@ description: 按需追踪并整理投资所需的最新行业新闻、项目融�
 
 同时建立 `priority_watch` 只读监控集：
 
-- 从本机 `~/Library/Application Support/豆米/investment-radar/priority-watchlist.md` 读取重点项目，按本次领域／子领域范围筛选后直接建立项目别名集合。该快照已按 `项目评级 ∈ {A,S}` 且 `进展状态 = 深度跟踪` 生成，普通扫描不得再次查询项目记录验证。
+- 从本机 `~/Library/Application Support/domi/investment-radar/priority-watchlist.md` 读取重点项目，按本次领域／子领域范围筛选后直接建立项目别名集合。该快照已按 `项目评级 ∈ {A,S}` 且 `进展状态 = 深度跟踪` 生成，普通扫描不得再次查询项目记录验证。
 - 仅在用户明确要求同步名单、快照缺失或无法解析时，从《1.0 项目Watching List》读取 `公司名称 / 项目评级 / 进展状态 / 领域 / 子领域`，重建同一筛选条件的项目列表。历史值“找投资窗口”只在读取时归一为“深度跟踪”，不得恢复该选项。同步后必须报告新旧数量和变更名称，并写入本机运行时快照；禁止把真实名单回写插件源码。
 - 快照超过文件声明的 `review_after_days` 时继续使用，不得阻塞扫描或自动回源；在 `priority_watch.coverage_gaps` 标记 `project_snapshot_stale`，提示后续单独同步。
 - 从《1.1 People人际关系管理》读取当前 schema 后定位“评级／重要程度”字段，纳入 A 及以上人物；“进展／跟进状态”仅作关系背景和身份消歧，不得因为“待 Pitch／待联系／已联系”等关系阶段而排除。只有明确标为“不相关／不再跟进／排除”且字段语义无歧义时才排除。必须按 `sourcing` 做姓名、组织、角色和 canonical profile 去重；同名但身份不能确认时不得匹配。

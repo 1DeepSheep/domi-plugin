@@ -1,6 +1,6 @@
 # Privacy boundary
 
-The public Domi plugin contains workflow logic, neutral taxonomy rules, writing guidance, tests, and public assets only.
+The public domi plugin contains workflow logic, neutral taxonomy rules, writing guidance, tests, and public assets only.
 
 It must not contain:
 
