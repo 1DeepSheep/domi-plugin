@@ -441,6 +441,8 @@ test('PLAUD starts background Tabbit through a hidden non-activating macOS launc
   const browser = { contexts: () => [context] };
 
   const launched = await launchBackgroundTabbit(profileDir, {
+    browserExecutable: '/Applications/Tabbit.app/Contents/MacOS/Tabbit',
+    platform: 'darwin',
     spawnProcess: (command, args, options) => {
       calls.push({ command, args, options });
       return child;
@@ -532,6 +534,7 @@ test('PLAUD ignores a stale DevTools endpoint and waits for the newly launched b
   const browser = { contexts: () => [context] };
   const launched = await launchManagedBrowser(profileDir, {
     browserKind: 'chrome',
+    browserExecutable: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     spawnProcess: () => {
       assert.equal(fs.existsSync(portFile), false);
       setTimeout(() => {

@@ -208,8 +208,10 @@ function removeManagedProfile(browserKind) {
   return true;
 }
 
-function browserSpec(browserKind) {
+function browserSpec(browserKind, executableOverride = '') {
   const spec = BROWSER_SPECS[normalizeBrowserKind(browserKind)];
+  const explicitExecutable = String(executableOverride || '').trim();
+  if (explicitExecutable) return { ...spec, executable: explicitExecutable };
   const executable = [spec.executable, spec.userExecutable].find((candidate) => fs.existsSync(candidate));
   if (!executable) throw new Error(`未找到 ${spec.label}。请安装后重试，或在 domi 中选择另一种浏览器。`);
   return { ...spec, executable };
@@ -497,7 +499,7 @@ async function terminateManagedBrowser(profileDir, browserProcess = null, browse
 }
 
 async function launchManagedBrowser(profileDir, options = {}) {
-  const spec = browserSpec(options.browserKind);
+  const spec = browserSpec(options.browserKind, options.browserExecutable);
   const spawnProcess = options.spawnProcess || spawn;
   const waitForEndpoint = options.waitForDevToolsEndpoint || waitForDevToolsEndpoint;
   const connect = options.connectOverCDP || chromium.connectOverCDP.bind(chromium);
