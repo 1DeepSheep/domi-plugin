@@ -194,6 +194,9 @@ mark <fileId> documented - {"projectId":"prj_xxx","storageReceipt":{"backend":"l
 - `领域` / `子领域`：优先保留现有合法分类；新增项目按 `investment-mgmt/references/taxonomy.md` 判断，低置信度时让用户确认。
 - `进展状态`：创始人／项目交流默认 `已交流`；只有持续跟进事实成立时才改为 `深度跟踪`，不得因评级自动升级。
 - `项目评级`：直接使用 Investment Review 的 B/A/S 评级。
+- `历史融资`：使用 `investment-mgmt/references/financing-fields.md` 的固定表格，从晚到早记录轮次、投前估值、股东出资和投后估值。
+- `最新估值`：取最新已完成轮次的投后估值，写“亿美元”数字；人民币换算必须带汇率日期和来源。
+- `投资机构`：只同步红杉、高瓴、IDG、锦秋、Monolith/励思资本、五源、蓝驰、经纬，并要求融资轮次／股东证据。
 - `最后更新时间`：第一次入库，或本次补充公司／创始人重要信息、更新项目纪要、评级、状态、链接等关键内容时，填写 Asia/Shanghai 的操作当天；不要用会议日期或录音日期替代。只做查询、格式整理或无实质增量时不更新。
 - `Notes`：写入 `投资快评：X/10，评级Y。` 加 1-2 句 conviction，不粘贴整篇纪要。
 - `文档 URI`：飞书模式使用已验证的 Wiki URL；本地模式使用项目主页 `file://` URI。缺失时回到第七步恢复。
@@ -202,7 +205,7 @@ mark <fileId> documented - {"projectId":"prj_xxx","storageReceipt":{"backend":"l
 
 ### 完成
 
-写入后重新搜索公司名，核对公司名称、进展状态、评级、链接和最后更新时间。成功后运行：
+写入后重新搜索公司名，核对公司名称、进展状态、评级、历史融资、最新估值、投资机构、链接和最后更新时间。成功后运行：
 
 ```text
 mark <fileId> managed - {"action":"created|updated","recordId":"recXXX","wikiUrl":"WIKI_NODE_URL","oneDrivePath":"/absolute/project/path"}

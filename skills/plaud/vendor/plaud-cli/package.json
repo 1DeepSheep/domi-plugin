@@ -1,7 +1,7 @@
 {
   "name": "plaud-cli",
   "version": "1.0.0",
-  "description": "Private PLAUD Web API wrapper using local Tabbit session",
+  "description": "Private PLAUD Web API wrapper using a domi-managed Chrome or Tabbit session",
   "main": "src/plaud.js",
   "bin": {
     "plaud": "src/cli.js"

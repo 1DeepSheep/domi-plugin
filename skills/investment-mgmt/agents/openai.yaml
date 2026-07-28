@@ -1,4 +1,4 @@
 interface:
-  display_name: "Investment Mgmt"
-  short_description: "维护项目归档、Watching List 及项目与新闻分类词表的一致性。"
-  default_prompt: "Use $investment-mgmt to maintain project records and archives, and to synchronize the canonical domain and subdomain taxonomy between the Watching List and investment-news Base."
+  display_name: "投资管理"
+  short_description: "维护项目归档、融资估值、投资机构及分类词表的一致性。"
+  default_prompt: "Use $investment-mgmt to maintain project records, financing history, latest valuation, tracked investors, archives, and canonical taxonomy."
