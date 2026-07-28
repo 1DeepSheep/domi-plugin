@@ -5,7 +5,7 @@ description: 安全访问本机 PLAUD 录音，上传 Mac 本地录音，查询�
 
 # PLAUD
 
-使用插件自带的安全 CLI 访问 PLAUD。鉴权来自本机 Tabbit 已登录会话；任何授权头、Cookie 或 Tabbit profile 都不得写入插件、工作产物或消息。
+使用插件自带的安全 CLI 访问 PLAUD。鉴权来自用户在 domi 专用 Chrome／Tabbit Profile 中亲自登录的 PLAUD 账号；不得读取或复制用户日常浏览器 Profile。任何授权头、Cookie 或浏览器 Profile 都不得写入插件、工作产物或消息。
 
 ## 入口
 
@@ -23,15 +23,16 @@ scripts/plaud.js
 
 - `plaudConnectionMode: "disabled"`：立即停止，不运行 `doctor`、`queue`、上传、生成、下载或任何其他 PLAUD 命令；告诉用户可在 domi“设置 → 录音转写”中开启。
 - `plaudConnectionMode: "enabled"`：继续本 Skill。
+- `plaudBrowser`：只接受 `chrome` 或 `tabbit`；CLI 使用同一配置目录下权限为 `0700` 的 domi 专用 Profile，不得改读浏览器 `Default` Profile。
 - 配置文件或该字段不存在：仅视为旧版本兼容状态；仍须遵循下方授权与安全边界，不得把缺失配置解释为新的上传授权。
 
-用户选择“暂时不用”后，任何通用工作流都不得为了健康检查、诊断或恢复队列而探测 Tabbit / PLAUD。
+用户选择“暂时不用”后，任何通用工作流都不得为了健康检查、诊断或恢复队列而探测浏览器或 PLAUD。
 
 ## 账户内已有录音的标准流程
 
 以下 1–5 步只适用于 PLAUD 账户里已经存在、但尚未生成或整理的录音。若上游已经给出精确本地 `audioPath`，尤其是 `workflowKind=quick-discussion`，直接走“本地录音上传与转写”分支；不得先运行 `queue`、`pending` 或 `sync-pending`，也不得让其他队列项阻塞当前讨论。
 
-1. 先运行 `doctor`，仅检查 Node、Tabbit、登录数据和内置依赖是否存在。
+1. 先运行 `doctor` 检查 Node、用户所选 Chrome／Tabbit 和内置依赖，再运行 `connection` 发起一次只读远端验证；未验证登录时停止并让用户回到 domi 设置完成登录。
 2. 运行 `queue`，优先恢复之前已生成但尚未完成纪要、评分、文档归档或入库的项目；对 `notes_project`、`reviewed`、`documented` 项先运行 `verify <fileId>` 只读核验审计与文件哈希。
 3. 运行 `pending 100` 查询最近未生成文字稿的录音。
 4. 用户明确要求生成或运行 domi 主工作流时，运行 `sync-pending <count> <outDir> [timeoutSec] [pollSec]`。
@@ -57,13 +58,15 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 
 - 禁止调用全局 CLI 的 `plaud auth`；它会输出鉴权头。
 - 禁止调用旧版 `plaud pipeline ...`；该流程会自行启动 Codex 并写飞书，不属于 domi 的受控链路。
-- `status`、`pending`、`queue`、`verify` 和 `doctor` 是只读操作。
+- `connection`、`status`、`pending`、`queue`、`verify` 和 `doctor` 是只读操作。
+- `login` 只打开 domi 专用浏览器 Profile 并等待用户亲自登录；不得代填账号密码。`logout` 只删除所选 domi 专用 Profile。
+- 除用户明确触发 `login` 外，CLI 必须通过 macOS 的隐藏后台启动模式运行专用浏览器，不得激活 Chrome／Tabbit 的日常窗口；同一专用 Profile 的命令必须串行执行，禁止通过重复启动生成多个 `Plaud Web` 标签页。
 - `sync-pending` 会在 PLAUD 中触发生成。只有用户明确要求生成、同步或运行 domi 主工作流时才能执行。
 - `transcribe-local` 会把本地音频上传到 PLAUD 并触发生成。只有用户明确要求上传／生成，或明确启动了说明“停止后上传 PLAUD 并整理”的快速讨论工作流时才能执行；普通 Mac 录音停止不构成上传授权。
 - `--retry-upload` 与 `--retry-generation` 都是结果不确定后的显式风险恢复选项；必须分别取得用户对“可能重复上传”或“可能重复提交生成”的明确同意，不得自动追加。
 - 如果待生成数量超过 10，先向用户报告数量并确认本批处理范围。
 - 默认把下载文件写到当前工作区的 `work/domi/plaud/<run-id>/`；不要写入插件目录。
-- 不得把 `~/.plaud-cli`、`~/.domi`、Tabbit profile、Cookies 或鉴权信息复制进输出目录。
+- 不得把 `~/.plaud-cli`、`~/.domi`、domi 专用浏览器 Profile、Cookies 或鉴权信息复制进输出目录。
 
 ## 队列阶段
 
@@ -92,6 +95,6 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 ## 依赖
 
 - macOS 与 Node.js。
-- `ffmpeg`（把 `mac-recording` 的 M4A 转为 PLAUD 上传所需的 MP3）。
-- `/Applications/Tabbit.app` 以及其中已登录的 PLAUD 会话。
+- domi 安装包内置、仅处理本地文件且关闭网络能力的 LGPL FFmpeg/ffprobe（把 `mac-recording` 的 M4A 等格式转为 PLAUD 可接收的 Opus）；在客户端外单独调用 Skill 时可回退到用户 PATH 中的版本。
+- 用户选择的 Google Chrome 或 Tabbit；PLAUD 登录只存在于 domi 专用 Profile。
 - 插件内置的 `playwright` 依赖和 PLAUD 客户端代码。

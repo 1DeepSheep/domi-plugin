@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install PLAUD test runtime
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --ignore-scripts --prefix skills/plaud/vendor/plaud-cli
+
+      - name: Validate public release content
+        run: node scripts/public-release-check.cjs
+
+      - name: Validate plugin package
+        run: |
+          node scripts/domi-repo.test.cjs
+          node scripts/financing-fields.test.cjs
+          node scripts/intake-time-fields.test.cjs
+          node scripts/schedule-skill.test.cjs
+          node scripts/todo-ledger.test.cjs
+          node scripts/build-plugin-release.test.cjs
+          NODE_PATH="$PWD/skills/plaud/vendor/plaud-cli/node_modules" node --test skills/plaud/scripts/plaud.test.js

@@ -16,9 +16,19 @@ const scriptPath = path.join(__dirname, 'plaud.js');
 const { __test } = require('./plaud.js');
 const {
   PlaudClient,
+  acquireManagedSessionLock,
   backgroundTabbitArgs,
+  clearDevToolsActivePort,
+  configuredBrowserKind,
   launchBackgroundTabbit,
-  prepareRuntimeProfile,
+  launchManagedBrowser,
+  managedBrowserArgs,
+  managedBrowserLaunchSpec,
+  managedProfileDir,
+  managedSessionLockPath,
+  mediaExecutable,
+  releaseManagedSessionLock,
+  removeManagedProfile,
   waitForDevToolsEndpoint,
   withLoopbackNoProxy,
 } = require('../vendor/plaud-cli/src/plaud.js');
@@ -39,6 +49,23 @@ function transcriptResult(fileId, fileName, outDir) {
 }
 
 test.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+test('PLAUD media tools prefer a validated domi-bundled executable', () => {
+  const previous = process.env.DOMI_FFMPEG_PATH;
+  const binaryPath = path.join(sandbox, 'ffmpeg');
+  fs.writeFileSync(binaryPath, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  process.env.DOMI_FFMPEG_PATH = binaryPath;
+  try {
+    assert.equal(mediaExecutable('ffmpeg'), binaryPath);
+    const symlinkPath = path.join(sandbox, 'ffmpeg-link');
+    fs.symlinkSync(binaryPath, symlinkPath);
+    process.env.DOMI_FFMPEG_PATH = symlinkPath;
+    assert.equal(mediaExecutable('ffmpeg'), '');
+  } finally {
+    if (previous == null) delete process.env.DOMI_FFMPEG_PATH;
+    else process.env.DOMI_FFMPEG_PATH = previous;
+  }
+});
 
 test('transcribe-local options parse in any order without consuming the audio path', () => {
   const parsed = __test.parseTranscribeLocalArgs([
@@ -352,9 +379,59 @@ test('PLAUD launches Tabbit as a separate non-activating headless instance', () 
   assert.equal(args.includes('--remote-debugging-address=127.0.0.1'), true);
   assert.equal(args.includes('--remote-debugging-port=0'), true);
   assert.equal(args.includes(`--user-data-dir=${profileDir}`), true);
+  assert.equal(args.includes('https://web.plaud.ai'), false);
 });
 
-test('PLAUD starts the Tabbit executable directly instead of activating it through macOS open', async () => {
+test('PLAUD managed browser supports a visible Chrome login with a private profile', async () => {
+  const previousRoot = process.env.DOMI_PLAUD_PROFILE_ROOT;
+  const profileRoot = path.join(sandbox, 'managed-browser-root');
+  process.env.DOMI_PLAUD_PROFILE_ROOT = profileRoot;
+  try {
+    const profileDir = managedProfileDir('chrome');
+    const args = managedBrowserArgs(profileDir, {
+      headless: false,
+      url: 'https://web.plaud.ai',
+    });
+    assert.equal(profileDir, path.join(profileRoot, 'chrome'));
+    assert.equal(fs.statSync(profileRoot).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(profileDir).mode & 0o777, 0o700);
+    assert.equal(args.includes('--headless=new'), false);
+    assert.equal(args.includes('--remote-debugging-address=127.0.0.1'), true);
+    assert.equal(args.includes(`--user-data-dir=${profileDir}`), true);
+    assert.equal(args.at(-1), 'https://web.plaud.ai');
+
+    fs.writeFileSync(path.join(profileDir, 'login-state'), 'private', { mode: 0o600 });
+    const client = new PlaudClient({
+      browserKind: 'chrome',
+      terminateBrowser: async () => {},
+    });
+    assert.equal(client.ownsProfileDir, false);
+    await client.close();
+    assert.equal(fs.existsSync(path.join(profileDir, 'login-state')), true);
+
+    assert.equal(removeManagedProfile('chrome'), true);
+    assert.equal(fs.existsSync(profileDir), false);
+  } finally {
+    if (previousRoot == null) delete process.env.DOMI_PLAUD_PROFILE_ROOT;
+    else process.env.DOMI_PLAUD_PROFILE_ROOT = previousRoot;
+  }
+});
+
+test('PLAUD browser selection comes only from the local config', () => {
+  const previousConfig = process.env.DOMI_CONFIG_PATH;
+  const configPath = path.join(sandbox, 'browser-config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ plaudBrowser: 'tabbit' }), { mode: 0o600 });
+  process.env.DOMI_CONFIG_PATH = configPath;
+  try {
+    assert.equal(configuredBrowserKind(), 'tabbit');
+    assert.equal(configuredBrowserKind('chrome'), 'chrome');
+  } finally {
+    if (previousConfig == null) delete process.env.DOMI_CONFIG_PATH;
+    else process.env.DOMI_CONFIG_PATH = previousConfig;
+  }
+});
+
+test('PLAUD starts background Tabbit through a hidden non-activating macOS launch', async () => {
   const profileDir = path.join(sandbox, 'direct-background-profile');
   const child = new EventEmitter();
   child.pid = 4242;
@@ -364,6 +441,8 @@ test('PLAUD starts the Tabbit executable directly instead of activating it throu
   const browser = { contexts: () => [context] };
 
   const launched = await launchBackgroundTabbit(profileDir, {
+    browserExecutable: '/Applications/Tabbit.app/Contents/MacOS/Tabbit',
+    platform: 'darwin',
     spawnProcess: (command, args, options) => {
       calls.push({ command, args, options });
       return child;
@@ -374,13 +453,56 @@ test('PLAUD starts the Tabbit executable directly instead of activating it throu
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, '/Applications/Tabbit.app/Contents/MacOS/Tabbit');
-  assert.notEqual(calls[0].command, '/usr/bin/open');
-  assert.equal(calls[0].args[0], '--headless=new');
+  assert.equal(calls[0].command, '/usr/bin/open');
+  assert.deepEqual(calls[0].args.slice(0, 6), ['-g', '-j', '-n', '-a', 'Tabbit', '--args']);
+  assert.equal(calls[0].args.includes('--headless=new'), true);
+  assert.equal(calls[0].args.includes('https://web.plaud.ai'), false);
   assert.equal(calls[0].options.detached, false);
   assert.equal(launched.browser, browser);
   assert.equal(launched.context, context);
-  assert.equal(launched.process, child);
+  assert.equal(launched.process, null);
+});
+
+test('PLAUD keeps visible login launches direct and user-activated', () => {
+  const spec = {
+    kind: 'tabbit',
+    label: 'Tabbit',
+    executable: '/Applications/Tabbit.app/Contents/MacOS/Tabbit',
+  };
+  const browserArgs = ['--user-data-dir=/tmp/profile', 'https://web.plaud.ai'];
+  const launch = managedBrowserLaunchSpec(spec, browserArgs, {
+    headless: false,
+    platform: 'darwin',
+  });
+  assert.equal(launch.command, spec.executable);
+  assert.deepEqual(launch.args, browserArgs);
+  assert.equal(launch.launcherOnly, false);
+});
+
+test('PLAUD serializes access to one managed browser profile across processes', async () => {
+  const profileDir = path.join(sandbox, 'locked-browser-profile');
+  const first = await acquireManagedSessionLock(profileDir, { timeoutMs: 10 });
+  assert.equal(fs.existsSync(managedSessionLockPath(profileDir)), true);
+  assert.equal(fs.statSync(managedSessionLockPath(profileDir)).mode & 0o777, 0o600);
+  await assert.rejects(
+    acquireManagedSessionLock(profileDir, { timeoutMs: 10, retryMs: 5 }),
+    /正在被另一个任务使用/,
+  );
+  assert.equal(releaseManagedSessionLock({
+    ...first,
+    token: 'not-the-owner',
+  }), false);
+  assert.equal(releaseManagedSessionLock(first), true);
+  assert.equal(fs.existsSync(managedSessionLockPath(profileDir)), false);
+
+  fs.writeFileSync(
+    managedSessionLockPath(profileDir),
+    `${JSON.stringify({ pid: 99999999, token: 'stale' })}\n`,
+    { mode: 0o600 },
+  );
+  const recovered = await acquireManagedSessionLock(profileDir, { timeoutMs: 10 });
+  assert.notEqual(recovered.token, 'stale');
+  assert.equal(releaseManagedSessionLock(recovered), true);
 });
 
 test('PLAUD reads the private DevTools endpoint created by background Tabbit', async () => {
@@ -395,6 +517,45 @@ test('PLAUD reads the private DevTools endpoint created by background Tabbit', a
     endpoint,
     'ws://127.0.0.1:49231/devtools/browser/11111111-2222-3333-4444-555555555555',
   );
+});
+
+test('PLAUD ignores a stale DevTools endpoint and waits for the newly launched browser', async () => {
+  const profileDir = path.join(sandbox, 'stale-devtools-profile');
+  const portFile = path.join(profileDir, 'DevToolsActivePort');
+  fs.mkdirSync(profileDir, { recursive: true });
+  fs.writeFileSync(
+    portFile,
+    '64305\n/devtools/browser/4d90c55d-518b-428d-9491-e71270627503\n',
+  );
+  const child = new EventEmitter();
+  child.pid = 4243;
+  child.stderr = new EventEmitter();
+  const context = {};
+  const browser = { contexts: () => [context] };
+  const launched = await launchManagedBrowser(profileDir, {
+    browserKind: 'chrome',
+    browserExecutable: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    spawnProcess: () => {
+      assert.equal(fs.existsSync(portFile), false);
+      setTimeout(() => {
+        fs.writeFileSync(
+          portFile,
+          '51244\n/devtools/browser/11111111-2222-3333-4444-555555555555\n',
+        );
+      }, 10);
+      return child;
+    },
+    connectOverCDP: async (endpoint) => {
+      assert.equal(
+        endpoint,
+        'ws://127.0.0.1:51244/devtools/browser/11111111-2222-3333-4444-555555555555',
+      );
+      return browser;
+    },
+    terminateBrowser: async () => {},
+  });
+  assert.equal(launched.context, context);
+  assert.equal(clearDevToolsActivePort(profileDir), true);
 });
 
 test('PLAUD bypasses proxies for its local browser connection and restores the environment', async () => {
@@ -417,7 +578,7 @@ test('PLAUD bypasses proxies for its local browser connection and restores the e
   }
 });
 
-test('an owned temporary Tabbit profile and background browser are removed when the client closes', async () => {
+test('an explicitly temporary managed profile and background browser are removed when the client closes', async () => {
   const profileDir = path.join(sandbox, 'owned-profile');
   fs.mkdirSync(profileDir, { recursive: true });
   fs.writeFileSync(path.join(profileDir, 'Cookies'), 'sensitive-test-placeholder');
@@ -436,21 +597,6 @@ test('an owned temporary Tabbit profile and background browser are removed when 
     ['cdp', 'Browser.close'],
     ['terminate', profileDir],
   ]);
-  assert.equal(fs.existsSync(profileDir), false);
-});
-
-test('a temporary Tabbit profile is removed when copying login data fails', () => {
-  const profileDir = path.join(sandbox, 'failed-profile-copy');
-  assert.throws(() => prepareRuntimeProfile({
-    ensureTabbitExists: () => {},
-    userDataDir: path.join(sandbox, 'fake-tabbit-data'),
-    profileDirFactory: () => profileDir,
-    copyIfExists: (_source, destination) => {
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(destination, 'sensitive-cookie-placeholder');
-      throw new Error('synthetic copy failure');
-    },
-  }), /synthetic copy failure/);
   assert.equal(fs.existsSync(profileDir), false);
 });
 
@@ -514,6 +660,17 @@ test('error redaction removes full unquoted credential headers and JSON-escaped 
   assert.equal(redactedUrl.includes('signed.invalid'), false);
   assert.equal(redactedUrl.includes('URLSECRET'), false);
   assert.match(redactedUrl, /REDACTED_URL/);
+});
+
+test('PLAUD turns a refused local DevTools WebSocket into an actionable message', () => {
+  const message = __test.safeErrorMessage(new Error(
+    'browserType.connectOverCDP: WebSocket error: connect ECONNREFUSED 127.0.0.1:64305',
+  ));
+  assert.equal(
+    message,
+    'PLAUD 专用浏览器未能建立本机连接。请重新同步；domi 会清理旧连接后自动重试。',
+  );
+  assert.equal(message.includes('64305'), false);
 });
 
 test('upload confirmation uncertainty does not automatically upload a duplicate', async () => {

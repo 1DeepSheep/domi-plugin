@@ -57,7 +57,7 @@
 
 ## 三、上传 PLAUD 并取得文字稿
 
-1. 采用并完整遵循插件内 `plaud` Skill。第一次进入本阶段时运行 `doctor`；M4A 上传要求 `ffmpeg`、Tabbit 登录态和内置依赖通过。
+1. 采用并完整遵循插件内 `plaud` Skill。第一次进入本阶段时运行 `doctor` 和只读 `connection`；domi 客户端内置的 FFmpeg/ffprobe 会把 M4A 转为 Opus，不要求用户安装 Homebrew。用户所选 domi 专用浏览器中的 PLAUD 登录和其余内置依赖仍须通过检查。
 2. 输出目录使用：
 
    ```text

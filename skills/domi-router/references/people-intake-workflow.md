@@ -78,10 +78,11 @@
 本地模式使用 `person search --query` 查重、`person upsert` 写入；SQLite schema 已由网关管理，不得自行改表。人物主页保存在 `4.人脉库/<姓名>/人物主页.md`，写后再次 search 并验证 Markdown URI。
 
 1. 定位《1.1 People人际关系管理》，读取实时 table、字段 ID、字段名、类型、必填项、select 选项、linked-record 字段和相关视图；不得假设历史字段名仍存在。
-2. 优先用稳定标识查重：`open_id`、用户授权的职业邮箱、canonical professional URL、个人主页、GitHub／Hugging Face／Scholar 等；再用规范化姓名与别名 + 当前／历史组织 + 角色／时间线复核。
-3. 将结果分为：`create`、`update(record_id, high-confidence)`、`skip(no delta)`、`ambiguous`。多条命中、身份中低置信或疑似重复时不得自动 merge、覆盖或删除。
-4. `update` mode 只能定位唯一既有 `record_id`；无记录时暂停并询问是否切换 `intake`，不得把“更新”解释成“找不到就新建”。
-5. 永远按实时 schema 映射字段。字段缺失时，只在内容适合且安全时写入现有 Notes／Summary／`情报`；否则询问是否调整 schema。不得擅自新增字段、select 选项或改变字段类型。
+2. 飞书模式先运行 `node <plugin-root>/skills/investment-mgmt/scripts/ensure-intake-time-fields.js ensure`，确认 `入库时间` 为系统 `created_at`；该字段只读，不得放入 create/update payload。
+3. 优先用稳定标识查重：`open_id`、用户授权的职业邮箱、canonical professional URL、个人主页、GitHub／Hugging Face／Scholar 等；再用规范化姓名与别名 + 当前／历史组织 + 角色／时间线复核。
+4. 将结果分为：`create`、`update(record_id, high-confidence)`、`skip(no delta)`、`ambiguous`。多条命中、身份中低置信或疑似重复时不得自动 merge、覆盖或删除。
+5. `update` mode 只能定位唯一既有 `record_id`；无记录时暂停并询问是否切换 `intake`，不得把“更新”解释成“找不到就新建”。
+6. 永远按实时 schema 映射字段。字段缺失时，只在内容适合且安全时写入现有 Notes／Summary／`情报`；否则询问是否调整 schema。除统一维护系统型 `入库时间` 外，不得擅自新增字段、select 选项或改变字段类型。
 
 《1.1 People人际关系管理》的 `类型` 只能保留一个最利于检索的主标签；即使 API 需要数组也只传一个选项。学校、雇主、历史公司、身份和 why-now 放入 `所属组织&身份`、`情报` 或其他实时存在的适配字段，不得堆成多个 `类型`。
 
@@ -99,7 +100,7 @@
 - 用户没有指定 owner、deadline 或具体 ask 时不得编造跟进责任人和日期；
 - `update` 只 patch 有信息增量的字段，不用公开推断覆盖用户已有的内部关系笔记。
 
-每次写入前展示或记录完整字段 diff；每条写后按 `record_id` 回读，验证姓名、主类型、组织身份、来源、关系状态和下一步。涉及 linked-record 时还要验证链接对象唯一正确。
+每次写入前展示或记录完整字段 diff；系统型 `入库时间` 不计入可写 diff。每条写后按 `record_id` 回读，验证姓名、主类型、组织身份、来源、关系状态、下一步以及系统生成的入库时间。涉及 linked-record 时还要验证链接对象唯一正确。
 
 ## 七、批量确认、幂等与恢复
 
