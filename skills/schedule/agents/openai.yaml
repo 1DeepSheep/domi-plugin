@@ -1,0 +1,4 @@
+interface:
+  display_name: "约日程"
+  short_description: "整理日程并向一个或多个指定参会人发送 Outlook 邀请。"
+  default_prompt: "使用 $schedule 整理并发送这条日程邀请；如果我没选择参会人，请先问我要发给哪些邮箱。"

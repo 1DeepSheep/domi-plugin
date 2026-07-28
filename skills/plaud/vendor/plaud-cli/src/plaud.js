@@ -6,7 +6,22 @@ const { spawn, spawnSync } = require('child_process');
 const { chromium } = require('playwright');
 
 const TABBIT_EXECUTABLE = '/Applications/Tabbit.app/Contents/MacOS/Tabbit';
-const TABBIT_USER_DATA = path.join(os.homedir(), 'Library', 'Application Support', 'Tabbit');
+const CHROME_EXECUTABLE = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const BROWSER_SPECS = Object.freeze({
+  chrome: Object.freeze({
+    kind: 'chrome',
+    label: 'Google Chrome',
+    executable: CHROME_EXECUTABLE,
+    userExecutable: path.join(os.homedir(), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+  }),
+  tabbit: Object.freeze({
+    kind: 'tabbit',
+    label: 'Tabbit',
+    executable: TABBIT_EXECUTABLE,
+    userExecutable: path.join(os.homedir(), 'Applications', 'Tabbit.app', 'Contents', 'MacOS', 'Tabbit'),
+  }),
+});
+const PLAUD_LOGIN_URL = 'https://web.plaud.ai';
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1'];
 const API_BASE = 'https://api-apne1.plaud.ai';
 const STATE_DIR = path.join(os.homedir(), '.plaud-cli');
@@ -47,64 +62,159 @@ const TRANSCODABLE_EXTS = new Set([
 const UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024;
 const UPLOAD_CONCURRENCY = 3;
 
-function ensureTabbitExists() {
-  if (!fs.existsSync(TABBIT_EXECUTABLE)) {
-    throw new Error(`Tabbit executable not found: ${TABBIT_EXECUTABLE}`);
-  }
-  if (!fs.existsSync(TABBIT_USER_DATA)) {
-    throw new Error(`Tabbit user data not found: ${TABBIT_USER_DATA}`);
-  }
+function normalizeBrowserKind(value) {
+  return value === 'tabbit' ? 'tabbit' : 'chrome';
 }
 
-function copyIfExists(src, dst) {
-  if (!fs.existsSync(src)) return;
-  fs.mkdirSync(path.dirname(dst), { recursive: true });
-  const stat = fs.statSync(src);
-  if (stat.isDirectory()) {
-    fs.cpSync(src, dst, { recursive: true, force: true });
-  } else {
-    fs.copyFileSync(src, dst);
-  }
-}
-
-function prepareRuntimeProfile(options = {}) {
-  const ensureAvailable = options.ensureTabbitExists || ensureTabbitExists;
-  const sourceDir = options.userDataDir || TABBIT_USER_DATA;
-  const createRuntimeDir = options.profileDirFactory || (() =>
-    fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-cli-tabbit-min-')));
-  const copy = options.copyIfExists || copyIfExists;
-  ensureAvailable();
-  const runtimeDir = createRuntimeDir();
+function configuredBrowserKind(explicitValue) {
+  if (explicitValue) return normalizeBrowserKind(explicitValue);
   try {
-    fs.mkdirSync(path.join(runtimeDir, 'Default', 'IndexedDB'), { recursive: true });
+    const configPath = String(process.env.DOMI_CONFIG_PATH || '');
+    const config = configPath ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+    return normalizeBrowserKind(config.plaudBrowser);
+  } catch {
+    return 'chrome';
+  }
+}
 
-    for (const name of ['Local State', 'Last Version', 'Variations', 'First Run']) {
-      copy(path.join(sourceDir, name), path.join(runtimeDir, name));
-    }
+function managedProfileRoot() {
+  const configuredRoot = String(process.env.DOMI_PLAUD_PROFILE_ROOT || '').trim();
+  if (configuredRoot) return path.resolve(configuredRoot);
+  const configPath = String(process.env.DOMI_CONFIG_PATH || '').trim();
+  if (configPath && path.isAbsolute(configPath)) {
+    return path.join(path.dirname(configPath), 'plaud-browser');
+  }
+  return path.join(os.homedir(), 'Library', 'Application Support', 'domi', 'plaud-browser');
+}
 
-    for (const name of [
-      'Preferences',
-      'Secure Preferences',
-      'Cookies',
-      'Cookies-journal',
-      'Network Persistent State',
-      'Session Storage',
-      'Local Storage',
-      'WebStorage',
-    ]) {
-      copy(path.join(sourceDir, 'Default', name), path.join(runtimeDir, 'Default', name));
-    }
+function managedProfilePath(browserKind) {
+  return path.join(managedProfileRoot(), normalizeBrowserKind(browserKind));
+}
 
-    copy(
-      path.join(sourceDir, 'Default', 'IndexedDB', 'https_web.plaud.ai_0.indexeddb.leveldb'),
-      path.join(runtimeDir, 'Default', 'IndexedDB', 'https_web.plaud.ai_0.indexeddb.leveldb')
-    );
+function ensurePrivateDirectory(directory, label) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`${label} must be a private local directory, not a symbolic link.`);
+  }
+  fs.chmodSync(directory, 0o700);
+}
 
-    return runtimeDir;
+function managedSessionLockPath(profileDir) {
+  return path.join(profileDir, '.domi-browser-session.lock');
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
   } catch (error) {
-    fs.rmSync(runtimeDir, { recursive: true, force: true });
+    return error?.code === 'EPERM';
+  }
+}
+
+async function acquireManagedSessionLock(profileDir, options = {}) {
+  ensurePrivateDirectory(profileDir, 'PLAUD browser profile');
+  const lockPath = managedSessionLockPath(profileDir);
+  const timeoutMs = Math.max(0, Number(options.timeoutMs) || 30000);
+  const retryMs = Math.max(10, Number(options.retryMs) || 100);
+  const ownerPid = Number(options.ownerPid) || process.pid;
+  const token = options.token || crypto.randomBytes(16).toString('hex');
+  const sleep = options.pause || pause;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, `${JSON.stringify({
+          pid: ownerPid,
+          token,
+          startedAt: new Date().toISOString(),
+        })}\n`);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.chmodSync(lockPath, 0o600);
+      return { lockPath, token };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+
+    let stale = false;
+    try {
+      const current = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      stale = !processIsAlive(Number(current?.pid));
+    } catch {
+      stale = true;
+    }
+    if (stale) {
+      try {
+        const stat = fs.lstatSync(lockPath);
+        if (!stat.isFile() || stat.isSymbolicLink()) {
+          throw new Error('Invalid PLAUD browser session lock.');
+        }
+        fs.unlinkSync(lockPath);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('PLAUD 专用浏览器正在被另一个任务使用，请稍后重试。');
+    }
+    await sleep(Math.min(retryMs, Math.max(1, deadline - Date.now())));
+  }
+}
+
+function releaseManagedSessionLock(lock) {
+  if (!lock?.lockPath || !lock?.token) return false;
+  try {
+    const stat = fs.lstatSync(lock.lockPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error('Invalid PLAUD browser session lock.');
+    }
+    const current = JSON.parse(fs.readFileSync(lock.lockPath, 'utf8'));
+    if (current?.token !== lock.token) return false;
+    fs.unlinkSync(lock.lockPath);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
     throw error;
   }
+}
+
+function managedProfileDir(browserKind) {
+  const root = managedProfileRoot();
+  ensurePrivateDirectory(root, 'PLAUD browser profile root');
+  const profileDir = managedProfilePath(browserKind);
+  ensurePrivateDirectory(profileDir, 'PLAUD browser profile');
+  return profileDir;
+}
+
+function removeManagedProfile(browserKind) {
+  const root = path.resolve(managedProfileRoot());
+  const profileDir = path.resolve(managedProfilePath(browserKind));
+  if (path.dirname(profileDir) !== root) throw new Error('Refusing to remove an unexpected PLAUD profile path.');
+  if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) {
+    throw new Error('Refusing to remove a PLAUD profile through a symbolic-link root.');
+  }
+  if (!fs.existsSync(profileDir)) return false;
+  if (fs.lstatSync(profileDir).isSymbolicLink()) {
+    throw new Error('Refusing to remove a symbolic-link PLAUD profile.');
+  }
+  fs.rmSync(profileDir, { recursive: true, force: true });
+  return true;
+}
+
+function browserSpec(browserKind, executableOverride = '') {
+  const spec = BROWSER_SPECS[normalizeBrowserKind(browserKind)];
+  const explicitExecutable = String(executableOverride || '').trim();
+  if (explicitExecutable) return { ...spec, executable: explicitExecutable };
+  const executable = [spec.executable, spec.userExecutable].find((candidate) => fs.existsSync(candidate));
+  if (!executable) throw new Error(`未找到 ${spec.label}。请安装后重试，或在 domi 中选择另一种浏览器。`);
+  return { ...spec, executable };
 }
 
 function safeName(name) {
@@ -194,6 +304,23 @@ function commandExists(cmd) {
   return result.status === 0 && result.stdout.trim();
 }
 
+function mediaExecutable(name) {
+  const environmentKey = name === 'ffprobe' ? 'DOMI_FFPROBE_PATH' : 'DOMI_FFMPEG_PATH';
+  const configured = String(process.env[environmentKey] || '').trim();
+  if (configured) {
+    if (!path.isAbsolute(configured)) return '';
+    try {
+      const stat = fs.lstatSync(configured);
+      if (!stat.isFile() || stat.isSymbolicLink()) return '';
+      fs.accessSync(configured, fs.constants.X_OK);
+      return configured;
+    } catch {
+      return '';
+    }
+  }
+  return commandExists(name) || '';
+}
+
 function runProcess(cmd, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], ...options });
@@ -213,10 +340,10 @@ function runProcess(cmd, args, options = {}) {
   });
 }
 
-function backgroundTabbitArgs(profileDir) {
+function managedBrowserArgs(profileDir, options = {}) {
+  const headless = options.headless !== false;
   return [
-    '--headless=new',
-    '--no-startup-window',
+    ...(headless ? ['--headless=new', '--no-startup-window'] : []),
     '--disable-background-networking',
     '--disable-component-update',
     '--disable-default-apps',
@@ -235,12 +362,48 @@ function backgroundTabbitArgs(profileDir) {
     `--user-data-dir=${profileDir}`,
     '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=0',
-    'about:blank',
+    ...(!headless && options.url ? [options.url] : []),
   ];
+}
+
+function backgroundTabbitArgs(profileDir) {
+  return managedBrowserArgs(profileDir, { headless: true });
+}
+
+function managedBrowserLaunchSpec(spec, browserArgs, options = {}) {
+  const headless = options.headless !== false;
+  const platform = options.platform || process.platform;
+  if (headless && platform === 'darwin') {
+    return {
+      command: '/usr/bin/open',
+      args: ['-g', '-j', '-n', '-a', spec.label, '--args', ...browserArgs],
+      launcherOnly: true,
+    };
+  }
+  return {
+    command: spec.executable,
+    args: browserArgs,
+    launcherOnly: false,
+  };
 }
 
 function pause(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function clearDevToolsActivePort(profileDir) {
+  const portFile = path.join(profileDir, 'DevToolsActivePort');
+  try {
+    const stat = fs.lstatSync(portFile);
+    if (!stat.isFile() && !stat.isSymbolicLink()) {
+      throw new Error('PLAUD browser DevTools endpoint is not a regular file.');
+    }
+    fs.unlinkSync(portFile);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 async function waitForDevToolsEndpoint(profileDir, timeoutMs = 10000) {
@@ -248,6 +411,10 @@ async function waitForDevToolsEndpoint(profileDir, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
+      const stat = fs.lstatSync(portFile);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new Error('Invalid DevToolsActivePort file.');
+      }
       const [port, socketPath] = fs.readFileSync(portFile, 'utf8').trim().split(/\s+/);
       if (/^\d{2,5}$/.test(port) && /^\/devtools\/browser\/[A-Za-z0-9-]+$/.test(socketPath || '')) {
         return `ws://127.0.0.1:${port}${socketPath}`;
@@ -294,6 +461,109 @@ function backgroundTabbitPids(profileDir) {
     .filter((pid) => Number.isInteger(pid) && pid > 1);
 }
 
+function managedBrowserPids(profileDir, executable) {
+  const result = spawnSync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+  if (result.status !== 0) return [];
+  const profileArg = `--user-data-dir=${profileDir}`;
+  return result.stdout
+    .split('\n')
+    .filter((line) => line.includes(executable) && line.includes(profileArg))
+    .map((line) => Number(line.trim().match(/^\d+/)?.[0]))
+    .filter((pid) => Number.isInteger(pid) && pid > 1);
+}
+
+async function terminateManagedBrowser(profileDir, browserProcess = null, browserKind = 'chrome') {
+  const spec = BROWSER_SPECS[normalizeBrowserKind(browserKind)];
+  const executable = [spec.executable, spec.userExecutable].find((candidate) => fs.existsSync(candidate))
+    || spec.executable;
+  const pids = new Set(managedBrowserPids(profileDir, executable));
+  if (Number.isInteger(browserProcess?.pid) && browserProcess.pid > 1) pids.add(browserProcess.pid);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // The managed browser may already have exited after Browser.close.
+    }
+  }
+  for (let attempt = 0; attempt < 20 && managedBrowserPids(profileDir, executable).length; attempt += 1) {
+    await pause(50);
+  }
+  for (const pid of managedBrowserPids(profileDir, executable)) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // The process exited during the final cleanup pass.
+    }
+  }
+  clearDevToolsActivePort(profileDir);
+}
+
+async function launchManagedBrowser(profileDir, options = {}) {
+  const spec = browserSpec(options.browserKind, options.browserExecutable);
+  const spawnProcess = options.spawnProcess || spawn;
+  const waitForEndpoint = options.waitForDevToolsEndpoint || waitForDevToolsEndpoint;
+  const connect = options.connectOverCDP || chromium.connectOverCDP.bind(chromium);
+  const terminate = options.terminateBrowser
+    || ((targetProfileDir, processHandle) =>
+      terminateManagedBrowser(targetProfileDir, processHandle, spec.kind));
+  let browser = null;
+  let child = null;
+  let stderr = '';
+
+  try {
+    clearDevToolsActivePort(profileDir);
+    const headless = options.headless !== false;
+    const browserArgs = managedBrowserArgs(profileDir, {
+      headless: options.headless !== false,
+      url: options.url
+    });
+    const launchSpec = managedBrowserLaunchSpec(spec, browserArgs, {
+      headless,
+      platform: options.platform,
+    });
+    child = spawnProcess(launchSpec.command, launchSpec.args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      detached: false,
+      windowsHide: true,
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 12000) stderr = stderr.slice(-12000);
+    });
+    const exitedBeforeReady = new Promise((_, reject) => {
+      child.once('error', reject);
+      child.once('close', (code, signal) => {
+        if (launchSpec.launcherOnly && code === 0 && !signal) return;
+        const reason = signal ? `signal ${signal}` : `exit code ${code}`;
+        const details = stderr.trim() ? `: ${stderr.trim()}` : '';
+        reject(new Error(`${spec.label} stopped before PLAUD login was ready (${reason})${details}`));
+      });
+    });
+    const endpoint = await Promise.race([waitForEndpoint(profileDir), exitedBeforeReady]);
+    browser = await withLoopbackNoProxy(() => connect(endpoint));
+    const context = browser.contexts()[0];
+    if (!context) throw new Error(`${spec.label} did not create a usable PLAUD context.`);
+    return {
+      browser,
+      context,
+      process: launchSpec.launcherOnly ? null : child,
+      browserKind: spec.kind,
+      browserLabel: spec.label,
+    };
+  } catch (error) {
+    if (browser) {
+      try {
+        const session = await browser.newBrowserCDPSession();
+        await session.send('Browser.close');
+      } catch {
+        await browser.close().catch(() => {});
+      }
+    }
+    await terminate(profileDir, child).catch(() => {});
+    throw error;
+  }
+}
+
 async function terminateBackgroundTabbit(profileDir, browserProcess = null) {
   const pids = new Set(backgroundTabbitPids(profileDir));
   if (Number.isInteger(browserProcess?.pid) && browserProcess.pid > 1) {
@@ -316,64 +586,23 @@ async function terminateBackgroundTabbit(profileDir, browserProcess = null) {
       // The browser exited while the final cleanup pass was running.
     }
   }
+  clearDevToolsActivePort(profileDir);
 }
 
 async function launchBackgroundTabbit(profileDir, options = {}) {
-  const spawnProcess = options.spawnProcess || spawn;
-  const waitForEndpoint = options.waitForDevToolsEndpoint || waitForDevToolsEndpoint;
-  const connect = options.connectOverCDP || chromium.connectOverCDP.bind(chromium);
-  const terminate = options.terminateBrowser || terminateBackgroundTabbit;
-  let browser = null;
-  let child = null;
-  let stderr = '';
-
-  try {
-    child = spawnProcess(TABBIT_EXECUTABLE, backgroundTabbitArgs(profileDir), {
-      stdio: ['ignore', 'ignore', 'pipe'],
-      detached: false,
-      windowsHide: true,
-    });
-    child.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString();
-      if (stderr.length > 12000) stderr = stderr.slice(-12000);
-    });
-
-    const exitedBeforeReady = new Promise((_, reject) => {
-      child.once('error', reject);
-      child.once('close', (code, signal) => {
-        const reason = signal ? `signal ${signal}` : `exit code ${code}`;
-        const details = stderr.trim() ? `: ${stderr.trim()}` : '';
-        reject(new Error(`Background PLAUD browser stopped before it was ready (${reason})${details}`));
-      });
-    });
-    const endpoint = await Promise.race([
-      waitForEndpoint(profileDir),
-      exitedBeforeReady,
-    ]);
-    browser = await withLoopbackNoProxy(() => connect(endpoint));
-    const context = browser.contexts()[0];
-    if (!context) {
-      throw new Error('Background PLAUD browser did not create a usable context.');
-    }
-    return { browser, context, process: child };
-  } catch (error) {
-    if (browser) {
-      try {
-        const session = await browser.newBrowserCDPSession();
-        await session.send('Browser.close');
-      } catch {
-        await browser.close().catch(() => {});
-      }
-    }
-    await terminate(profileDir, child).catch(() => {});
-    throw error;
-  }
+  return launchManagedBrowser(profileDir, {
+    ...options,
+    browserKind: 'tabbit',
+    headless: true,
+    terminateBrowser: options.terminateBrowser || terminateBackgroundTabbit,
+  });
 }
 
 function probeDurationMs(filePath) {
-  if (!commandExists('ffprobe')) return null;
+  const ffprobe = mediaExecutable('ffprobe');
+  if (!ffprobe) return null;
   const result = spawnSync(
-    'ffprobe',
+    ffprobe,
     ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', filePath],
     { encoding: 'utf8' }
   );
@@ -382,22 +611,30 @@ function probeDurationMs(filePath) {
   return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds * 1000) : null;
 }
 
-async function transcodeToMp3(inputPath, outputPath) {
-  if (!commandExists('ffmpeg')) {
-    throw new Error('ffmpeg not found. Install ffmpeg or upload an .mp3/.asr/.opus file directly.');
+async function transcodeToOpus(inputPath, outputPath) {
+  const ffmpeg = mediaExecutable('ffmpeg');
+  if (!ffmpeg) {
+    throw new Error('domi audio runtime is missing. Reinstall the latest domi or upload an .mp3/.asr/.opus file directly.');
   }
-  await runProcess('ffmpeg', [
+  await runProcess(ffmpeg, [
     '-y',
+    '-hide_banner',
+    '-loglevel',
+    'error',
     '-i',
     inputPath,
     '-c:a',
-    'libmp3lame',
+    'opus',
+    '-strict',
+    'experimental',
     '-ar',
-    '16000',
+    '48000',
     '-ac',
     '1',
-    '-qscale:a',
-    '0',
+    '-b:a',
+    '32000',
+    '-f',
+    'opus',
     '-ignore_unknown',
     outputPath,
   ]);
@@ -445,21 +682,36 @@ function saveState(state) {
 
 class PlaudClient {
   constructor(options = {}) {
-    this.ownsProfileDir = !options.profileDir;
-    this.profileDir = options.profileDir || (options.profileDirFactory || prepareRuntimeProfile)();
+    this.browserKind = configuredBrowserKind(options.browserKind);
+    this.browserLabel = BROWSER_SPECS[this.browserKind].label;
+    this.ownsProfileDir = Boolean(options.profileDirFactory) && !options.profileDir;
+    this.profileDir = options.profileDir
+      || (options.profileDirFactory ? options.profileDirFactory() : managedProfileDir(this.browserKind));
+    this.headless = options.headless !== false;
+    this.loginTimeoutMs = Number(options.loginTimeoutMs)
+      || (this.headless ? 20000 : 10 * 60 * 1000);
     this.context = null;
     this.browser = null;
     this.browserProcess = null;
     this.page = null;
+    this.sessionLock = null;
     this.apiBase = options.apiBase || API_BASE;
     this.authorization = null;
     this.headers = {};
-    this.launchBrowser = options.launchBrowser || launchBackgroundTabbit;
-    this.terminateBrowser = options.terminateBrowser || terminateBackgroundTabbit;
+    this.launchBrowser = options.launchBrowser
+      || ((profileDir) => launchManagedBrowser(profileDir, {
+        browserKind: this.browserKind,
+        headless: this.headless,
+        url: PLAUD_LOGIN_URL,
+      }));
+    this.terminateBrowser = options.terminateBrowser
+      || ((profileDir, browserProcess) =>
+        terminateManagedBrowser(profileDir, browserProcess, this.browserKind));
   }
 
   async init() {
     try {
+      this.sessionLock = await acquireManagedSessionLock(this.profileDir);
       const launched = await this.launchBrowser(this.profileDir);
       this.browser = launched.browser;
       this.context = launched.context;
@@ -483,8 +735,12 @@ class PlaudClient {
           }
         }
       });
-      await this.page.goto('https://web.plaud.ai', { waitUntil: 'domcontentloaded', timeout: 120000 });
-      await this.page.waitForTimeout(6000);
+      await this.page.goto(PLAUD_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+      const authorizationDeadline = Date.now() + this.loginTimeoutMs;
+      while (!this.authorization && Date.now() < authorizationDeadline) {
+        if (this.page.isClosed()) throw new Error(`${this.browserLabel} PLAUD login window was closed.`);
+        await this.page.waitForTimeout(500);
+      }
       const runtimeApiBase = await this.page.evaluate(() => {
         try {
           return window._prefetch && typeof window._prefetch.getUserApiDomain === 'function'
@@ -496,13 +752,18 @@ class PlaudClient {
       });
       if (runtimeApiBase) this.apiBase = runtimeApiBase;
       if (!this.authorization) {
-        throw new Error('Failed to capture PLAUD authorization header from Tabbit session.');
+        throw new Error(`PLAUD login was not completed in ${this.browserLabel}.`);
       }
       return this;
     } catch (error) {
       await this.close();
       throw error;
     }
+  }
+
+  accountFingerprint() {
+    const identity = String(this.headers['x-pld-user'] || this.authorization || '');
+    return identity ? crypto.createHash('sha256').update(identity).digest('hex').slice(0, 12) : '';
   }
 
   async close() {
@@ -519,6 +780,12 @@ class PlaudClient {
       }
     } finally {
       await this.terminateBrowser(this.profileDir, this.browserProcess).catch(() => {});
+      try {
+        releaseManagedSessionLock(this.sessionLock);
+      } catch {
+        // A malformed lock is handled on the next guarded session start.
+      }
+      this.sessionLock = null;
       this.browser = null;
       this.browserProcess = null;
       this.context = null;
@@ -715,21 +982,21 @@ class PlaudClient {
       throw new Error(`Unsupported audio format: ${ext || '(no extension)'}. Supported direct formats: .mp3, .asr, .opus; transcodable formats: ${Array.from(TRANSCODABLE_EXTS).join(', ')}`);
     }
 
-    const tempPath = path.join(os.tmpdir(), `plaud-upload-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.mp3`);
+    const tempPath = path.join(os.tmpdir(), `plaud-upload-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.opus`);
     if (options.onProgress) {
-      options.onProgress({ stage: 'transcode', message: `Transcoding ${path.basename(resolved)} to MP3` });
+      options.onProgress({ stage: 'transcode', message: `Transcoding ${path.basename(resolved)} to Opus` });
     }
-    await transcodeToMp3(resolved, tempPath);
+    await transcodeToOpus(resolved, tempPath);
 
     return {
       sourcePath: resolved,
       uploadPath: tempPath,
       fileName,
-      fileType: 'MP3',
+      fileType: 'OPUS',
       startTime,
       transcode: true,
       tempPath,
-      duration: null,
+      duration: probeDurationMs(tempPath) || Math.floor(fs.statSync(tempPath).size / 80 * 20),
     };
   }
 
@@ -1048,11 +1315,27 @@ class PlaudClient {
 
 module.exports = {
   API_BASE,
+  BROWSER_SPECS,
+  PLAUD_LOGIN_URL,
   PlaudClient,
+  acquireManagedSessionLock,
   backgroundTabbitArgs,
+  browserSpec,
+  clearDevToolsActivePort,
+  configuredBrowserKind,
   fmtMs,
   launchBackgroundTabbit,
-  prepareRuntimeProfile,
+  launchManagedBrowser,
+  managedBrowserArgs,
+  managedBrowserLaunchSpec,
+  managedProfileDir,
+  managedProfilePath,
+  managedProfileRoot,
+  managedSessionLockPath,
+  mediaExecutable,
+  normalizeBrowserKind,
+  releaseManagedSessionLock,
+  removeManagedProfile,
   renderTranscript,
   safeName,
   waitForDevToolsEndpoint,

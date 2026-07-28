@@ -6,7 +6,15 @@ const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 
-const { PlaudClient, safeName } = require('../vendor/plaud-cli/src/plaud');
+const {
+  BROWSER_SPECS,
+  PlaudClient,
+  configuredBrowserKind,
+  managedProfilePath,
+  mediaExecutable,
+  removeManagedProfile,
+  safeName,
+} = require('../vendor/plaud-cli/src/plaud');
 
 const STATE_DIR = path.resolve(process.env.DOMI_PLAUD_STATE_DIR || path.join(os.homedir(), '.domi'));
 const STATE_FILE = path.join(STATE_DIR, 'plaud-workflow.json');
@@ -39,7 +47,10 @@ const ALLOWED_STAGES = new Set([
 
 function usage() {
   process.stdout.write(`Usage:
-  node plaud.js doctor
+  node plaud.js doctor [chrome|tabbit]
+  node plaud.js login [chrome|tabbit]
+  node plaud.js connection [chrome|tabbit]
+  node plaud.js logout [chrome|tabbit]
   node plaud.js status [limit]
   node plaud.js pending [limit]
   node plaud.js queue
@@ -52,6 +63,11 @@ function usage() {
 
 function safeErrorMessage(error) {
   let message = error && error.message ? String(error.message) : String(error);
+  if (/browserType\.connectOverCDP|WebSocket error:[\s\S]*ECONNREFUSED|connect ECONNREFUSED 127\.0\.0\.1/i.test(message)) {
+    return 'PLAUD 专用浏览器未能建立本机连接。请重新同步；domi 会清理旧连接后自动重试。';
+  }
+  const homeDirectory = os.homedir();
+  if (homeDirectory) message = message.split(homeDirectory).join('~');
   message = message.replace(
     /\b(?:authorization|proxy-authorization|authorization[_-]?header|cookie|cookies|set-cookie|x-pld-user|x-device-id)\s*[:=]\s*[^\r\n]+/gi,
     '[REDACTED_CREDENTIAL]',
@@ -153,17 +169,6 @@ function parseTranscribeLocalArgs(args) {
   return { positional, retryUpload, retryGeneration, workflowId, adoptFileId };
 }
 
-function executableOnPath(name) {
-  for (const directory of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
-    const candidate = path.join(directory, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch (_) {}
-  }
-  return null;
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -261,31 +266,99 @@ function safePendingFile(file) {
   };
 }
 
-function doctor() {
-  const tabbitExecutable = '/Applications/Tabbit.app/Contents/MacOS/Tabbit';
-  const tabbitUserData = path.join(os.homedir(), 'Library', 'Application Support', 'Tabbit');
-  const playwrightPath = path.join(__dirname, '..', 'vendor', 'plaud-cli', 'node_modules', 'playwright');
-  const ffmpegPath = executableOnPath('ffmpeg');
+function doctor(requestedBrowser) {
+  const browser = configuredBrowserKind(requestedBrowser);
+  const spec = BROWSER_SPECS[browser];
+  const ffmpegPath = mediaExecutable('ffmpeg');
+  const ffprobePath = mediaExecutable('ffprobe');
+  let playwrightAvailable = false;
+  try {
+    require.resolve('playwright');
+    playwrightAvailable = true;
+  } catch {
+    playwrightAvailable = false;
+  }
   const checks = {
-    node: { ok: Boolean(process.execPath), path: process.execPath, version: process.version },
-    tabbitExecutable: { ok: fs.existsSync(tabbitExecutable), path: tabbitExecutable },
-    tabbitUserData: { ok: fs.existsSync(tabbitUserData), path: tabbitUserData },
-    vendoredPlaywright: { ok: fs.existsSync(playwrightPath), path: playwrightPath },
-    ffmpeg: { ok: Boolean(ffmpegPath), path: ffmpegPath },
-    stateFile: { ok: true, path: STATE_FILE },
+    node: { ok: Boolean(process.execPath), version: process.version },
+    browser: {
+      ok: [spec.executable, spec.userExecutable].some((candidate) => fs.existsSync(candidate)),
+      kind: browser,
+      label: spec.label
+    },
+    playwright: { ok: playwrightAvailable },
+    ffmpeg: {
+      ok: Boolean(ffmpegPath),
+      source: process.env.DOMI_FFMPEG_PATH ? 'bundled' : 'system'
+    },
+    ffprobe: {
+      ok: Boolean(ffprobePath),
+      source: process.env.DOMI_FFPROBE_PATH ? 'bundled' : 'system'
+    },
+    managedProfile: { ok: fs.existsSync(managedProfilePath(browser)) },
   };
-  const ok = Object.values(checks).every((item) => item.ok);
-  printJson({ ok, checks });
+  const issues = [];
+  if (!checks.browser.ok) issues.push(`未找到 ${spec.label}，请安装后重试，或选择另一种浏览器。`);
+  if (!checks.playwright.ok) issues.push('domi 缺少 PLAUD 浏览器运行组件，请重新安装最新版 domi。');
+  if (!checks.ffmpeg.ok || !checks.ffprobe.ok) {
+    issues.push('domi 内置音频运行时不完整，请重新安装最新版 domi。');
+  }
+  const ok = checks.node.ok
+    && checks.browser.ok
+    && checks.playwright.ok
+    && checks.ffmpeg.ok
+    && checks.ffprobe.ok;
+  printJson({
+    ok,
+    browser,
+    browserLabel: spec.label,
+    checks,
+    ...(issues.length ? { error: issues.join(' ') } : {}),
+  });
   if (!ok) process.exitCode = 1;
 }
 
-async function withClient(callback) {
-  const client = await new PlaudClient().init();
+async function withClient(callback, options = {}) {
+  const client = await new PlaudClient(options).init();
   try {
     return await callback(client);
   } finally {
     await client.close();
   }
+}
+
+async function connection(requestedBrowser, options = {}) {
+  const browser = configuredBrowserKind(requestedBrowser);
+  const result = await withClient(async (client) => {
+    await client.listFiles({ limit: 1 });
+    return {
+      ok: true,
+      connected: true,
+      browser,
+      browserLabel: client.browserLabel,
+      accountFingerprint: client.accountFingerprint(),
+    };
+  }, {
+    browserKind: browser,
+    headless: options.headless !== false,
+    loginTimeoutMs: options.loginTimeoutMs,
+  });
+  printJson(result);
+}
+
+async function login(requestedBrowser) {
+  return connection(requestedBrowser, { headless: false, loginTimeoutMs: 10 * 60 * 1000 });
+}
+
+function logout(requestedBrowser) {
+  const browser = configuredBrowserKind(requestedBrowser);
+  const removed = removeManagedProfile(browser);
+  printJson({
+    ok: true,
+    connected: false,
+    browser,
+    browserLabel: BROWSER_SPECS[browser].label,
+    removed,
+  });
 }
 
 async function status(limit) {
@@ -1163,7 +1236,10 @@ async function main() {
     return;
   }
 
-  if (command === 'doctor') return doctor();
+  if (command === 'doctor') return doctor(args[0]);
+  if (command === 'login') return login(args[0]);
+  if (command === 'connection') return connection(args[0]);
+  if (command === 'logout') return logout(args[0]);
   if (command === 'queue') return queue();
   if (command === 'verify') {
     if (!args[0]) throw new Error('verify requires fileId');
