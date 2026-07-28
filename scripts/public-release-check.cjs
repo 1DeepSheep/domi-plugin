@@ -25,6 +25,7 @@ const forbiddenNames = [
   /^\.privacy-terms\.local$/i,
   /^domi-plugin-config\.json$/i,
   /^domi\.sqlite3?(?:-.+)?$/i,
+  /^(?:Cookies|Cookies-journal|Login Data|Local State|Web Data|DevToolsActivePort)$/i,
   /^(?:threads?|sessions?|history|runtime-state)\.json$/i,
   /^(?:plaud|lark|feishu).*(?:session|cookie|token|credential)/i
 ];
@@ -125,6 +126,10 @@ function walkedReleaseCandidates() {
       if (entry.name === ".privacy-terms.local") continue;
       const target = path.join(directory, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === "plaud-browser") {
+          fail("禁止发布 PLAUD 浏览器 Profile", path.relative(root, target));
+          continue;
+        }
         if (!skippedDirectories.has(entry.name)) stack.push(target);
         continue;
       }
@@ -135,6 +140,10 @@ function walkedReleaseCandidates() {
 }
 
 function inspectCandidate(relativePath, terms) {
+  if (relativePath.split(/[\\/]/).includes("plaud-browser")) {
+    fail("禁止发布 PLAUD 浏览器 Profile", relativePath);
+    return;
+  }
   const absolutePath = path.join(root, relativePath);
   if (!fs.existsSync(absolutePath)) return;
   const stat = fs.lstatSync(absolutePath);
@@ -175,6 +184,10 @@ if (checkHistory) {
         { encoding: "utf8" }
       ).split("\0").filter(Boolean);
       for (const relativePath of files) {
+        if (relativePath.split(/[\\/]/).includes("plaud-browser")) {
+          fail("Git 历史包含 PLAUD 浏览器 Profile", `${commit.slice(0, 12)}:${relativePath}`);
+          continue;
+        }
         const extension = path.extname(relativePath).toLowerCase();
         const name = path.basename(relativePath);
         const historyPath = `${commit.slice(0, 12)}:${relativePath}`;

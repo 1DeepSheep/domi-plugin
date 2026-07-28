@@ -1,0 +1,4 @@
+interface:
+  display_name: "待办事项"
+  short_description: "按关键节点、新入库、人脉和项目四类维护待办事项。"
+  default_prompt: "使用 $domi:todo 扫描近期项目、人脉和关键节点，按四类更新 1.待办事项。"

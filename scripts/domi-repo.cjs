@@ -7,7 +7,55 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+const LOCAL_TODO_DOCUMENT_NAME = "0.待办事项.md";
+const LOCAL_TODO_DOCUMENT_CONTENT = `# 待办事项
+
+> 本文档用于 domi 本地待办事项维护。初始化和升级不会覆盖已有内容。
+
+## 关键节点
+
+## 新入库约见
+
+## 人脉跟进
+
+## 项目跟踪
+
+<pre lang="json" caption="domi-task-board-v1"><code>{
+  "schemaVersion": 1,
+  "updatedAt": "1970-01-01T00:00:00.000Z",
+  "tasks": []
+}</code></pre>
+`;
+const LOCAL_LIBRARY_DIRECTORIES = Object.freeze([
+  "1.行业研究",
+  "2.行业动态",
+  "3.项目库",
+  "4.人脉库"
+]);
+
+function ensureLocalWorkspace(libraryDir) {
+  fs.mkdirSync(libraryDir, { recursive: true });
+  const todoDocumentPath = path.join(libraryDir, LOCAL_TODO_DOCUMENT_NAME);
+  try {
+    fs.writeFileSync(todoDocumentPath, LOCAL_TODO_DOCUMENT_CONTENT, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600
+    });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    const stat = fs.lstatSync(todoDocumentPath);
+    if (!stat.isFile()) {
+      throw new Error(`${LOCAL_TODO_DOCUMENT_NAME} 已存在，但不是普通文件。`);
+    }
+  }
+  for (const directory of LOCAL_LIBRARY_DIRECTORIES) {
+    fs.mkdirSync(path.join(libraryDir, directory), { recursive: true });
+  }
+  return todoDocumentPath;
+}
+
 function defaultConfigPath(homeDir = os.homedir(), exists = fs.existsSync) {
   const applicationSupport = path.join(homeDir, "Library", "Application Support");
   const current = path.join(applicationSupport, "domi", "domi-plugin-config.json");
@@ -164,9 +212,7 @@ class DomiRepository {
     this.libraryDir = path.resolve(config.libraryDir);
     this.databasePath = path.resolve(config.databasePath);
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
-    for (const directory of ["1.行业研究", "2.行业动态", "3.项目库", "4.人脉库"]) {
-      fs.mkdirSync(path.join(this.libraryDir, directory), { recursive: true });
-    }
+    ensureLocalWorkspace(this.libraryDir);
     this.database = new DatabaseSync(this.databasePath);
     this.database.exec("PRAGMA journal_mode = WAL");
     this.database.exec("PRAGMA synchronous = NORMAL");
@@ -189,6 +235,8 @@ class DomiRepository {
         notes TEXT NOT NULL DEFAULT '',
         cities_json TEXT NOT NULL DEFAULT '[]',
         investors_json TEXT NOT NULL DEFAULT '[]',
+        financing_history TEXT NOT NULL DEFAULT '',
+        latest_valuation_usd_100m REAL,
         last_updated_at INTEGER,
         document_path TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
@@ -250,6 +298,15 @@ class DomiRepository {
         VALUES ('schema_version', '${SCHEMA_VERSION}', unixepoch('now') * 1000)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
     `);
+    const projectColumns = new Set(
+      this.database.prepare("PRAGMA table_info(projects)").all().map((column) => column.name)
+    );
+    if (!projectColumns.has("financing_history")) {
+      this.database.exec("ALTER TABLE projects ADD COLUMN financing_history TEXT NOT NULL DEFAULT ''");
+    }
+    if (!projectColumns.has("latest_valuation_usd_100m")) {
+      this.database.exec("ALTER TABLE projects ADD COLUMN latest_valuation_usd_100m REAL");
+    }
   }
 
   close() {
@@ -298,6 +355,7 @@ domain: ${yamlValue(project.domain || "")}
 subdomains: ${yamlValue(stringList(project.subdomains))}
 status: ${yamlValue(project.status || "待交流")}
 rating: ${yamlValue(project.rating || "")}
+latest_valuation_usd_100m: ${project.latestValuationUsd100m ?? "null"}
 last_updated_at: ${yamlValue(new Date(project.lastUpdatedAt).toISOString())}
 ---
 
@@ -309,6 +367,11 @@ last_updated_at: ${yamlValue(new Date(project.lastUpdatedAt).toISOString())}
 - 子领域：${stringList(project.subdomains).join("、") || "未分类"}
 - 进展：${project.status || "待交流"}
 - 评级：${project.rating || "未评级"}
+- 最新估值：${project.latestValuationUsd100m === null ? "未填写" : `${project.latestValuationUsd100m} 亿美元`}
+
+## 历史融资
+
+${project.financingHistory || "暂无历史融资信息。"}
 
 ## 结构化摘要
 
@@ -323,7 +386,8 @@ ${project.notes || "暂无摘要。"}
     if (!name) throw new Error("项目写入缺少 name/companyName。");
     const normalized = normalizedName(name);
     const existing = this.database.prepare(
-      "SELECT id, created_at FROM projects WHERE normalized_name = ?"
+      `SELECT id, created_at, investors_json, financing_history, latest_valuation_usd_100m
+       FROM projects WHERE normalized_name = ?`
     ).get(normalized);
     const id = String(input.id || input.projectId || existing?.id || stableId("prj", normalized));
     const now = Date.now();
@@ -335,15 +399,32 @@ ${project.notes || "暂无摘要。"}
       rating: String(input.rating || "").trim(),
       notes: String(input.notes || "").trim(),
       cities: stringList(input.cities),
-      investors: stringList(input.investors),
+      investors: Object.prototype.hasOwnProperty.call(input, "investors")
+        ? stringList(input.investors)
+        : parseJsonList(existing?.investors_json),
+      financingHistory: Object.prototype.hasOwnProperty.call(input, "financingHistory")
+        ? String(input.financingHistory || "").trim()
+        : String(existing?.financing_history || ""),
+      latestValuationUsd100m: Object.prototype.hasOwnProperty.call(input, "latestValuationUsd100m")
+        ? input.latestValuationUsd100m === null
+          || input.latestValuationUsd100m === undefined
+          || input.latestValuationUsd100m === ""
+          ? null
+          : Number(input.latestValuationUsd100m)
+        : existing?.latest_valuation_usd_100m ?? null,
       lastUpdatedAt: toEpochMs(input.lastUpdatedAt || input.lastFollowup, now)
     };
+    if (project.latestValuationUsd100m !== null
+      && (!Number.isFinite(project.latestValuationUsd100m) || project.latestValuationUsd100m < 0)) {
+      throw new Error("latestValuationUsd100m 必须是非负数字，单位为亿美元。");
+    }
     const documentPath = this.projectPage(project, id);
     this.database.prepare(`
       INSERT INTO projects (
         id, name, normalized_name, domain, subdomains_json, status, rating, notes,
-        cities_json, investors_json, last_updated_at, document_path, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cities_json, investors_json, financing_history, latest_valuation_usd_100m,
+        last_updated_at, document_path, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         normalized_name = excluded.normalized_name,
@@ -354,12 +435,15 @@ ${project.notes || "暂无摘要。"}
         notes = excluded.notes,
         cities_json = excluded.cities_json,
         investors_json = excluded.investors_json,
+        financing_history = excluded.financing_history,
+        latest_valuation_usd_100m = excluded.latest_valuation_usd_100m,
         last_updated_at = excluded.last_updated_at,
         document_path = excluded.document_path,
         updated_at = excluded.updated_at
     `).run(
       id, name, normalized, project.domain, jsonList(project.subdomains), project.status,
       project.rating, project.notes, jsonList(project.cities), jsonList(project.investors),
+      project.financingHistory, project.latestValuationUsd100m,
       project.lastUpdatedAt, documentPath, existing?.created_at || now, now
     );
     return {
@@ -396,6 +480,11 @@ ${project.notes || "暂无摘要。"}
       notes: row.notes,
       cities: parseJsonList(row.cities_json),
       investors: parseJsonList(row.investors_json),
+      financingHistory: row.financing_history || "",
+      latestValuationUsd100m: row.latest_valuation_usd_100m === null
+        || row.latest_valuation_usd_100m === undefined
+        ? null
+        : Number(row.latest_valuation_usd_100m),
       lastUpdatedAt: row.last_updated_at,
       documentPath: row.document_path,
       documentUri: row.document_path ? pathToFileURL(row.document_path).href : ""
@@ -787,6 +876,8 @@ if (require.main === module) {
 module.exports = {
   defaultConfigPath,
   DomiRepository,
+  ensureLocalWorkspace,
+  LOCAL_TODO_DOCUMENT_NAME,
   SCHEMA_VERSION,
   normalizedName,
   readConfig,
