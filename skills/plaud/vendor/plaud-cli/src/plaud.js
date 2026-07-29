@@ -362,7 +362,6 @@ function managedBrowserArgs(profileDir, options = {}) {
     `--user-data-dir=${profileDir}`,
     '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=0',
-    ...(!headless && options.url ? [options.url] : []),
   ];
 }
 
@@ -380,6 +379,36 @@ function managedBrowserLaunchSpec(spec, browserArgs, options = {}) {
 
 function pause(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function settleWithin(promise, timeoutMs) {
+  let timer;
+  const guarded = Promise.resolve(promise).catch(() => undefined);
+  try {
+    return await Promise.race([
+      guarded,
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function compactManagedPages(context) {
+  const pages = context.pages().filter((page) => !page.isClosed());
+  const page = pages.at(-1) || (await context.newPage());
+  const extras = pages.filter((candidate) => candidate !== page);
+  await Promise.allSettled(
+    extras.map((candidate) =>
+      settleWithin(candidate.close({ runBeforeUnload: false }), 2000)),
+  );
+  return {
+    page,
+    closedPageCount: extras.length,
+  };
 }
 
 function clearDevToolsActivePort(profileDir) {
@@ -439,6 +468,27 @@ async function withLoopbackNoProxy(callback) {
       else process.env[key] = value;
     }
   }
+}
+
+async function connectToDevToolsWithRetry(connect, endpoint, options = {}) {
+  const timeoutMs = Math.max(500, Number(options.timeoutMs) || 10000);
+  const pauseImpl = options.pause || pause;
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      return await withLoopbackNoProxy(() => connect(endpoint));
+    } catch (error) {
+      lastError = error;
+      if (!/ECONNREFUSED|ECONNRESET|WebSocket error|socket hang up/i.test(String(error?.message || error))) {
+        throw error;
+      }
+      attempt += 1;
+      await pauseImpl(Math.min(100 * attempt, 500));
+    }
+  }
+  throw lastError || new Error('Timed out while connecting to the PLAUD browser session.');
 }
 
 function backgroundTabbitPids(profileDir) {
@@ -531,7 +581,7 @@ async function launchManagedBrowser(profileDir, options = {}) {
       });
     });
     const endpoint = await Promise.race([waitForEndpoint(profileDir), exitedBeforeReady]);
-    browser = await withLoopbackNoProxy(() => connect(endpoint));
+    browser = await connectToDevToolsWithRetry(connect, endpoint);
     const context = browser.contexts()[0];
     if (!context) throw new Error(`${spec.label} did not create a usable PLAUD context.`);
     return {
@@ -545,9 +595,9 @@ async function launchManagedBrowser(profileDir, options = {}) {
     if (browser) {
       try {
         const session = await browser.newBrowserCDPSession();
-        await session.send('Browser.close');
+        await settleWithin(session.send('Browser.close'), 2000);
       } catch {
-        await browser.close().catch(() => {});
+        await settleWithin(browser.close(), 2000);
       }
     }
     await terminate(profileDir, child).catch(() => {});
@@ -707,8 +757,7 @@ class PlaudClient {
       this.browser = launched.browser;
       this.context = launched.context;
       this.browserProcess = launched.process || null;
-      this.page = this.context.pages()[0] || (await this.context.newPage());
-      this.page.on('request', (req) => {
+      this.context.on('request', (req) => {
         if (!isPlaudApiUrl(req.url())) return;
         const origin = plaudApiOrigin(req.url());
         if (origin) this.apiBase = origin;
@@ -726,21 +775,30 @@ class PlaudClient {
           }
         }
       });
-      await this.page.goto(PLAUD_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+      const compacted = await compactManagedPages(this.context);
+      this.page = compacted.page;
+      await this.page.goto(PLAUD_LOGIN_URL, { waitUntil: 'commit', timeout: 30000 });
       const authorizationDeadline = Date.now() + this.loginTimeoutMs;
       while (!this.authorization && Date.now() < authorizationDeadline) {
         if (this.page.isClosed()) throw new Error(`${this.browserLabel} PLAUD login window was closed.`);
         await this.page.waitForTimeout(500);
       }
-      const runtimeApiBase = await this.page.evaluate(() => {
-        try {
-          return window._prefetch && typeof window._prefetch.getUserApiDomain === 'function'
-            ? window._prefetch.getUserApiDomain()
-            : null;
-        } catch {
-          return null;
-        }
-      });
+      let runtimeApiBase = null;
+      try {
+        runtimeApiBase = await this.page.evaluate(() => {
+          try {
+            return window._prefetch && typeof window._prefetch.getUserApiDomain === 'function'
+              ? window._prefetch.getUserApiDomain()
+              : null;
+          } catch {
+            return null;
+          }
+        });
+      } catch {
+        // PLAUD may still be replacing its login route while the authorization
+        // deadline expires. The missing authorization below is the actionable
+        // result; a transient execution-context error must not hide it.
+      }
       if (runtimeApiBase) this.apiBase = runtimeApiBase;
       if (!this.authorization) {
         throw new Error(`PLAUD login was not completed in ${this.browserLabel}.`);
@@ -762,12 +820,12 @@ class PlaudClient {
       if (this.browser) {
         try {
           const session = await this.browser.newBrowserCDPSession();
-          await session.send('Browser.close');
+          await settleWithin(session.send('Browser.close'), 2000);
         } catch {
-          await this.browser.close().catch(() => {});
+          await settleWithin(this.browser.close(), 2000);
         }
       } else if (this.context) {
-        await this.context.close().catch(() => {});
+        await settleWithin(this.context.close(), 2000);
       }
     } finally {
       await this.terminateBrowser(this.profileDir, this.browserProcess).catch(() => {});
@@ -1313,6 +1371,8 @@ module.exports = {
   backgroundTabbitArgs,
   browserSpec,
   clearDevToolsActivePort,
+  compactManagedPages,
+  connectToDevToolsWithRetry,
   configuredBrowserKind,
   fmtMs,
   launchBackgroundTabbit,
