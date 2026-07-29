@@ -371,15 +371,6 @@ function backgroundTabbitArgs(profileDir) {
 }
 
 function managedBrowserLaunchSpec(spec, browserArgs, options = {}) {
-  const headless = options.headless !== false;
-  const platform = options.platform || process.platform;
-  if (headless && platform === 'darwin') {
-    return {
-      command: '/usr/bin/open',
-      args: ['-g', '-j', '-n', '-a', spec.label, '--args', ...browserArgs],
-      launcherOnly: true,
-    };
-  }
   return {
     command: spec.executable,
     args: browserArgs,
