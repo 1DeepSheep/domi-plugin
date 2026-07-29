@@ -431,7 +431,7 @@ test('PLAUD browser selection comes only from the local config', () => {
   }
 });
 
-test('PLAUD starts background Tabbit through a hidden non-activating macOS launch', async () => {
+test('PLAUD starts background Tabbit through its exact executable without activating an app bundle', async () => {
   const profileDir = path.join(sandbox, 'direct-background-profile');
   const child = new EventEmitter();
   child.pid = 4242;
@@ -453,14 +453,15 @@ test('PLAUD starts background Tabbit through a hidden non-activating macOS launc
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, '/usr/bin/open');
-  assert.deepEqual(calls[0].args.slice(0, 6), ['-g', '-j', '-n', '-a', 'Tabbit', '--args']);
+  assert.equal(calls[0].command, '/Applications/Tabbit.app/Contents/MacOS/Tabbit');
+  assert.equal(calls[0].command === '/usr/bin/open', false);
   assert.equal(calls[0].args.includes('--headless=new'), true);
+  assert.equal(calls[0].args.includes('--no-startup-window'), true);
   assert.equal(calls[0].args.includes('https://web.plaud.ai'), false);
   assert.equal(calls[0].options.detached, false);
   assert.equal(launched.browser, browser);
   assert.equal(launched.context, context);
-  assert.equal(launched.process, null);
+  assert.equal(launched.process, child);
 });
 
 test('PLAUD keeps visible login launches direct and user-activated', () => {
