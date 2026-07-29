@@ -19,6 +19,8 @@ const {
   acquireManagedSessionLock,
   backgroundTabbitArgs,
   clearDevToolsActivePort,
+  compactManagedPages,
+  connectToDevToolsWithRetry,
   configuredBrowserKind,
   launchBackgroundTabbit,
   launchManagedBrowser,
@@ -398,7 +400,7 @@ test('PLAUD managed browser supports a visible Chrome login with a private profi
     assert.equal(args.includes('--headless=new'), false);
     assert.equal(args.includes('--remote-debugging-address=127.0.0.1'), true);
     assert.equal(args.includes(`--user-data-dir=${profileDir}`), true);
-    assert.equal(args.at(-1), 'https://web.plaud.ai');
+    assert.equal(args.includes('https://web.plaud.ai'), false);
 
     fs.writeFileSync(path.join(profileDir, 'login-state'), 'private', { mode: 0o600 });
     const client = new PlaudClient({
@@ -415,6 +417,31 @@ test('PLAUD managed browser supports a visible Chrome login with a private profi
     if (previousRoot == null) delete process.env.DOMI_PLAUD_PROFILE_ROOT;
     else process.env.DOMI_PLAUD_PROFILE_ROOT = previousRoot;
   }
+});
+
+test('PLAUD compacts restored tabs before navigation and keeps only one page', async () => {
+  const calls = [];
+  const makePage = (name) => ({
+    name,
+    closed: false,
+    isClosed() { return this.closed; },
+    async close(options) {
+      calls.push([name, options]);
+      this.closed = true;
+    },
+  });
+  const pages = Array.from({ length: 12 }, (_, index) => makePage(`page-${index}`));
+  const result = await compactManagedPages({
+    pages: () => pages,
+    newPage: async () => {
+      throw new Error('a restored page should be reused');
+    },
+  });
+  assert.equal(result.page, pages.at(-1));
+  assert.equal(result.closedPageCount, 11);
+  assert.equal(calls.length, 11);
+  assert.equal(pages.filter((page) => !page.closed).length, 1);
+  assert.deepEqual(calls[0][1], { runBeforeUnload: false });
 });
 
 test('PLAUD browser selection comes only from the local config', () => {
@@ -462,6 +489,21 @@ test('PLAUD starts background Tabbit through its exact executable without activa
   assert.equal(launched.browser, browser);
   assert.equal(launched.context, context);
   assert.equal(launched.process, child);
+});
+
+test('PLAUD retries the private DevTools endpoint until the browser socket is ready', async () => {
+  let attempts = 0;
+  const browser = { contexts: () => [{}] };
+  const result = await connectToDevToolsWithRetry(async () => {
+    attempts += 1;
+    if (attempts < 3) throw new Error('WebSocket error: connect ECONNREFUSED 127.0.0.1');
+    return browser;
+  }, 'ws://127.0.0.1:49231/devtools/browser/test', {
+    timeoutMs: 1000,
+    pause: async () => {},
+  });
+  assert.equal(result, browser);
+  assert.equal(attempts, 3);
 });
 
 test('PLAUD keeps visible login launches direct and user-activated', () => {
