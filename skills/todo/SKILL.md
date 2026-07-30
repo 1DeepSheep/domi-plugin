@@ -13,9 +13,19 @@ description: 生成并维护 domi 的投资待办事项。用户要求查看、�
 2. 严格按 `storageBackend` 选择单一事实源：
    - `feishu`：固定使用当前飞书文档库中的 `1.待办事项` docx；兼容旧标题 `1.Task` / `1. Task`，找到后改名为 `1.待办事项`。不要求用户粘贴链接，旧版 `taskDocumentUrl` 只作无感兼容。
    - `local`：固定使用 `<localRepositoryDir>/0.待办事项.md`。必须从配置解析根目录，不得猜测、搜索其他目录或改用飞书；文件缺失时先运行插件根目录的 `scripts/domi-repo.cjs init`，仍缺失则停止。
-3. 飞书模式采用 `lark-drive`、`lark-wiki`、`lark-base`、`lark-doc`，进入执行前完整读取这四个技能及其必读引用。本地模式不得调用飞书，项目、人脉和行业事件只通过插件根目录的 `scripts/domi-repo.cjs` 读取。
+3. 普通飞书调用采用 `lark-drive`、`lark-wiki`、`lark-base`、`lark-doc`，进入执行前完整读取实际使用的技能及其必读引用；若调用上下文包含 `DOMI_TODO_CLIENT_SNAPSHOT_V1`，改用下述“客户端快速同步路径”，不得再加载这四个通用技能全文。本地模式不得调用飞书，项目、人脉和行业事件只通过插件根目录的 `scripts/domi-repo.cjs` 读取。
 4. 写入前先读取当前待办事项账本并合并，绝不覆盖待办事项文档中的其他内容。已有 `ignored`、`done`、`in_progress` 状态必须保留，但这些状态只用于生命周期管理，不作为看板分类。
 5. 只生成有证据、可说明原因、能给出下一动作的待办事项。不得把缺字段或模糊猜测包装成提醒。
+
+## 客户端快速同步路径
+
+调用上下文包含 `DOMI_TODO_CLIENT_SNAPSHOT_V1` 时，客户端已经完成项目表和人脉表刷新，并按本 Skill 的完整规则传入近 28 天新入库候选与 A/S 长期跟进候选。此模式保持同样的证据门槛、四分类、冷却规则和 12 项配额，只减少重复读取：
+
+1. 完整读取本 `SKILL.md`、`references/suggestion-rules.md` 和 `references/todo-ledger-schema.md`；不读取 domi Router，也不加载与当前后端无关的通用技能。
+2. 配置只读取一次，当前待办事项账本只读取一次；客户端候选作为 `new-entry`、`relationship-follow-up` 和 `project-follow-up` 的本轮权威候选集，不得再次全量读取项目表或人脉表。
+3. 只有关键节点日期、已核验关联动态、字段歧义或账本消歧可以做补充读取；能按 `recordId` 点读时不得退化为全表扫描。上下文明确说明候选被截断时，才读取未传入部分。
+4. 完成合并后单次写入，再单次回读验证。不得在写入前后重复搜索待办文档、重复刷新相同表或逐项回读所有源记录。
+5. 飞书模式可直接执行本 Skill 已给出的精确 `lark-cli` 命令；本快速路径不因跳过四个通用技能全文而省略身份、标题消歧、schema、写后回读或隐私校验。
 
 ## 工作流
 
@@ -51,13 +61,15 @@ node <todo-skill-dir>/scripts/todo-ledger.js parse
 
 ### 2. 读取实时数据
 
-飞书模式下，先运行以下幂等迁移，确保项目表和人脉表都有系统型 `入库时间`（`created_at`）：
+飞书模式下，普通调用先运行以下幂等迁移，确保项目表和人脉表都有系统型 `入库时间`（`created_at`）：
 
 ```bash
 node <plugin-root>/skills/investment-mgmt/scripts/ensure-intake-time-fields.js ensure
 ```
 
 迁移成功后，每张 Base 都先取字段 schema，再选择真实存在的字段。不要假设其他中文字段名一定存在。`入库时间` 只读，任何记录写入都不得包含它。
+
+客户端快速同步路径已经由客户端刷新并规范化 `入库时间`、评级、阶段、最后跟进和最后联系；不得重复运行迁移或为了这三类候选再次读取 schema。只有关键节点日期需要源表中客户端未提供的日期字段时，才读取一次对应表 schema，并只选择真实存在的日期字段。
 
 本地模式只使用 `domi-repo.cjs`：
 
@@ -75,7 +87,7 @@ node <plugin-root>/scripts/domi-repo.cjs news list --from <ISO时间> --to <ISO�
 
 创建时间优先读取系统字段 `入库时间`；兼容读取 Base 记录元数据 `created_time`，但不得用最后更新时间、研究日期或本轮扫描日期伪装成“新入库”。
 
-客户端同步可能附带一份刚刷新的“最近 4 周新入库候选索引”。该索引来自本轮已完成的项目／人脉刷新，是 `new-entry` 的权威候选集；不要为了发现同一批新入库对象再次全量读取项目表或人脉表。只在字段歧义、价值证据不足或账本消歧时按 `recordId` 点读单条记录。索引中存在符合规则、且没有 `done`／`ignored` 冷却约束时，本轮不得把 `new-entry` 留空。若全部排除，输出中必须给出因低质量、已约见、冷却期或重复而排除的数量。
+客户端同步可能附带一份最近 4 周新入库候选索引，并以 `DOMI_TODO_CLIENT_SNAPSHOT_V1` 标记。该索引来自本轮已完成的项目／人脉刷新，是 `new-entry`、`relationship-follow-up` 和 `project-follow-up` 的权威候选集；不要为了发现同一批新入库对象再次全量读取项目表或人脉表，也不要为长期跟进候选重复扫描全表。只在字段歧义、价值证据不足或账本消歧时按 `recordId` 点读单条记录。索引中存在符合规则、且没有 `done`／`ignored` 冷却约束时，本轮不得把 `new-entry` 留空。若全部排除，输出中必须给出因低质量、已约见、冷却期或重复而排除的数量。
 
 ### 3. 生成建议
 
