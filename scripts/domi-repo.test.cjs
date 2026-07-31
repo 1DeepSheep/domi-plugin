@@ -47,7 +47,7 @@ test("local repository initialization creates and preserves 0.待办事项.md", 
   assert.equal(fs.readFileSync(todoDocumentPath, "utf8"), "# 用户维护的待办事项\n");
 });
 
-test("local project upsert creates SQLite record, stable Markdown page and material folders", (t) => {
+test("local project upsert creates SQLite record and lazily creates document folders", (t) => {
   const repository = createRepository(t);
   t.after(() => repository.close());
 
@@ -89,8 +89,49 @@ test("local project upsert creates SQLite record, stable Markdown page and mater
   assert.match(fs.readFileSync(pagePath, "utf8"), /第二版摘要/);
   assert.match(fs.readFileSync(pagePath, "utf8"), /1\.2 亿美元/);
   for (const directory of ["纪要", "研究", "原始材料", "导出"]) {
-    assert.equal(fs.existsSync(path.join(path.dirname(pagePath), directory)), true);
+    assert.equal(fs.existsSync(path.join(path.dirname(pagePath), directory)), false);
   }
+  const document = repository.createDocument({
+    ownerType: "project",
+    ownerId: created.project.id,
+    kind: "研究",
+    title: "桌面研究",
+    content: "# 桌面研究\n"
+  });
+  assert.equal(document.ok, true);
+  assert.equal(fs.existsSync(path.join(path.dirname(pagePath), "研究")), true);
+  for (const directory of ["纪要", "原始材料", "导出"]) {
+    assert.equal(fs.existsSync(path.join(path.dirname(pagePath), directory)), false);
+  }
+});
+
+test("unclassified projects avoid and migrate the redundant _未分类/_未分类 layer", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const legacyPath = path.join(
+    repository.libraryDir,
+    "3.项目库",
+    "_未分类",
+    "_未分类",
+    "历史项目"
+  );
+  fs.mkdirSync(legacyPath, { recursive: true });
+  fs.writeFileSync(path.join(legacyPath, "旧材料.txt"), "preserved");
+
+  const result = repository.upsertProject({
+    name: "历史项目",
+    domain: "",
+    subdomains: [],
+    status: "待交流"
+  });
+  const projectDirectory = path.dirname(result.project.documentPath);
+
+  assert.equal(
+    projectDirectory,
+    path.join(repository.libraryDir, "3.项目库", "_未分类", "历史项目")
+  );
+  assert.equal(fs.readFileSync(path.join(projectDirectory, "旧材料.txt"), "utf8"), "preserved");
+  assert.equal(fs.existsSync(path.join(repository.libraryDir, "3.项目库", "_未分类", "_未分类")), false);
 });
 
 test("local news upsert deduplicates by event ID and writes a readable Markdown mirror", (t) => {
