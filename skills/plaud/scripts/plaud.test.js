@@ -19,6 +19,7 @@ const {
   acquireManagedSessionLock,
   backgroundTabbitArgs,
   clearDevToolsActivePort,
+  clearManagedSessionRestoreState,
   compactManagedPages,
   connectToDevToolsWithRetry,
   configuredBrowserKind,
@@ -445,6 +446,21 @@ test('PLAUD compacts restored tabs before navigation and keeps only one page', a
   assert.deepEqual(calls[0][1], { runBeforeUnload: false });
 });
 
+test('PLAUD removes only tab restore state while preserving the private login profile', () => {
+  const profileDir = path.join(sandbox, 'session-restore-profile');
+  const defaultDir = path.join(profileDir, 'Default');
+  fs.mkdirSync(path.join(defaultDir, 'Sessions'), { recursive: true });
+  fs.writeFileSync(path.join(defaultDir, 'Sessions', 'Tabs_1'), 'restored tabs');
+  fs.writeFileSync(path.join(defaultDir, 'Cookies'), 'private login state');
+  fs.writeFileSync(path.join(defaultDir, 'Preferences'), '{}');
+
+  clearManagedSessionRestoreState(profileDir);
+
+  assert.equal(fs.existsSync(path.join(defaultDir, 'Sessions')), false);
+  assert.equal(fs.readFileSync(path.join(defaultDir, 'Cookies'), 'utf8'), 'private login state');
+  assert.equal(fs.existsSync(path.join(defaultDir, 'Preferences')), true);
+});
+
 test('PLAUD browser selection comes only from the local config', () => {
   const previousConfig = process.env.DOMI_CONFIG_PATH;
   const configPath = path.join(sandbox, 'browser-config.json');
@@ -465,6 +481,7 @@ test('PLAUD starts background Tabbit through its exact executable without activa
   child.pid = 4242;
   child.stderr = new EventEmitter();
   const calls = [];
+  let orphanCleanupFinished = false;
   const context = {};
   const browser = { contexts: () => [context] };
 
@@ -472,12 +489,15 @@ test('PLAUD starts background Tabbit through its exact executable without activa
     browserExecutable: '/Applications/Tabbit.app/Contents/MacOS/Tabbit',
     platform: 'darwin',
     spawnProcess: (command, args, options) => {
+      assert.equal(orphanCleanupFinished, true);
       calls.push({ command, args, options });
       return child;
     },
     waitForDevToolsEndpoint: async () => 'ws://127.0.0.1:49231/devtools/browser/test',
     connectOverCDP: async () => browser,
-    terminateBrowser: async () => {},
+    terminateBrowser: async () => {
+      orphanCleanupFinished = true;
+    },
   });
 
   assert.equal(calls.length, 1);
@@ -490,6 +510,29 @@ test('PLAUD starts background Tabbit through its exact executable without activa
   assert.equal(launched.browser, browser);
   assert.equal(launched.context, context);
   assert.equal(launched.process, child);
+});
+
+test('PLAUD API requests abort independently instead of waiting for the parent timeout', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => {
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      reject(error);
+    }, { once: true });
+  });
+  try {
+    const client = Object.create(PlaudClient.prototype);
+    client.apiBase = 'https://api.invalid';
+    client.headers = {};
+    client.apiTimeoutMs = 5;
+    client.page = {
+      evaluate: async (callback, payload) => callback(payload),
+    };
+    await assert.rejects(client.api('/file/simple/web'), /PLAUD 接口读取超时（1 秒）/);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('PLAUD retries the private DevTools endpoint until the browser socket is ready', async () => {
@@ -534,7 +577,7 @@ test('PLAUD client initialization retries only transient pre-operation failures'
       return {
         value: `client-${current}`,
         async init() {
-          if (current < 3) throw new Error('connectOverCDP: ECONNREFUSED');
+          if (current < 2) throw new Error('connectOverCDP: ECONNREFUSED');
           return this;
         },
         async close() {
@@ -543,9 +586,9 @@ test('PLAUD client initialization retries only transient pre-operation failures'
       };
     },
   });
-  assert.equal(result, 'client-3');
-  assert.equal(created, 3);
-  assert.equal(closed, 3);
+  assert.equal(result, 'client-2');
+  assert.equal(created, 2);
+  assert.equal(closed, 2);
 });
 
 test('PLAUD keeps visible login launches direct and user-activated', () => {

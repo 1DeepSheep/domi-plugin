@@ -426,6 +426,27 @@ function clearDevToolsActivePort(profileDir) {
   }
 }
 
+function clearManagedSessionRestoreState(profileDir) {
+  const defaultProfile = path.join(profileDir, 'Default');
+  const targets = [
+    path.join(defaultProfile, 'Sessions'),
+    path.join(defaultProfile, 'Current Session'),
+    path.join(defaultProfile, 'Current Tabs'),
+    path.join(defaultProfile, 'Last Session'),
+    path.join(defaultProfile, 'Last Tabs'),
+  ];
+  let removed = 0;
+  for (const target of targets) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+      // A missing or concurrently removed session-restore artifact is harmless.
+    }
+  }
+  return removed;
+}
+
 async function waitForDevToolsEndpoint(profileDir, timeoutMs = 10000) {
   const portFile = path.join(profileDir, 'DevToolsActivePort');
   const deadline = Date.now() + timeoutMs;
@@ -583,6 +604,12 @@ async function launchManagedBrowser(profileDir, options = {}) {
   let stderr = '';
 
   try {
+    // A timed-out parent process may have been terminated before PlaudClient.close()
+    // could stop its dedicated browser. The profile lock is acquired by the caller
+    // before launch, so removing exact-profile orphans here cannot interrupt another
+    // healthy domi PLAUD operation.
+    await terminate(profileDir, null);
+    clearManagedSessionRestoreState(profileDir);
     clearDevToolsActivePort(profileDir);
     const headless = options.headless !== false;
     const browserArgs = managedBrowserArgs(profileDir, {
@@ -761,7 +788,8 @@ class PlaudClient {
       || (options.profileDirFactory ? options.profileDirFactory() : managedProfileDir(this.browserKind));
     this.headless = options.headless !== false;
     this.loginTimeoutMs = Number(options.loginTimeoutMs)
-      || (this.headless ? 20000 : 10 * 60 * 1000);
+      || (this.headless ? 12000 : 10 * 60 * 1000);
+    this.apiTimeoutMs = Math.max(1000, Number(options.apiTimeoutMs) || 15000);
     this.context = null;
     this.browser = null;
     this.browserProcess = null;
@@ -808,7 +836,10 @@ class PlaudClient {
       });
       const compacted = await compactManagedPages(this.context);
       this.page = compacted.page;
-      await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL);
+      await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, {
+        attempts: this.headless ? 2 : 3,
+        timeout: this.headless ? 12000 : 30000,
+      });
       const authorizationDeadline = Date.now() + this.loginTimeoutMs;
       while (!this.authorization && Date.now() < authorizationDeadline) {
         if (this.page.isClosed()) throw new Error(`${this.browserLabel} PLAUD login window was closed.`);
@@ -889,23 +920,41 @@ class PlaudClient {
     if (data) {
       headers['content-type'] = headers['content-type'] || 'application/json;charset=UTF-8';
     }
-    const response = await this.page.evaluate(
-      async ({ url, method, headers, data }) => {
-        const res = await fetch(url, {
-          method,
-          headers,
-          body: data ? JSON.stringify(data) : undefined,
-        });
-        const text = await res.text();
-        let body = text;
-        try {
-          body = JSON.parse(text);
-        } catch {}
-        return { status: res.status, body };
-      },
-      { url, method, headers, data }
-    );
-    return response;
+    try {
+      return await this.page.evaluate(
+        async ({ url, method, headers, data, timeoutMs }) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const res = await fetch(url, {
+              method,
+              headers,
+              body: data ? JSON.stringify(data) : undefined,
+              signal: controller.signal,
+            });
+            const text = await res.text();
+            let body = text;
+            try {
+              body = JSON.parse(text);
+            } catch {}
+            return { status: res.status, body };
+          } catch (error) {
+            if (error && error.name === 'AbortError') {
+              throw new Error(`PLAUD API request timed out after ${timeoutMs} ms`);
+            }
+            throw error;
+          } finally {
+            clearTimeout(timer);
+          }
+        },
+        { url, method, headers, data, timeoutMs: this.apiTimeoutMs }
+      );
+    } catch (error) {
+      if (/PLAUD API request timed out/i.test(error instanceof Error ? error.message : String(error))) {
+        throw new Error(`PLAUD 接口读取超时（${Math.ceil(this.apiTimeoutMs / 1000)} 秒）。`);
+      }
+      throw error;
+    }
   }
 
   async getUploadPresignedUrl({ filesize, fileType }) {
@@ -1402,6 +1451,7 @@ module.exports = {
   backgroundTabbitArgs,
   browserSpec,
   clearDevToolsActivePort,
+  clearManagedSessionRestoreState,
   compactManagedPages,
   connectToDevToolsWithRetry,
   configuredBrowserKind,
