@@ -317,8 +317,34 @@ function doctor(requestedBrowser) {
   if (!ok) process.exitCode = 1;
 }
 
+function isTransientClientInitializationError(error) {
+  return /page\.goto|connectOverCDP|WebSocket error|ECONNREFUSED|ECONNRESET|ERR_CONNECTION_(?:CLOSED|RESET|REFUSED)|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|socket hang up/i
+    .test(error instanceof Error ? error.message : String(error));
+}
+
 async function withClient(callback, options = {}) {
-  const client = await new PlaudClient(options).init();
+  const clientFactory = options.clientFactory || ((clientOptions) => new PlaudClient(clientOptions));
+  const clientOptions = { ...options };
+  delete clientOptions.clientFactory;
+  delete clientOptions.initializationAttempts;
+  delete clientOptions.initializationPause;
+  const attempts = Math.min(Math.max(Number(options.initializationAttempts) || 3, 1), 5);
+  const pause = options.initializationPause || sleep;
+  let client;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const candidate = clientFactory(clientOptions);
+    try {
+      client = await candidate.init();
+      break;
+    } catch (error) {
+      lastError = error;
+      await candidate.close().catch(() => {});
+      if (!isTransientClientInitializationError(error) || attempt + 1 >= attempts) throw error;
+      await pause(500 * (attempt + 1));
+    }
+  }
+  if (!client) throw lastError || new Error('PLAUD 会话初始化失败。');
   try {
     return await callback(client);
   } finally {
@@ -1301,6 +1327,7 @@ module.exports = {
     loadState,
     mark,
     parseTranscribeLocalArgs,
+    isTransientClientInitializationError,
     safeErrorMessage,
     sha256File,
     transcribeLocal,
@@ -1309,5 +1336,6 @@ module.exports = {
     validateStoredDiscussionAudit,
     validateStoredDiscussionNotes,
     verify,
+    withClient,
   },
 };

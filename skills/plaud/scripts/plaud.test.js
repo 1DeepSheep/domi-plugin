@@ -29,6 +29,7 @@ const {
   managedProfileDir,
   managedSessionLockPath,
   mediaExecutable,
+  navigatePlaudWithRetry,
   releaseManagedSessionLock,
   removeManagedProfile,
   waitForDevToolsEndpoint,
@@ -504,6 +505,47 @@ test('PLAUD retries the private DevTools endpoint until the browser socket is re
   });
   assert.equal(result, browser);
   assert.equal(attempts, 3);
+});
+
+test('PLAUD retries transient site navigation without reopening a visible browser', async () => {
+  let attempts = 0;
+  const pauses = [];
+  await navigatePlaudWithRetry({
+    isClosed: () => false,
+    goto: async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error('page.goto: net::ERR_CONNECTION_CLOSED');
+    },
+  }, 'https://web.plaud.ai', {
+    pause: async (delay) => pauses.push(delay),
+  });
+  assert.equal(attempts, 3);
+  assert.deepEqual(pauses, [400, 800]);
+});
+
+test('PLAUD client initialization retries only transient pre-operation failures', async () => {
+  let created = 0;
+  let closed = 0;
+  const result = await __test.withClient(async (client) => client.value, {
+    initializationPause: async () => {},
+    clientFactory: () => {
+      created += 1;
+      const current = created;
+      return {
+        value: `client-${current}`,
+        async init() {
+          if (current < 3) throw new Error('connectOverCDP: ECONNREFUSED');
+          return this;
+        },
+        async close() {
+          closed += 1;
+        },
+      };
+    },
+  });
+  assert.equal(result, 'client-3');
+  assert.equal(created, 3);
+  assert.equal(closed, 3);
 });
 
 test('PLAUD keeps visible login launches direct and user-activated', () => {

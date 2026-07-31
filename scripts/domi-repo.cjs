@@ -7,7 +7,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const LOCAL_TODO_DOCUMENT_NAME = "0.待办事项.md";
 const LOCAL_TODO_DOCUMENT_CONTENT = `# 待办事项
 
@@ -294,9 +294,22 @@ class DomiRepository {
       );
       CREATE INDEX IF NOT EXISTS idx_documents_owner
         ON documents(owner_type, owner_id, kind);
+      CREATE TABLE IF NOT EXISTS repository_tombstones (
+        entity_type TEXT NOT NULL,
+        entity_key TEXT NOT NULL,
+        record_id TEXT NOT NULL DEFAULT '',
+        source_path TEXT NOT NULL DEFAULT '',
+        deleted_at INTEGER NOT NULL,
+        PRIMARY KEY (entity_type, entity_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_repository_tombstones_source
+        ON repository_tombstones(entity_type, source_path);
       INSERT INTO repository_meta (key, value, updated_at)
         VALUES ('schema_version', '${SCHEMA_VERSION}', unixepoch('now') * 1000)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+        WHERE repository_meta.value <> excluded.value;
     `);
     const projectColumns = new Set(
       this.database.prepare("PRAGMA table_info(projects)").all().map((column) => column.name)
@@ -330,21 +343,28 @@ class DomiRepository {
   }
 
   projectDirectory(project) {
-    const mainSubdomain = stringList(project.subdomains)[0] || "_未分类";
-    return path.join(
-      this.libraryDir,
-      "3.项目库",
-      safeSegment(project.domain),
-      safeSegment(mainSubdomain),
-      safeSegment(project.name, "未命名项目")
-    );
+    const domain = safeSegment(project.domain);
+    const mainSubdomain = safeSegment(stringList(project.subdomains)[0]);
+    const projectName = safeSegment(project.name, "未命名项目");
+    const projectRoot = path.join(this.libraryDir, "3.项目库", domain);
+    if (domain === "_未分类" && mainSubdomain === "_未分类") {
+      const compactPath = path.join(projectRoot, projectName);
+      const legacyPath = path.join(projectRoot, "_未分类", projectName);
+      if (!fs.existsSync(compactPath) && fs.existsSync(legacyPath)) {
+        fs.renameSync(legacyPath, compactPath);
+        try {
+          fs.rmdirSync(path.dirname(legacyPath));
+        } catch {
+          // Other legacy projects may still be waiting for an idempotent update.
+        }
+      }
+      return compactPath;
+    }
+    return path.join(projectRoot, mainSubdomain, projectName);
   }
 
   projectPage(project, id) {
     const directory = this.projectDirectory(project);
-    for (const child of ["纪要", "研究", "原始材料", "导出"]) {
-      fs.mkdirSync(path.join(directory, child), { recursive: true });
-    }
     const filePath = path.join(directory, "项目主页.md");
     const block = `---
 domi_schema: ${SCHEMA_VERSION}
@@ -446,6 +466,9 @@ ${project.notes || "暂无摘要。"}
       project.financingHistory, project.latestValuationUsd100m,
       project.lastUpdatedAt, documentPath, existing?.created_at || now, now
     );
+    this.database.prepare(
+      "DELETE FROM repository_tombstones WHERE entity_type = 'project' AND entity_key = ?"
+    ).run(normalized);
     return {
       ok: true,
       action: existing ? "updated" : "created",
@@ -564,6 +587,9 @@ rating: ${yamlValue(person.rating || "")}
       person.rating, person.lastContactAt, jsonList(person.cities), documentPath,
       existing?.created_at || now, now
     );
+    this.database.prepare(
+      "DELETE FROM repository_tombstones WHERE entity_type = 'person' AND entity_key = ?"
+    ).run(normalized);
     return {
       ok: true,
       action: existing ? "updated" : "created",
@@ -694,6 +720,9 @@ ${event.action || "继续关注。"}
       event.evidenceStatus, event.action, event.worthFollowing, documentPath,
       existing?.created_at || now, now
     );
+    this.database.prepare(
+      "DELETE FROM repository_tombstones WHERE entity_type = 'news' AND entity_key = ?"
+    ).run(eventId);
     return {
       ok: true,
       action: existing ? "updated" : "created",
