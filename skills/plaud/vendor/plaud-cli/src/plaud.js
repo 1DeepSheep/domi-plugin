@@ -491,6 +491,37 @@ async function connectToDevToolsWithRetry(connect, endpoint, options = {}) {
   throw lastError || new Error('Timed out while connecting to the PLAUD browser session.');
 }
 
+function isTransientPlaudNavigationError(error) {
+  return /page\.goto|ERR_CONNECTION_(?:CLOSED|RESET|REFUSED)|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|socket hang up/i
+    .test(error instanceof Error ? error.message : String(error));
+}
+
+async function navigatePlaudWithRetry(page, url = PLAUD_LOGIN_URL, options = {}) {
+  const attempts = Math.min(Math.max(Number(options.attempts) || 3, 1), 5);
+  const pauseImpl = options.pause || pause;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await page.goto(url, {
+        waitUntil: options.waitUntil || 'commit',
+        timeout: Number(options.timeout) || 30000,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (
+        page.isClosed?.()
+        || !isTransientPlaudNavigationError(error)
+        || attempt + 1 >= attempts
+      ) {
+        throw error;
+      }
+      await pauseImpl(400 * (attempt + 1));
+    }
+  }
+  throw lastError || new Error('PLAUD 页面暂时无法连接。');
+}
+
 function backgroundTabbitPids(profileDir) {
   const result = spawnSync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
   if (result.status !== 0) return [];
@@ -777,7 +808,7 @@ class PlaudClient {
       });
       const compacted = await compactManagedPages(this.context);
       this.page = compacted.page;
-      await this.page.goto(PLAUD_LOGIN_URL, { waitUntil: 'commit', timeout: 30000 });
+      await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL);
       const authorizationDeadline = Date.now() + this.loginTimeoutMs;
       while (!this.authorization && Date.now() < authorizationDeadline) {
         if (this.page.isClosed()) throw new Error(`${this.browserLabel} PLAUD login window was closed.`);
@@ -1375,6 +1406,7 @@ module.exports = {
   connectToDevToolsWithRetry,
   configuredBrowserKind,
   fmtMs,
+  isTransientPlaudNavigationError,
   launchBackgroundTabbit,
   launchManagedBrowser,
   managedBrowserArgs,
@@ -1384,6 +1416,7 @@ module.exports = {
   managedProfileRoot,
   managedSessionLockPath,
   mediaExecutable,
+  navigatePlaudWithRetry,
   normalizeBrowserKind,
   releaseManagedSessionLock,
   removeManagedProfile,
