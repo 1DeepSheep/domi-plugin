@@ -44,6 +44,8 @@ const ALLOWED_STAGES = new Set([
   'generation_timeout',
   'failed',
 ]);
+let activeClient = null;
+let signalShutdown = null;
 
 function usage() {
   process.stdout.write(`Usage:
@@ -328,18 +330,20 @@ async function withClient(callback, options = {}) {
   delete clientOptions.clientFactory;
   delete clientOptions.initializationAttempts;
   delete clientOptions.initializationPause;
-  const attempts = Math.min(Math.max(Number(options.initializationAttempts) || 3, 1), 5);
+  const attempts = Math.min(Math.max(Number(options.initializationAttempts) || 2, 1), 5);
   const pause = options.initializationPause || sleep;
   let client;
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const candidate = clientFactory(clientOptions);
+    activeClient = candidate;
     try {
       client = await candidate.init();
       break;
     } catch (error) {
       lastError = error;
       await candidate.close().catch(() => {});
+      if (activeClient === candidate) activeClient = null;
       if (!isTransientClientInitializationError(error) || attempt + 1 >= attempts) throw error;
       await pause(500 * (attempt + 1));
     }
@@ -348,8 +352,34 @@ async function withClient(callback, options = {}) {
   try {
     return await callback(client);
   } finally {
-    await client.close();
+    if (signalShutdown) {
+      await signalShutdown;
+    } else {
+      await client.close();
+    }
+    if (activeClient === client) activeClient = null;
   }
+}
+
+function installSignalCleanup() {
+  const stop = (signal) => {
+    if (signalShutdown) return;
+    const exitCode = signal === 'SIGINT' ? 130 : 143;
+    signalShutdown = (async () => {
+      const timer = setTimeout(() => process.exit(exitCode), 4000);
+      try {
+        await activeClient?.close();
+      } catch {
+        // The parent process is already stopping; exact-profile cleanup in the
+        // next launch provides a second recovery layer.
+      } finally {
+        clearTimeout(timer);
+        process.exit(exitCode);
+      }
+    })();
+  };
+  process.once('SIGTERM', () => stop('SIGTERM'));
+  process.once('SIGINT', () => stop('SIGINT'));
 }
 
 async function connection(requestedBrowser, options = {}) {
@@ -1310,6 +1340,7 @@ async function main() {
 }
 
 if (require.main === module) {
+  installSignalCleanup();
   main().catch((error) => {
     printJson({ ok: false, error: safeErrorMessage(error) });
     process.exitCode = 1;
