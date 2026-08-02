@@ -320,7 +320,7 @@ function doctor(requestedBrowser) {
 }
 
 function isTransientClientInitializationError(error) {
-  return /page\.goto|connectOverCDP|WebSocket error|ECONNREFUSED|ECONNRESET|ERR_CONNECTION_(?:CLOSED|RESET|REFUSED)|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|socket hang up/i
+  return /PLAUD_SESSION_PROBE_INCOMPLETE|page\.goto|connectOverCDP|WebSocket error|ECONNREFUSED|ECONNRESET|ERR_CONNECTION_(?:CLOSED|RESET|REFUSED)|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|socket hang up/i
     .test(error instanceof Error ? error.message : String(error));
 }
 

@@ -28,12 +28,15 @@ const {
   managedBrowserArgs,
   managedBrowserLaunchSpec,
   managedProfileDir,
+  managedProfileNeedsSessionRecovery,
   managedSessionLockPath,
   mediaExecutable,
   navigatePlaudWithRetry,
+  pageShowsPlaudLogin,
   releaseManagedSessionLock,
   removeManagedProfile,
   waitForDevToolsEndpoint,
+  waitForPlaudAuthorization,
   withLoopbackNoProxy,
 } = require('../vendor/plaud-cli/src/plaud.js');
 
@@ -459,6 +462,97 @@ test('PLAUD removes only tab restore state while preserving the private login pr
   assert.equal(fs.existsSync(path.join(defaultDir, 'Sessions')), false);
   assert.equal(fs.readFileSync(path.join(defaultDir, 'Cookies'), 'utf8'), 'private login state');
   assert.equal(fs.existsSync(path.join(defaultDir, 'Preferences')), true);
+});
+
+test('PLAUD clears tab restore state only after an unclean managed-browser exit', () => {
+  const profileDir = path.join(sandbox, 'profile-exit-state');
+  const defaultDir = path.join(profileDir, 'Default');
+  fs.mkdirSync(defaultDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(defaultDir, 'Preferences'),
+    JSON.stringify({ profile: { exit_type: 'Normal' } }),
+  );
+  assert.equal(managedProfileNeedsSessionRecovery(profileDir), false);
+  fs.writeFileSync(
+    path.join(defaultDir, 'Preferences'),
+    JSON.stringify({ profile: { exit_type: 'Crashed' } }),
+  );
+  assert.equal(managedProfileNeedsSessionRecovery(profileDir), true);
+});
+
+test('PLAUD recognizes an explicit login page without exposing page contents', async () => {
+  assert.equal(await pageShowsPlaudLogin({ evaluate: async () => true }), true);
+  assert.equal(await pageShowsPlaudLogin({ evaluate: async () => false }), false);
+  assert.equal(await pageShowsPlaudLogin({ evaluate: async () => { throw new Error('closed'); } }), false);
+});
+
+test('PLAUD automatically reloads an intact session before asking the user to log in', async () => {
+  let clock = 0;
+  let reloads = 0;
+  const client = {
+    authorization: null,
+    browserLabel: 'Tabbit',
+    headless: true,
+    loginTimeoutMs: 2000,
+    page: {
+      isClosed: () => false,
+      evaluate: async () => false,
+      reload: async () => {
+        reloads += 1;
+        client.authorization = 'ok';
+      },
+    },
+  };
+  const connected = await waitForPlaudAuthorization(client, {
+    attemptTimeoutMs: 1000,
+    now: () => clock,
+    pause: async (delay) => { clock += delay; },
+  });
+  assert.equal(connected, true);
+  assert.equal(reloads, 1);
+});
+
+test('PLAUD distinguishes an explicit login page from an incomplete background probe', async () => {
+  let clock = 0;
+  const loginClient = {
+    authorization: null,
+    browserLabel: 'Tabbit',
+    headless: true,
+    loginTimeoutMs: 2000,
+    page: {
+      isClosed: () => false,
+      evaluate: async () => true,
+      reload: async () => {},
+    },
+  };
+  await assert.rejects(
+    waitForPlaudAuthorization(loginClient, {
+      attemptTimeoutMs: 1000,
+      now: () => clock,
+      pause: async (delay) => { clock += delay; },
+    }),
+    /PLAUD_AUTH_REQUIRED/,
+  );
+
+  clock = 0;
+  let reloads = 0;
+  const probeClient = {
+    ...loginClient,
+    page: {
+      isClosed: () => false,
+      evaluate: async () => false,
+      reload: async () => { reloads += 1; },
+    },
+  };
+  await assert.rejects(
+    waitForPlaudAuthorization(probeClient, {
+      attemptTimeoutMs: 1000,
+      now: () => clock,
+      pause: async (delay) => { clock += delay; },
+    }),
+    /PLAUD_SESSION_PROBE_INCOMPLETE/,
+  );
+  assert.equal(reloads, 1);
 });
 
 test('PLAUD browser selection comes only from the local config', () => {
