@@ -75,14 +75,16 @@
 仅在 `intake/update` 或用户明确要求只读关系查询时进入当前人脉库。
 
 飞书模式依次采用并完整遵循 `lark-base`，执行下列规则。
-本地模式使用 `person search --query` 查重、`person upsert` 写入；SQLite schema 已由网关管理，不得自行改表。人物主页保存在 `4.人脉库/<姓名>/人物主页.md`，写后再次 search 并验证 Markdown URI。
+本地模式使用 `person search --query` 查重、`person upsert` 写入；SQLite schema 已由网关管理，不得自行改表。人物唯一结构化主档保存在 `4.人脉库/<姓名>/人物主页.md`，完整人物画像／背景研究必须通过同一次 upsert 的 `researchContentFile` 或 `researchContent` 写入 `4.人脉库/<姓名>/研究/`，不得只停留在对话回答中，也不再创建根目录下的“<姓名>-人物资料.md”。真实发生的交流、访谈或会议单独写入 `4.人脉库/<姓名>/纪要/`，并同步维护人脉库的“交流文档”链接；写后再次 search 并验证人物主页、`documents` 中的研究文档以及交流文档 URI。
 
 1. 定位《1.1 People人际关系管理》，读取实时 table、字段 ID、字段名、类型、必填项、select 选项、linked-record 字段和相关视图；不得假设历史字段名仍存在。
-2. 飞书模式先运行 `node <plugin-root>/skills/investment-mgmt/scripts/ensure-intake-time-fields.js ensure`，确认 `入库时间` 为系统 `created_at`；该字段只读，不得放入 create/update payload。
+2. 飞书模式先运行 `node <plugin-root>/skills/investment-mgmt/scripts/ensure-intake-time-fields.js ensure`，确认 `入库时间` 为系统 `created_at`，并确认人脉表存在文本型“交流文档”字段；`入库时间` 只读，不得放入 create/update payload，交流纪要生成或归档后应把对应链接增量写入“交流文档”。
 3. 优先用稳定标识查重：`open_id`、用户授权的职业邮箱、canonical professional URL、个人主页、GitHub／Hugging Face／Scholar 等；再用规范化姓名与别名 + 当前／历史组织 + 角色／时间线复核。
 4. 将结果分为：`create`、`update(record_id, high-confidence)`、`skip(no delta)`、`ambiguous`。多条命中、身份中低置信或疑似重复时不得自动 merge、覆盖或删除。
 5. `update` mode 只能定位唯一既有 `record_id`；无记录时暂停并询问是否切换 `intake`，不得把“更新”解释成“找不到就新建”。
 6. 永远按实时 schema 映射字段。字段缺失时，只在内容适合且安全时写入现有 Notes／Summary／`情报`；否则询问是否调整 schema。除统一维护系统型 `入库时间` 外，不得擅自新增字段、select 选项或改变字段类型。
+
+本地 `intake` 的写入顺序是强制的：先生成完整人物研究 Markdown 临时文件，再将其作为 `researchContentFile` 与结构化字段一起传给 `person upsert`；随后按姓名回读并确认 `人物主页.md`、`研究/<标题>.md` 与 SQLite 人物记录都存在。任一项缺失时状态为部分完成，不得声称已入库。`update` 有实质研究增量时同样写入新的可辨识研究文档，避免只覆盖结构化摘要而丢失完整成果。
 
 《1.1 People人际关系管理》的 `类型` 只能保留一个最利于检索的主标签；即使 API 需要数组也只传一个选项。学校、雇主、历史公司、身份和 why-now 放入 `所属组织&身份`、`情报` 或其他实时存在的适配字段，不得堆成多个 `类型`。
 
