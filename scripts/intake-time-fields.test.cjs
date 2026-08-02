@@ -3,6 +3,8 @@ const test = require("node:test");
 const {
   FIELD_NAME,
   FIELD_TYPE,
+  INTERACTION_FIELD_NAME,
+  INTERACTION_FIELD_TYPE,
   ensureIntakeTimeFields
 } = require("../skills/investment-mgmt/scripts/ensure-intake-time-fields.js");
 
@@ -50,17 +52,18 @@ test("missing project and people intake fields are created once and verified", (
     result.tables.map((item) => [item.kind, item.field, item.type, item.status]),
     [
       ["project", FIELD_NAME, FIELD_TYPE, "created"],
-      ["people", FIELD_NAME, FIELD_TYPE, "created"]
+      ["people", FIELD_NAME, FIELD_TYPE, "created"],
+      ["people", INTERACTION_FIELD_NAME, INTERACTION_FIELD_TYPE, "created"]
     ]
   );
-  assert.equal(lark.calls.filter((args) => args.includes("+field-create")).length, 2);
+  assert.equal(lark.calls.filter((args) => args.includes("+field-create")).length, 3);
 
   const repeated = ensureIntakeTimeFields({
     config: CONFIG,
     runLark: (args) => lark.run(args)
   });
-  assert.deepEqual(repeated.tables.map((item) => item.status), ["present", "present"]);
-  assert.equal(lark.calls.filter((args) => args.includes("+field-create")).length, 2);
+  assert.deepEqual(repeated.tables.map((item) => item.status), ["present", "present", "present"]);
+  assert.equal(lark.calls.filter((args) => args.includes("+field-create")).length, 3);
 });
 
 test("a same-name writable field blocks all schema writes", () => {
@@ -73,14 +76,15 @@ test("a same-name writable field blocks all schema writes", () => {
       config: CONFIG,
       runLark: (args) => lark.run(args)
     }),
-    /不是系统创建时间字段/
+    /字段类型不正确/
   );
   assert.equal(lark.calls.some((args) => args.includes("+field-create")), false);
 });
 
 test("check mode reports missing fields without writing", () => {
   const lark = fakeLark({
-    projects: [{ name: FIELD_NAME, type: FIELD_TYPE }]
+    projects: [{ name: FIELD_NAME, type: FIELD_TYPE }],
+    people: [{ name: INTERACTION_FIELD_NAME, type: INTERACTION_FIELD_TYPE }]
   });
   const result = ensureIntakeTimeFields({
     config: CONFIG,
@@ -89,7 +93,7 @@ test("check mode reports missing fields without writing", () => {
   });
 
   assert.equal(result.ok, false);
-  assert.deepEqual(result.tables.map((item) => item.status), ["present", "missing"]);
+  assert.deepEqual(result.tables.map((item) => item.status), ["present", "missing", "present"]);
   assert.equal(lark.calls.some((args) => args.includes("+field-create")), false);
 });
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Investment Review"
   short_description: "快速输出有立场的投不投判断、关键问题、评分与评级。"
-  default_prompt: "Use $investment-review to evaluate this project and give a score, rating, and key decision questions."
+  default_prompt: "Use $investment-review to evaluate whether the industry and product thesis works, how the company can scale, what kind of company and team can win, and whether this project fits that path. Then give the score, rating, and 3-5 decision questions. Keep generic diligence and transaction-document gaps out of the core questions unless they are a concrete deal breaker."
