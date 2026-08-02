@@ -7,7 +7,9 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
+const PERSON_INTERACTION_NAME_PATTERN = /(?:交流|纪要|会议|访谈|沟通|会面|电话|路演|聊天)/i;
+const PERSON_RESEARCH_NAME_PATTERN = /(?:研究|调研|人物画像|背景|背调|资料|分析|profile)/i;
 const LOCAL_TODO_DOCUMENT_NAME = "0.待办事项.md";
 const LOCAL_TODO_DOCUMENT_CONTENT = `# 待办事项
 
@@ -141,6 +143,15 @@ function parseJsonList(value) {
   }
 }
 
+function parseJsonArray(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function yamlValue(value) {
   return JSON.stringify(value === undefined ? "" : value);
 }
@@ -253,6 +264,7 @@ class DomiRepository {
         rating TEXT NOT NULL DEFAULT '',
         last_contact_at INTEGER,
         cities_json TEXT NOT NULL DEFAULT '[]',
+        interaction_documents_json TEXT NOT NULL DEFAULT '[]',
         document_path TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -319,6 +331,14 @@ class DomiRepository {
     }
     if (!projectColumns.has("latest_valuation_usd_100m")) {
       this.database.exec("ALTER TABLE projects ADD COLUMN latest_valuation_usd_100m REAL");
+    }
+    const peopleColumns = new Set(
+      this.database.prepare("PRAGMA table_info(people)").all().map((column) => column.name)
+    );
+    if (!peopleColumns.has("interaction_documents_json")) {
+      this.database.exec(
+        "ALTER TABLE people ADD COLUMN interaction_documents_json TEXT NOT NULL DEFAULT '[]'"
+      );
     }
   }
 
@@ -590,28 +610,94 @@ rating: ${yamlValue(person.rating || "")}
     this.database.prepare(
       "DELETE FROM repository_tombstones WHERE entity_type = 'person' AND entity_key = ?"
     ).run(normalized);
+    let researchDocument = null;
+    if (input.researchContentFile || input.researchContent) {
+      const datePrefix = new Date(now).toLocaleDateString("en-CA").replaceAll("-", "");
+      researchDocument = this.createDocument({
+        ownerType: "person",
+        ownerId: id,
+        kind: "研究",
+        title: String(input.researchTitle || `${datePrefix}-${name}-人物研究`).trim(),
+        contentFile: input.researchContentFile,
+        content: input.researchContent
+      }).document;
+    }
     return {
       ok: true,
       action: existing ? "updated" : "created",
-      person: this.listPeople(name).find((item) => item.id === id)
+      person: this.listPeople(name).find((item) => item.id === id),
+      researchDocument
     };
   }
 
   listPeople(query = "") {
     const normalizedQuery = normalizedName(query);
+    const documentsByOwner = new Map();
+    for (const document of this.database.prepare(`
+      SELECT owner_id, kind, title, path, updated_at
+      FROM documents
+      WHERE owner_type = 'person'
+      ORDER BY updated_at DESC, path ASC
+    `).all()) {
+      const items = documentsByOwner.get(document.owner_id) || [];
+      items.push(document);
+      documentsByOwner.set(document.owner_id, items);
+    }
     return this.database.prepare("SELECT * FROM people ORDER BY updated_at DESC, name").all()
-      .map((row) => ({
-        id: row.id,
-        name: row.name,
-        types: parseJsonList(row.types_json),
-        organization: row.organization,
-        status: row.status,
-        rating: row.rating,
-        lastContactAt: row.last_contact_at,
-        cities: parseJsonList(row.cities_json),
-        documentPath: row.document_path,
-        documentUri: row.document_path ? pathToFileURL(row.document_path).href : ""
-      }))
+      .map((row) => {
+        const root = row.document_path ? path.dirname(row.document_path) : "";
+        const indexedDocuments = parseJsonArray(row.interaction_documents_json).map((document) => {
+          if (!document || typeof document !== "object") return null;
+          const relativePath = String(document.relativePath || "").trim();
+          const targetPath = root && relativePath ? path.resolve(root, relativePath) : "";
+          if (!targetPath || (targetPath !== root && !targetPath.startsWith(`${root}${path.sep}`))) {
+            return null;
+          }
+          return {
+            title: String(document.title || path.basename(relativePath, path.extname(relativePath))),
+            path: targetPath,
+            uri: pathToFileURL(targetPath).href,
+            kind: String(document.kind || "相关资料"),
+            updatedAt: Number(document.updatedAt) || 0
+          };
+        }).filter(Boolean);
+        const persistedDocuments = (documentsByOwner.get(row.id) || []).map((document) => {
+          const targetPath = root && document.path ? path.resolve(document.path) : "";
+          if (!targetPath || (targetPath !== root && !targetPath.startsWith(`${root}${path.sep}`))) {
+            return null;
+          }
+          return {
+            title: String(document.title || path.basename(targetPath, path.extname(targetPath))),
+            path: targetPath,
+            uri: pathToFileURL(targetPath).href,
+            kind: String(document.kind || "相关资料"),
+            updatedAt: Number(document.updated_at) || 0
+          };
+        }).filter(Boolean);
+        const documents = [...persistedDocuments, ...indexedDocuments]
+          .filter((document, index, all) =>
+            all.findIndex((candidate) => candidate.path === document.path) === index
+          )
+          .sort((left, right) => right.updatedAt - left.updatedAt
+            || left.path.localeCompare(right.path, "zh-CN"))
+          .slice(0, 50);
+        return {
+          id: row.id,
+          name: row.name,
+          types: parseJsonList(row.types_json),
+          organization: row.organization,
+          status: row.status,
+          rating: row.rating,
+          lastContactAt: row.last_contact_at,
+          cities: parseJsonList(row.cities_json),
+          documentPath: row.document_path,
+          documentUri: row.document_path ? pathToFileURL(row.document_path).href : "",
+          documents,
+          interactionDocuments: documents.filter((document) =>
+            PERSON_INTERACTION_NAME_PATTERN.test(`${document.kind} ${document.title} ${document.path}`)
+          )
+        };
+      })
       .filter((person) => !normalizedQuery
         || normalizedName(`${person.name}${person.organization}`).includes(normalizedQuery));
   }
@@ -797,7 +883,17 @@ ${event.action || "继续关注。"}
       if (!event) throw new Error(`没有找到行业事件 ${ownerId}。`);
       root = path.dirname(event.documentPath);
     }
-    const targetDirectory = ownerType === "project" ? path.join(root, kind) : root;
+    const personInteraction = ownerType === "person"
+      && PERSON_INTERACTION_NAME_PATTERN.test(`${kind} ${title}`);
+    const personResearch = ownerType === "person"
+      && PERSON_RESEARCH_NAME_PATTERN.test(`${kind} ${title}`);
+    const targetDirectory = ownerType === "project"
+      ? path.join(root, kind)
+      : personInteraction
+        ? path.join(root, "纪要")
+        : personResearch
+          ? path.join(root, "研究")
+          : root;
     fs.mkdirSync(targetDirectory, { recursive: true });
     const filePath = path.join(targetDirectory, `${safeSegment(title, kind)}.md`);
     const content = input.contentFile
@@ -817,6 +913,24 @@ ${event.action || "继续关注。"}
         path = excluded.path,
         updated_at = excluded.updated_at
     `).run(id, ownerType, ownerId, kind, title, filePath, now, now);
+    if (ownerType === "person") {
+      const documents = this.database.prepare(`
+        SELECT kind, title, path, updated_at
+        FROM documents
+        WHERE owner_type = 'person' AND owner_id = ?
+        ORDER BY updated_at DESC, path ASC
+      `).all(ownerId).map((document) => ({
+        title: document.title,
+        relativePath: path.relative(root, document.path),
+        kind: document.kind,
+        updatedAt: document.updated_at
+      })).slice(0, 50);
+      this.database.prepare(`
+        UPDATE people
+        SET interaction_documents_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(JSON.stringify(documents), now, ownerId);
+    }
     return {
       ok: true,
       document: { id, ownerType, ownerId, kind, title, path: filePath, uri: pathToFileURL(filePath).href },
