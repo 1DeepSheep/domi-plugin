@@ -134,6 +134,60 @@ test("unclassified projects avoid and migrate the redundant _未分类/_未分�
   assert.equal(fs.existsSync(path.join(repository.libraryDir, "3.项目库", "_未分类", "_未分类")), false);
 });
 
+test("person records keep one homepage and archive research plus interaction documents", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const created = repository.upsertPerson({
+    name: "张三",
+    types: ["创业者"],
+    organization: "示例科技 · CEO"
+  });
+  assert.equal(created.ok, true);
+  assert.match(created.person.documentPath, /人物主页\.md$/);
+  assert.equal(fs.existsSync(path.join(path.dirname(created.person.documentPath), "张三-人物资料.md")), false);
+
+  const document = repository.createDocument({
+    ownerType: "person",
+    ownerId: created.person.id,
+    kind: "交流纪要",
+    title: "20260803-电话沟通",
+    content: "# 电话沟通\n"
+  });
+  assert.match(document.document.path, /纪要\/20260803-电话沟通\.md$/);
+  const research = repository.createDocument({
+    ownerType: "person",
+    ownerId: created.person.id,
+    kind: "研究",
+    title: "20260803-张三-人物研究",
+    content: "# 张三人物研究\n"
+  });
+  assert.match(research.document.path, /研究\/20260803-张三-人物研究\.md$/);
+  const person = repository.listPeople("张三")[0];
+  assert.deepEqual(person.interactionDocuments.map((item) => item.title), ["20260803-电话沟通"]);
+  assert.equal(fs.existsSync(person.interactionDocuments[0].path), true);
+  assert.deepEqual(
+    person.documents.map((item) => `${item.kind}:${item.title}`).sort(),
+    ["交流纪要:20260803-电话沟通", "研究:20260803-张三-人物研究"].sort()
+  );
+  assert.equal(fs.existsSync(person.documents[0].path), true);
+});
+
+test("person upsert can persist the full research document in the same intake", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const created = repository.upsertPerson({
+    name: "叶锐",
+    types: ["博士生"],
+    organization: "示例大学 · 研究人员",
+    researchTitle: "20260803-叶锐-人物研究",
+    researchContent: "# 叶锐人物研究\n\n完整研究内容。\n"
+  });
+  assert.equal(created.ok, true);
+  assert.match(created.researchDocument.path, /研究\/20260803-叶锐-人物研究\.md$/);
+  assert.deepEqual(created.person.documents.map((item) => item.title), ["20260803-叶锐-人物研究"]);
+  assert.equal(fs.existsSync(created.researchDocument.path), true);
+});
+
 test("local news upsert deduplicates by event ID and writes a readable Markdown mirror", (t) => {
   const repository = createRepository(t);
   t.after(() => repository.close());

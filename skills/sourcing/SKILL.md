@@ -36,7 +36,7 @@ Before collecting data, lock the brief:
 Use the narrowest tool that matches the task:
 
 - In Feishu mode use `lark-base` for all operations on "1.1 People人际关系管理".
-- In local mode use `domi-repo.cjs person search/upsert`; SQLite is the structured authority and the generated `人物主页.md` is its readable mirror.
+- In local mode use `domi-repo.cjs person search/upsert`; SQLite is the structured authority and `人物主页.md` is the structured master/index. Every full profile or background-research result must be passed as `researchContentFile` or `researchContent` during upsert and archived under the person's `研究/` directory; it must not remain only in the chat response. Do not create a second root-level `姓名-人物资料.md`. Real interaction notes belong in `纪要/` and are also registered in “交流文档”.
 - Use `lark-contact` only when a Feishu/Lark user identity must be resolved from a name, email, or open_id.
 - Use `lark-im`, `lark-calendar`, or `lark-mail` only when the user explicitly asks to use communication history or schedule context and permissions are available.
 - Use `desk-research` when a person is tied to a company/project that needs a company or sector investment profile.

@@ -94,6 +94,17 @@ migration_receipt:
 
 项目根目录不要带日期、评级或进展状态；这些会变化的信息只写 SQLite 与 `项目主页.md`。多子领域时，SQLite 可保存多个，目录只使用第一个主子领域。四个内容子目录按需创建，禁止为了占位初始化空文件夹。
 
+人物目录固定为：
+
+```text
+<localRepositoryDir>/4.人脉库/<姓名>/
+├── 人物主页.md  # 唯一结构化主档与文档索引
+├── 研究/        # 有第一篇完整人物研究或背景研究时创建
+└── 纪要/        # 有第一篇真实交流、会议或访谈纪要时创建
+```
+
+不得再创建“<姓名>-人物资料.md”作为第二份主档。`人物主页.md` 只维护稳定结构化摘要与文档索引；完整人物画像／公开背景研究必须作为独立文档写入 `研究/`，真实交流纪要写入 `纪要/`。已有同名资料文件属于用户历史资料，迁移前不得删除。研究与纪要都必须进入本地文档索引；交流纪要还要把链接写入人脉库“交流文档”字段。
+
 领域和主子领域都未知时，使用紧凑路径
 `3.项目库/_未分类/<项目名称>/`，不得创建
 `3.项目库/_未分类/_未分类/<项目名称>/`。旧版重复层在项目下一次受控
@@ -196,6 +207,21 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
   "contentFile": "/absolute/path/to/notes.md"
 }
 ```
+
+本地人物 `intake` 必须把完整研究结果写入 Markdown，不能只把摘要写进结构化字段。推荐把人物字段和研究文档在同一次 `person upsert` 中提交：
+
+```json
+{
+  "name": "姓名",
+  "types": ["创业者"],
+  "organization": "机构与身份",
+  "status": "已研究",
+  "researchTitle": "20260803-姓名-人物研究",
+  "researchContentFile": "/absolute/path/to/person-research.md"
+}
+```
+
+`researchContentFile` 或 `researchContent` 存在时，网关会同步创建／更新 `研究/<researchTitle>.md` 并登记文档。写后必须用 `person search` 回读，确认 `documents` 同时包含研究文档；没有文档即不得返回“已入库”。真实交流仍使用 `document create`，`ownerType=person`、`kind=交流纪要`，文件写入 `纪要/`。
 
 ## 4. 统一回执
 
