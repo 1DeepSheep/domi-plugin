@@ -447,6 +447,17 @@ function clearManagedSessionRestoreState(profileDir) {
   return removed;
 }
 
+function managedProfileNeedsSessionRecovery(profileDir) {
+  const preferencesPath = path.join(profileDir, 'Default', 'Preferences');
+  try {
+    const preferences = JSON.parse(fs.readFileSync(preferencesPath, 'utf8'));
+    const exitType = String(preferences?.profile?.exit_type || '').toLowerCase();
+    return Boolean(exitType && exitType !== 'normal');
+  } catch {
+    return false;
+  }
+}
+
 async function waitForDevToolsEndpoint(profileDir, timeoutMs = 10000) {
   const portFile = path.join(profileDir, 'DevToolsActivePort');
   const deadline = Date.now() + timeoutMs;
@@ -565,12 +576,32 @@ function managedBrowserPids(profileDir, executable) {
     .filter((pid) => Number.isInteger(pid) && pid > 1);
 }
 
-async function terminateManagedBrowser(profileDir, browserProcess = null, browserKind = 'chrome') {
+async function terminateManagedBrowser(profileDir, browserProcess = null, browserKind = 'chrome', options = {}) {
   const spec = BROWSER_SPECS[normalizeBrowserKind(browserKind)];
   const executable = [spec.executable, spec.userExecutable].find((candidate) => fs.existsSync(candidate))
     || spec.executable;
+  const gracefulWaitMs = Math.max(0, Number(options.gracefulWaitMs) || 0);
+  const pauseImpl = options.pause || pause;
+  const gracefulDeadline = Date.now() + gracefulWaitMs;
+  while (gracefulWaitMs > 0 && Date.now() < gracefulDeadline) {
+    const remaining = managedBrowserPids(profileDir, executable);
+    const childAlive = Number.isInteger(browserProcess?.pid)
+      && browserProcess.pid > 1
+      && processIsAlive(browserProcess.pid);
+    if (!remaining.length && !childAlive) {
+      clearDevToolsActivePort(profileDir);
+      return;
+    }
+    await pauseImpl(Math.min(100, Math.max(1, gracefulDeadline - Date.now())));
+  }
   const pids = new Set(managedBrowserPids(profileDir, executable));
-  if (Number.isInteger(browserProcess?.pid) && browserProcess.pid > 1) pids.add(browserProcess.pid);
+  if (
+    Number.isInteger(browserProcess?.pid)
+    && browserProcess.pid > 1
+    && processIsAlive(browserProcess.pid)
+  ) {
+    pids.add(browserProcess.pid);
+  }
   for (const pid of pids) {
     try {
       process.kill(pid, 'SIGTERM');
@@ -578,8 +609,8 @@ async function terminateManagedBrowser(profileDir, browserProcess = null, browse
       // The managed browser may already have exited after Browser.close.
     }
   }
-  for (let attempt = 0; attempt < 20 && managedBrowserPids(profileDir, executable).length; attempt += 1) {
-    await pause(50);
+  for (let attempt = 0; attempt < 30 && managedBrowserPids(profileDir, executable).length; attempt += 1) {
+    await pauseImpl(100);
   }
   for (const pid of managedBrowserPids(profileDir, executable)) {
     try {
@@ -597,8 +628,8 @@ async function launchManagedBrowser(profileDir, options = {}) {
   const waitForEndpoint = options.waitForDevToolsEndpoint || waitForDevToolsEndpoint;
   const connect = options.connectOverCDP || chromium.connectOverCDP.bind(chromium);
   const terminate = options.terminateBrowser
-    || ((targetProfileDir, processHandle) =>
-      terminateManagedBrowser(targetProfileDir, processHandle, spec.kind));
+    || ((targetProfileDir, processHandle, terminateOptions = {}) =>
+      terminateManagedBrowser(targetProfileDir, processHandle, spec.kind, terminateOptions));
   let browser = null;
   let child = null;
   let stderr = '';
@@ -609,7 +640,9 @@ async function launchManagedBrowser(profileDir, options = {}) {
     // before launch, so removing exact-profile orphans here cannot interrupt another
     // healthy domi PLAUD operation.
     await terminate(profileDir, null);
-    clearManagedSessionRestoreState(profileDir);
+    if (managedProfileNeedsSessionRecovery(profileDir)) {
+      clearManagedSessionRestoreState(profileDir);
+    }
     clearDevToolsActivePort(profileDir);
     const headless = options.headless !== false;
     const browserArgs = managedBrowserArgs(profileDir, {
@@ -653,12 +686,12 @@ async function launchManagedBrowser(profileDir, options = {}) {
     if (browser) {
       try {
         const session = await browser.newBrowserCDPSession();
-        await settleWithin(session.send('Browser.close'), 2000);
+        await settleWithin(session.send('Browser.close'), 5000);
       } catch {
-        await settleWithin(browser.close(), 2000);
+        await settleWithin(browser.close(), 5000);
       }
     }
-    await terminate(profileDir, child).catch(() => {});
+    await terminate(profileDir, child, { gracefulWaitMs: 5000 }).catch(() => {});
     throw error;
   }
 }
@@ -779,6 +812,60 @@ function saveState(state) {
   fs.chmodSync(STATE_FILE, 0o600);
 }
 
+async function pageShowsPlaudLogin(page) {
+  try {
+    return Boolean(await page.evaluate(() => {
+      const pathname = String(window.location?.pathname || '').toLowerCase();
+      if (/\/(?:login|sign-in|signin|auth)(?:\/|$)/.test(pathname)) return true;
+      if (document.querySelector('input[type="password"]')) return true;
+      const bodyText = String(document.body?.innerText || '').slice(0, 12000);
+      const hasLoginCopy = /(?:登录|登入|log\s*in|sign\s*in)/i.test(bodyText);
+      const hasLoginControl = Array.from(document.querySelectorAll('button,a,[role="button"]'))
+        .some((element) => /(?:登录|登入|log\s*in|sign\s*in)/i.test(String(element.textContent || '')));
+      return hasLoginCopy && hasLoginControl;
+    }));
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPlaudAuthorization(client, options = {}) {
+  const attempts = client.headless ? 2 : 1;
+  const totalTimeoutMs = Math.max(1000, Number(client.loginTimeoutMs) || 12000);
+  const attemptTimeoutMs = Math.max(
+    1000,
+    Number(options.attemptTimeoutMs) || Math.floor(totalTimeoutMs / attempts),
+  );
+  const now = options.now || Date.now;
+  const pauseImpl = options.pause || ((delay) => client.page.waitForTimeout(delay));
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const deadline = now() + attemptTimeoutMs;
+    while (!client.authorization && now() < deadline) {
+      if (client.page.isClosed()) {
+        throw new Error(`${client.browserLabel} PLAUD login window was closed.`);
+      }
+      await pauseImpl(Math.min(500, Math.max(1, deadline - now())));
+    }
+    if (client.authorization) return true;
+    if (await pageShowsPlaudLogin(client.page)) {
+      throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${client.browserLabel}.`);
+    }
+    if (attempt + 1 < attempts) {
+      try {
+        await client.page.reload({ waitUntil: 'commit', timeout: 12000 });
+      } catch (error) {
+        if (!isTransientPlaudNavigationError(error)) throw error;
+        await navigatePlaudWithRetry(client.page, PLAUD_LOGIN_URL, {
+          attempts: 2,
+          timeout: 12000,
+        });
+      }
+    }
+  }
+  throw new Error('PLAUD_SESSION_PROBE_INCOMPLETE: PLAUD account page opened, but its authorization request was not observed.');
+}
+
 class PlaudClient {
   constructor(options = {}) {
     this.browserKind = configuredBrowserKind(options.browserKind);
@@ -805,8 +892,8 @@ class PlaudClient {
         url: PLAUD_LOGIN_URL,
       }));
     this.terminateBrowser = options.terminateBrowser
-      || ((profileDir, browserProcess) =>
-        terminateManagedBrowser(profileDir, browserProcess, this.browserKind));
+      || ((profileDir, browserProcess, terminateOptions = {}) =>
+        terminateManagedBrowser(profileDir, browserProcess, this.browserKind, terminateOptions));
   }
 
   async init() {
@@ -840,11 +927,7 @@ class PlaudClient {
         attempts: this.headless ? 2 : 3,
         timeout: this.headless ? 12000 : 30000,
       });
-      const authorizationDeadline = Date.now() + this.loginTimeoutMs;
-      while (!this.authorization && Date.now() < authorizationDeadline) {
-        if (this.page.isClosed()) throw new Error(`${this.browserLabel} PLAUD login window was closed.`);
-        await this.page.waitForTimeout(500);
-      }
+      await waitForPlaudAuthorization(this);
       let runtimeApiBase = null;
       try {
         runtimeApiBase = await this.page.evaluate(() => {
@@ -862,9 +945,6 @@ class PlaudClient {
         // result; a transient execution-context error must not hide it.
       }
       if (runtimeApiBase) this.apiBase = runtimeApiBase;
-      if (!this.authorization) {
-        throw new Error(`PLAUD login was not completed in ${this.browserLabel}.`);
-      }
       return this;
     } catch (error) {
       await this.close();
@@ -882,15 +962,17 @@ class PlaudClient {
       if (this.browser) {
         try {
           const session = await this.browser.newBrowserCDPSession();
-          await settleWithin(session.send('Browser.close'), 2000);
+          await settleWithin(session.send('Browser.close'), 5000);
         } catch {
-          await settleWithin(this.browser.close(), 2000);
+          await settleWithin(this.browser.close(), 5000);
         }
       } else if (this.context) {
         await settleWithin(this.context.close(), 2000);
       }
     } finally {
-      await this.terminateBrowser(this.profileDir, this.browserProcess).catch(() => {});
+      await this.terminateBrowser(this.profileDir, this.browserProcess, {
+        gracefulWaitMs: 5000,
+      }).catch(() => {});
       try {
         releaseManagedSessionLock(this.sessionLock);
       } catch {
@@ -1461,6 +1543,7 @@ module.exports = {
   launchManagedBrowser,
   managedBrowserArgs,
   managedBrowserLaunchSpec,
+  managedProfileNeedsSessionRecovery,
   managedProfileDir,
   managedProfilePath,
   managedProfileRoot,
@@ -1468,10 +1551,12 @@ module.exports = {
   mediaExecutable,
   navigatePlaudWithRetry,
   normalizeBrowserKind,
+  pageShowsPlaudLogin,
   releaseManagedSessionLock,
   removeManagedProfile,
   renderTranscript,
   safeName,
   waitForDevToolsEndpoint,
+  waitForPlaudAuthorization,
   withLoopbackNoProxy,
 };
