@@ -685,6 +685,21 @@ test('PLAUD client initialization retries only transient pre-operation failures'
   assert.equal(closed, 2);
 });
 
+test('PLAUD treats a detached background page as a retryable pre-operation failure', () => {
+  assert.equal(
+    __test.isTransientClientInitializationError(
+      new Error('page.reload: Protocol error (Page.reload): Not attached to an active page'),
+    ),
+    true,
+  );
+  assert.equal(
+    __test.isTransientClientInitializationError(
+      new Error('PLAUD_AUTH_REQUIRED: account sign-in is required'),
+    ),
+    false,
+  );
+});
+
 test('PLAUD keeps visible login launches direct and user-activated', () => {
   const spec = {
     kind: 'tabbit',
