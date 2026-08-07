@@ -30,7 +30,7 @@ node <plaud-cli> mark <fileId> <stage> [artifactPath|-] [metadataJson]
 - `queue`：读取 `~/.domi/plaud-workflow.json` 中尚未结束的 domi 处理项。
 - `verify`：只读校验指定队列项的 `notesAudit`、`reviewAudit`、评分/评级和已绑定文件 SHA-256；失败时输出 `ok:false` 并以非零状态退出。
 - `sync-pending`：触发最多 `count` 条未生成录音，轮询等待 transcript，下载 JSON 和 Markdown，并写出 manifest。
-- `transcribe-local`：对一条已校验的本地音频计算 SHA-256；MP3/ASR/Opus 直接上传，其余受支持格式用 domi 内置的离线 FFmpeg 转为单声道 Opus，再按稳定标题去重上传。只针对上传返回的精确 `fileId` 触发生成并下载 transcript。`--workflow-id` 把该音频绑定到快速讨论；不带时为普通 `local_transcription`。`--adopt-file-id` 只用于用户从歧义候选中明确选择一条且远端稳定标题校验通过的恢复。`--retry-upload` 仅用于用户明确接受 `upload_unknown` 可能导致重复上传的情况；`--retry-generation` 仅用于用户明确接受 `generation_submitting/generation_unknown/generation_timeout` 可能导致重复提交生成请求的情况。
+- `transcribe-local`：对一条已校验的本地音频计算 SHA-256；MP3/ASR/Opus 直接上传，其余受支持格式用 domi 内置的离线 FFmpeg 转为单声道 Opus，再按稳定标题去重上传。只针对上传返回的精确 `fileId` 触发生成并下载 transcript。`--workflow-id` 把该音频绑定到快速讨论；不带时为普通 `local_transcription`，也用于上游已校验、已取得单集／信源授权的公开播客临时音频。播客成功后必须把 `transcriptPath` 与 `transcriptProvider=plaud` 交给下游，禁止本地 ASR。`--adopt-file-id` 只用于用户从歧义候选中明确选择一条且远端稳定标题校验通过的恢复。`--retry-upload` 仅用于用户明确接受 `upload_unknown` 可能导致重复上传的情况；`--retry-generation` 仅用于用户明确接受 `generation_submitting/generation_unknown/generation_timeout` 可能导致重复提交生成请求的情况。
 - `download`：下载指定 fileId 的 transcript，不重新触发生成。
 - `mark`：更新 domi 工作流阶段。`metadataJson` 必须是 JSON 对象。
   - `notes_project` 只能从 `context_ready` 进入（已生成项目纪要的重试、纠正分类、旧队列回补审计，或显式重开已完成记录除外），必须提供实际存在的纪要文件和新的 `notesAudit`。除原有实体/数字/学历字段外，还必须包含：`careerLedgerComplete=true`、`modelWorkLedgerComplete=true`、`attributionConsistency=true`、非负整数 `careerClaimCount/modelWorkClaimCount`、`unresolvedDefinitiveCareerClaims=0`、`unresolvedDefinitiveModelWorkClaims=0`。CLI 自动计算并保存纪要 SHA-256，不接受继承旧审计来批准另一份文件。

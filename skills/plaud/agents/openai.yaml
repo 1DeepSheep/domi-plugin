@@ -1,4 +1,4 @@
 interface:
   display_name: "PLAUD"
-  short_description: "安全上传本地录音，并生成、等待和下载 PLAUD 文字稿。"
+  short_description: "安全上传本地录音或获准的公开播客，并下载 PLAUD 文字稿。"
   default_prompt: "Use $plaud to upload this local recording, generate its PLAUD transcript by exact file ID, and download it safely."

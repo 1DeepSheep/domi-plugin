@@ -36,5 +36,6 @@ jobs:
           node scripts/intake-time-fields.test.cjs
           node scripts/schedule-skill.test.cjs
           node scripts/todo-ledger.test.cjs
+          node scripts/podcast-workflow.test.cjs
           node scripts/build-plugin-release.test.cjs
           NODE_PATH="$PWD/skills/plaud/vendor/plaud-cli/node_modules" node --test skills/plaud/scripts/plaud.test.js

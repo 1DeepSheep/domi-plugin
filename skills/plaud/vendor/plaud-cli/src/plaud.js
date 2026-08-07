@@ -61,20 +61,46 @@ const TRANSCODABLE_EXTS = new Set([
 ]);
 const UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024;
 const UPLOAD_CONCURRENCY = 3;
+const BROWSER_CLOSE_BUDGET_MS = 10000;
+const BROWSER_GRACEFUL_EXIT_BUDGET_MS = 10000;
+const BROWSER_TERM_EXIT_BUDGET_MS = 5000;
+const SIGNAL_SHUTDOWN_BUDGET_MS = 35000;
+const MAX_PRIOR_SHUTDOWN_WAIT_MS = 30000;
+const MANAGED_SHUTDOWN_MARKER = '.domi-browser-shutdown.json';
 
 function normalizeBrowserKind(value) {
-  return value === 'tabbit' ? 'tabbit' : 'chrome';
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'chrome' || normalized === 'tabbit') return normalized;
+  throw new Error('PLAUD_BROWSER_CONFIG_REQUIRED: 请在 domi“设置 → 录音转写”中明确选择 Chrome 或 Tabbit。');
 }
 
 function configuredBrowserKind(explicitValue) {
-  if (explicitValue) return normalizeBrowserKind(explicitValue);
+  if (explicitValue != null && String(explicitValue).trim()) return normalizeBrowserKind(explicitValue);
+  const environmentValue = String(process.env.DOMI_PLAUD_BROWSER || '').trim();
+  if (environmentValue) return normalizeBrowserKind(environmentValue);
+  const configPath = String(process.env.DOMI_CONFIG_PATH || '').trim();
   try {
-    const configPath = String(process.env.DOMI_CONFIG_PATH || '');
     const config = configPath ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
-    return normalizeBrowserKind(config.plaudBrowser);
-  } catch {
-    return 'chrome';
+    if (config.plaudBrowser != null && String(config.plaudBrowser).trim()) {
+      return normalizeBrowserKind(config.plaudBrowser);
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
   }
+
+  // Older standalone installations may not have a config file. Reuse a sole
+  // existing managed profile, but never guess between profiles or silently
+  // switch to a new, unsigned-in Chrome profile.
+  const root = managedProfileRoot();
+  const existing = ['chrome', 'tabbit'].filter((kind) => {
+    try {
+      return fs.lstatSync(path.join(root, kind)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (existing.length === 1) return existing[0];
+  throw new Error('PLAUD_BROWSER_CONFIG_REQUIRED: 未找到明确的 PLAUD 浏览器配置；为避免切换到未登录的 Profile，已停止连接。');
 }
 
 function managedProfileRoot() {
@@ -102,6 +128,71 @@ function ensurePrivateDirectory(directory, label) {
 
 function managedSessionLockPath(profileDir) {
   return path.join(profileDir, '.domi-browser-session.lock');
+}
+
+function managedShutdownMarkerPath(profileDir) {
+  return path.join(profileDir, MANAGED_SHUTDOWN_MARKER);
+}
+
+function writeManagedShutdownMarker(profileDir, options = {}) {
+  ensurePrivateDirectory(profileDir, 'PLAUD browser profile');
+  const markerPath = managedShutdownMarkerPath(profileDir);
+  const safeForMs = Math.min(
+    MAX_PRIOR_SHUTDOWN_WAIT_MS,
+    Math.max(1000, Number(options.safeForMs)
+      || (BROWSER_CLOSE_BUDGET_MS
+        + BROWSER_GRACEFUL_EXIT_BUDGET_MS
+        + BROWSER_TERM_EXIT_BUDGET_MS
+        + 5000)),
+  );
+  const now = Number(options.now?.() ?? Date.now());
+  const tempPath = `${markerPath}.tmp-${process.pid}`;
+  fs.writeFileSync(tempPath, `${JSON.stringify({
+    pid: process.pid,
+    startedAt: new Date(now).toISOString(),
+    safeUntil: now + safeForMs,
+  })}\n`, { mode: 0o600 });
+  fs.chmodSync(tempPath, 0o600);
+  fs.renameSync(tempPath, markerPath);
+  fs.chmodSync(markerPath, 0o600);
+  return markerPath;
+}
+
+function readManagedShutdownMarker(profileDir) {
+  const markerPath = managedShutdownMarkerPath(profileDir);
+  try {
+    const stat = fs.lstatSync(markerPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error('Invalid PLAUD browser shutdown marker.');
+    }
+    const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    return {
+      markerPath,
+      safeUntil: Number(marker?.safeUntil) || 0,
+    };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    if (error instanceof SyntaxError) {
+      fs.rmSync(markerPath, { force: true });
+      return null;
+    }
+    throw error;
+  }
+}
+
+function clearManagedShutdownMarker(profileDir) {
+  const markerPath = managedShutdownMarkerPath(profileDir);
+  try {
+    const stat = fs.lstatSync(markerPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error('Invalid PLAUD browser shutdown marker.');
+    }
+    fs.unlinkSync(markerPath);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function processIsAlive(pid) {
@@ -576,6 +667,28 @@ function managedBrowserPids(profileDir, executable) {
     .filter((pid) => Number.isInteger(pid) && pid > 1);
 }
 
+async function waitForPriorManagedShutdown(profileDir, executable, options = {}) {
+  const marker = readManagedShutdownMarker(profileDir);
+  if (!marker) return false;
+  const now = options.now || Date.now;
+  const pauseImpl = options.pause || pause;
+  const listPids = options.listPids || managedBrowserPids;
+  const startedAt = now();
+  const deadline = Math.min(
+    marker.safeUntil || startedAt,
+    startedAt + MAX_PRIOR_SHUTDOWN_WAIT_MS,
+  );
+  while (now() < deadline) {
+    if (!listPids(profileDir, executable).length) {
+      clearManagedShutdownMarker(profileDir);
+      clearDevToolsActivePort(profileDir);
+      return false;
+    }
+    await pauseImpl(Math.min(100, Math.max(1, deadline - now())));
+  }
+  return listPids(profileDir, executable).length > 0;
+}
+
 async function terminateManagedBrowser(profileDir, browserProcess = null, browserKind = 'chrome', options = {}) {
   const spec = BROWSER_SPECS[normalizeBrowserKind(browserKind)];
   const executable = [spec.executable, spec.userExecutable].find((candidate) => fs.existsSync(candidate))
@@ -609,8 +722,10 @@ async function terminateManagedBrowser(profileDir, browserProcess = null, browse
       // The managed browser may already have exited after Browser.close.
     }
   }
-  for (let attempt = 0; attempt < 30 && managedBrowserPids(profileDir, executable).length; attempt += 1) {
-    await pauseImpl(100);
+  const termWaitMs = Math.max(0, Number(options.termWaitMs) || BROWSER_TERM_EXIT_BUDGET_MS);
+  const termDeadline = Date.now() + termWaitMs;
+  while (Date.now() < termDeadline && managedBrowserPids(profileDir, executable).length) {
+    await pauseImpl(Math.min(100, Math.max(1, termDeadline - Date.now())));
   }
   for (const pid of managedBrowserPids(profileDir, executable)) {
     try {
@@ -639,7 +754,13 @@ async function launchManagedBrowser(profileDir, options = {}) {
     // could stop its dedicated browser. The profile lock is acquired by the caller
     // before launch, so removing exact-profile orphans here cannot interrupt another
     // healthy domi PLAUD operation.
+    await waitForPriorManagedShutdown(profileDir, spec.executable, {
+      pause: options.pause,
+      listPids: options.listPids,
+      now: options.now,
+    });
     await terminate(profileDir, null);
+    clearManagedShutdownMarker(profileDir);
     if (managedProfileNeedsSessionRecovery(profileDir)) {
       clearManagedSessionRestoreState(profileDir);
     }
@@ -683,15 +804,34 @@ async function launchManagedBrowser(profileDir, options = {}) {
       browserLabel: spec.label,
     };
   } catch (error) {
+    let shutdownMarked = false;
+    let terminated = false;
+    if (browser || child) {
+      try {
+        writeManagedShutdownMarker(profileDir);
+        shutdownMarked = true;
+      } catch {
+        // The exact-profile termination below remains the fallback.
+      }
+    }
     if (browser) {
       try {
         const session = await browser.newBrowserCDPSession();
-        await settleWithin(session.send('Browser.close'), 5000);
+        await settleWithin(session.send('Browser.close'), BROWSER_CLOSE_BUDGET_MS);
       } catch {
-        await settleWithin(browser.close(), 5000);
+        await settleWithin(browser.close(), BROWSER_CLOSE_BUDGET_MS);
       }
     }
-    await terminate(profileDir, child, { gracefulWaitMs: 5000 }).catch(() => {});
+    try {
+      await terminate(profileDir, child, {
+        gracefulWaitMs: BROWSER_GRACEFUL_EXIT_BUDGET_MS,
+        termWaitMs: BROWSER_TERM_EXIT_BUDGET_MS,
+      });
+      terminated = true;
+    } catch {}
+    if (shutdownMarked && terminated) {
+      try { clearManagedShutdownMarker(profileDir); } catch {}
+    }
     throw error;
   }
 }
@@ -882,6 +1022,7 @@ class PlaudClient {
     this.browserProcess = null;
     this.page = null;
     this.sessionLock = null;
+    this.closePromise = null;
     this.apiBase = options.apiBase || API_BASE;
     this.authorization = null;
     this.headers = {};
@@ -957,22 +1098,68 @@ class PlaudClient {
     return identity ? crypto.createHash('sha256').update(identity).digest('hex').slice(0, 12) : '';
   }
 
-  async close() {
+  async refreshAuthorizationAfterUnauthorized() {
+    if (await pageShowsPlaudLogin(this.page)) {
+      throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${this.browserLabel}.`);
+    }
+    this.authorization = null;
+    delete this.headers.authorization;
+    try {
+      await this.page.reload({ waitUntil: 'commit', timeout: 12000 });
+    } catch (error) {
+      if (!isTransientPlaudNavigationError(error)) throw error;
+      await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, {
+        attempts: 2,
+        timeout: 12000,
+      });
+    }
+    await waitForPlaudAuthorization(this, {
+      attemptTimeoutMs: Math.max(1000, Math.min(this.loginTimeoutMs, 12000)),
+    });
+  }
+
+  close() {
+    if (this.closePromise) return this.closePromise;
+    this.closePromise = this.closeOnce();
+    return this.closePromise;
+  }
+
+  async closeOnce() {
+    const hasManagedBrowser = Boolean(this.browser || this.context || this.browserProcess);
+    let shutdownMarked = false;
+    let terminated = false;
+    if (hasManagedBrowser) {
+      try {
+        writeManagedShutdownMarker(this.profileDir);
+        shutdownMarked = true;
+      } catch {
+        // Exact-profile termination below remains the fallback.
+      }
+    }
     try {
       if (this.browser) {
         try {
           const session = await this.browser.newBrowserCDPSession();
-          await settleWithin(session.send('Browser.close'), 5000);
+          await settleWithin(session.send('Browser.close'), BROWSER_CLOSE_BUDGET_MS);
         } catch {
-          await settleWithin(this.browser.close(), 5000);
+          await settleWithin(this.browser.close(), BROWSER_CLOSE_BUDGET_MS);
         }
       } else if (this.context) {
-        await settleWithin(this.context.close(), 2000);
+        await settleWithin(this.context.close(), BROWSER_CLOSE_BUDGET_MS);
       }
     } finally {
-      await this.terminateBrowser(this.profileDir, this.browserProcess, {
-        gracefulWaitMs: 5000,
-      }).catch(() => {});
+      try {
+        if (hasManagedBrowser) {
+          await this.terminateBrowser(this.profileDir, this.browserProcess, {
+            gracefulWaitMs: BROWSER_GRACEFUL_EXIT_BUDGET_MS,
+            termWaitMs: BROWSER_TERM_EXIT_BUDGET_MS,
+          });
+        }
+        terminated = true;
+      } catch {}
+      if (shutdownMarked && terminated) {
+        try { clearManagedShutdownMarker(this.profileDir); } catch {}
+      }
       try {
         releaseManagedSessionLock(this.sessionLock);
       } catch {
@@ -989,7 +1176,7 @@ class PlaudClient {
     }
   }
 
-  async api(pathname, options = {}) {
+  async apiOnce(pathname, options = {}) {
     const method = options.method || 'GET';
     const data = options.data;
     const url = pathname.startsWith('http') ? pathname : `${this.apiBase}${pathname}`;
@@ -1033,10 +1220,41 @@ class PlaudClient {
       );
     } catch (error) {
       if (/PLAUD API request timed out/i.test(error instanceof Error ? error.message : String(error))) {
-        throw new Error(`PLAUD 接口读取超时（${Math.ceil(this.apiTimeoutMs / 1000)} 秒）。`);
+        throw new Error(`PLAUD_NETWORK_TIMEOUT: PLAUD 接口读取超时（${Math.ceil(this.apiTimeoutMs / 1000)} 秒）。`);
       }
       throw error;
     }
+  }
+
+  async api(pathname, options = {}) {
+    const method = String(options.method || 'GET').toUpperCase();
+    const readOnly = method === 'GET' || method === 'HEAD';
+    let response = await this.apiOnce(pathname, options);
+
+    if (response?.status === 401) {
+      if (await pageShowsPlaudLogin(this.page)) {
+        throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${this.browserLabel}.`);
+      }
+      if (!readOnly) {
+        throw new Error('PLAUD_UNAUTHORIZED: PLAUD 拒绝了本次写入；domi 未重放该操作，请先重新验证连接。');
+      }
+      await this.refreshAuthorizationAfterUnauthorized();
+      response = await this.apiOnce(pathname, { ...options, method });
+      if (response?.status === 401) {
+        throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD session was rejected after a silent refresh in ${this.browserLabel}.`);
+      }
+    }
+
+    if (response?.status === 403) {
+      if (await pageShowsPlaudLogin(this.page)) {
+        throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${this.browserLabel}.`);
+      }
+      throw new Error('PLAUD_ACCESS_DENIED: PLAUD 暂时拒绝了本次访问；这不代表登录已失效。');
+    }
+    if (response?.status === 429) {
+      throw new Error('PLAUD_RATE_LIMITED: PLAUD 服务暂时限流；请稍后自动重试，无需重新登录。');
+    }
+    return response;
   }
 
   async getUploadPresignedUrl({ filesize, fileType }) {
@@ -1526,13 +1744,18 @@ class PlaudClient {
 
 module.exports = {
   API_BASE,
+  BROWSER_CLOSE_BUDGET_MS,
+  BROWSER_GRACEFUL_EXIT_BUDGET_MS,
   BROWSER_SPECS,
+  BROWSER_TERM_EXIT_BUDGET_MS,
+  SIGNAL_SHUTDOWN_BUDGET_MS,
   PLAUD_LOGIN_URL,
   PlaudClient,
   acquireManagedSessionLock,
   backgroundTabbitArgs,
   browserSpec,
   clearDevToolsActivePort,
+  clearManagedShutdownMarker,
   clearManagedSessionRestoreState,
   compactManagedPages,
   connectToDevToolsWithRetry,
@@ -1548,6 +1771,7 @@ module.exports = {
   managedProfilePath,
   managedProfileRoot,
   managedSessionLockPath,
+  managedShutdownMarkerPath,
   mediaExecutable,
   navigatePlaudWithRetry,
   normalizeBrowserKind,
@@ -1557,6 +1781,8 @@ module.exports = {
   renderTranscript,
   safeName,
   waitForDevToolsEndpoint,
+  waitForPriorManagedShutdown,
   waitForPlaudAuthorization,
+  writeManagedShutdownMarker,
   withLoopbackNoProxy,
 };
