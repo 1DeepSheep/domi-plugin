@@ -30,6 +30,8 @@ event_types: 用户指定；默认项目融资、行业趋势、公司动态、�
 
 完整读取并采用插件内 `investment-radar` Skill，以及该 Skill 为当前模式要求读取的 references。把上述结构化范围交给其 `scan` 模式。
 
+本机存在用户信源注册表时，同时读取 `investment-radar/references/source-registry.md`，让已启用的新闻／RSS／重点公众号／播客源与通用检索并行发现候选。信源读取失败与其他检索隔离；公众号和播客元数据不替代原文核验。播客 quick scan 默认只发现元数据，下载、PLAUD 转写和纪要进入独立后台队列，不占用本轮 Radar 完成时间。
+
 Radar 先以项目表 canonical taxonomy 为准完成分类归一。若发现真正的新行业分类、项目表已有但新闻表缺失的镜像项、或新闻表孤立项，返回带 `target_field: domain|subdomain` 的 `taxonomy_requests`；受影响事件暂记为 `pending_taxonomy`，不写未知或漂移选项。`new_subdomain` 固定指向 subdomain；domain 只允许镜像修复或 orphan 处理，不得自动新建。
 
 完成标准：无待处理 taxonomy request 时，Radar 返回符合其输出契约的完整结果包，且每个 accepted event 都有明确的 `write_status`；有 request 时，先完成下一阶段。
@@ -63,6 +65,8 @@ Router 只把 `noteworthy_events` 作为主结果返回，默认最多 8 条，�
 重要性很高但可信度不足的事件继续归档供后续核验，默认不回传；不得混入已确认的值得关注项。
 
 最后报告扫描范围、taxonomy 的 `reused / mirror_repaired / created / deferred / orphan / sync_failed / rolled_back / partial / classification_updated`、覆盖缺口、Base 链接及 `created / updated / classification_updated / unchanged / skipped / failed` 数量。`partial` 必须列明已改变侧、原因和人工修复项。没有达到阈值时直说，不为凑数返回低价值信息；已采纳的低分事件仍按 Radar 契约归档。
+
+用户信源参与时追加聚合覆盖回执；播客只有在需要用户授权、PLAUD 恢复、主归档歧义或失败时才显示单集任务。正常后台处理不展开临时下载路径、PLAUD `fileId`、真实信源清单或内部关键词。
 
 ## 失败与恢复
 

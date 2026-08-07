@@ -17,6 +17,15 @@ coverage:
   queries: 已执行的查询类别
   sources_opened: 已打开原文数量
   source_failures: 受限或失败来源
+source_coverage:
+  enabled: 用户启用的新闻／RSS／公众号／播客信源数
+  checked: 本轮实际检查数
+  succeeded: 成功数
+  failed: 失败数
+  items_discovered: 发现条目数
+  items_deduplicated: URL／GUID 去重数
+  candidates_forwarded: 进入 Radar 候选数
+  failures: 只列错误码和需要用户处理的信源，不包含 Cookie、响应正文或私有配置
 candidate_diagnostics:
   candidates: 0
   rejected:
@@ -66,6 +75,16 @@ events:
         alert_level: 立即提醒|重点更新|仅归档
     write_status: pending_taxonomy|created|updated|classification_updated|unchanged|skipped|failed
     record_id: 成功写入时返回
+podcast_jobs:
+  - source_id: 本机信源 ID；没有播客候选时为空
+    episode_id: provider GUID／公开单集 ID
+    episode_url: 公开单集 URL
+    status: metadata_only|waiting_for_authorization|downloading|waiting_for_plaud|transcribing|notes_ready|archived|failed
+    transcript_provider: plaud
+    canonical_document_id: 纪要生成后填写
+    primary_archive: project_dominant|industry_dominant|ambiguous
+    linked_project_ids: 仅保存规范项目关系；不复制主文档
+    failure_code: 无则为空
 priority_alerts:
   - event_id: evt_v1_xxx
     matched_entities: [规范项目或人物名]
@@ -123,6 +142,8 @@ taxonomy_sync:
 5. 分类结果：默认只展示复用、新增、延期、失败和部分完成数量；仅在失败、部分完成或用户明确要求时列出详细分类回执与人工修复项。
 6. 归档结果：展示新增、更新、分类修正、无变化、跳过和失败数量；默认不展示 Base 链接、记录 ID 或逐条写入回执。
 7. 覆盖缺口：项目快照过期、人脉未覆盖、字段缺失、受限来源或批次限制等会实质影响结论的缺口。
+
+用户信源参与扫描时，在扫描范围后用聚合数字报告检查、成功、失败、发现与去重数量。真实信源清单、内部关键词和播客自动处理规则默认不展开。播客任务只在需要授权、PLAUD 恢复、归档歧义或失败时向用户展示；正常后台处理中不把下载路径、PLAUD `fileId` 或本机队列明细写进报告。
 
 没有达到关注阈值的信息时，不强行推荐；说明通过采纳门槛的事件已经归档。没有合格事件时报告新增 0、更新 0，不创建“暂无新闻”记录。
 

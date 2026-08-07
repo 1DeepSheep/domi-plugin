@@ -9,6 +9,7 @@ const path = require('path');
 const {
   BROWSER_SPECS,
   PlaudClient,
+  SIGNAL_SHUTDOWN_BUDGET_MS,
   configuredBrowserKind,
   managedProfilePath,
   mediaExecutable,
@@ -268,6 +269,14 @@ function safePendingFile(file) {
   };
 }
 
+function plaudCommandClientOptions(command, extra = {}) {
+  return {
+    ...extra,
+    // Only the user-triggered login command may create a visible window.
+    headless: command !== 'login',
+  };
+}
+
 function doctor(requestedBrowser) {
   const browser = configuredBrowserKind(requestedBrowser);
   const spec = BROWSER_SPECS[browser];
@@ -366,7 +375,9 @@ function installSignalCleanup() {
     if (signalShutdown) return;
     const exitCode = signal === 'SIGINT' ? 130 : 143;
     signalShutdown = (async () => {
-      const timer = setTimeout(() => process.exit(exitCode), 4000);
+      // Browser.close and exact-profile termination deliberately have enough
+      // time to flush rotated PLAUD session state before the process exits.
+      const timer = setTimeout(() => process.exit(exitCode), SIGNAL_SHUTDOWN_BUDGET_MS);
       try {
         await activeClient?.close();
       } catch {
@@ -384,6 +395,7 @@ function installSignalCleanup() {
 
 async function connection(requestedBrowser, options = {}) {
   const browser = configuredBrowserKind(requestedBrowser);
+  const command = options.command === 'login' ? 'login' : 'connection';
   const result = await withClient(async (client) => {
     await client.listFiles({ limit: 1 });
     return {
@@ -393,16 +405,15 @@ async function connection(requestedBrowser, options = {}) {
       browserLabel: client.browserLabel,
       accountFingerprint: client.accountFingerprint(),
     };
-  }, {
+  }, plaudCommandClientOptions(command, {
     browserKind: browser,
-    headless: options.headless !== false,
     loginTimeoutMs: options.loginTimeoutMs,
-  });
+  }));
   printJson(result);
 }
 
 async function login(requestedBrowser) {
-  return connection(requestedBrowser, { headless: false, loginTimeoutMs: 10 * 60 * 1000 });
+  return connection(requestedBrowser, { command: 'login', loginTimeoutMs: 10 * 60 * 1000 });
 }
 
 function logout(requestedBrowser) {
@@ -418,12 +429,18 @@ function logout(requestedBrowser) {
 }
 
 async function status(limit) {
-  const items = await withClient((client) => client.listStatuses({ limit }));
+  const items = await withClient(
+    (client) => client.listStatuses({ limit }),
+    plaudCommandClientOptions('status'),
+  );
   printJson({ count: items.length, items });
 }
 
 async function pending(limit) {
-  const files = await withClient((client) => client.listPendingFiles({ limit }));
+  const files = await withClient(
+    (client) => client.listPendingFiles({ limit }),
+    plaudCommandClientOptions('pending'),
+  );
   const items = files.map(safePendingFile);
   printJson({ count: items.length, items });
 }
@@ -526,7 +543,7 @@ async function syncPending(count, outDir, timeoutSec, pollSec) {
     }
 
     return { requested: count, found: files.length, submitted: submitted.length, results };
-  });
+  }, plaudCommandClientOptions('sync-pending'));
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const manifestPath = path.join(outDir, `domi-plaud-manifest-${timestamp}.json`);
@@ -542,7 +559,10 @@ async function syncPending(count, outDir, timeoutSec, pollSec) {
 
 async function download(fileId, outDir) {
   fs.mkdirSync(outDir, { recursive: true });
-  const transcript = await withClient((client) => client.downloadTranscript(fileId, outDir));
+  const transcript = await withClient(
+    (client) => client.downloadTranscript(fileId, outDir),
+    plaudCommandClientOptions('download'),
+  );
   const state = loadState();
   const record = updateRecord(state, fileId, {
     fileName: transcript.fileName,
@@ -920,7 +940,7 @@ async function transcribeLocalLocked(fingerprint, outDir, timeoutSec, pollSec, t
       error: `Transcript was not ready within ${timeoutSec} seconds`,
     });
     return { ok: false, reused: reusedSource, ...record };
-  });
+  }, plaudCommandClientOptions('transcribe-local'));
 }
 
 function resolveArtifactFile(artifactPath, stage) {
@@ -1358,6 +1378,7 @@ module.exports = {
     loadState,
     mark,
     parseTranscribeLocalArgs,
+    plaudCommandClientOptions,
     isTransientClientInitializationError,
     safeErrorMessage,
     sha256File,

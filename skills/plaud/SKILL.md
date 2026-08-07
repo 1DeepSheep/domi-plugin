@@ -1,6 +1,6 @@
 ---
 name: plaud
-description: 安全访问本机 PLAUD 录音，上传 Mac 本地录音，查询文件状态，触发生成，等待并下载 transcript，并维护 domi 的可恢复处理队列。当用户提到 PLAUD、上传录音到 PLAUD、未生成录音、生成文字稿、下载 transcript、同步 PLAUD、快速讨论或运行 domi 录音工作流时使用。使用插件内置的安全 CLI，不输出鉴权头，也不调用旧版自动写飞书 pipeline。
+description: 安全访问本机 PLAUD 录音，上传 Mac 本地录音或已获授权的公开播客音频，查询文件状态，触发生成，等待并下载 transcript，并维护 domi 的可恢复处理队列。当用户提到 PLAUD、上传录音到 PLAUD、未生成录音、生成文字稿、下载 transcript、同步 PLAUD、播客纪要、快速讨论或运行 domi 录音工作流时使用。使用插件内置的安全 CLI，不输出鉴权头，也不调用旧版自动写飞书 pipeline。
 ---
 
 # PLAUD
@@ -54,6 +54,17 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - `generation_submitting`、`generation_unknown` 或 `generation_timeout` 长时间仍无文字稿时，报告生成请求结果不确定并暂停。只有用户明确同意可能重复提交生成请求后，才可用同一命令追加 `--retry-generation`；该选项只接受上述三个阶段，并在重提前再下载检查一次，仍无文字稿才提交并记录确认时间。
 - 输出只使用白名单字段，不得返回预签名 URL、`uploadId`、`objectName`、API 原始响应、Cookie 或鉴权头。
 
+### 公开播客音频交接
+
+当上游 `domi-router`／`investment-radar` 已按播客契约提供经过校验的 `audioPath`、`episodeUrl`、`episodeId` 和上传授权时，也使用同一 `transcribe-local` 命令，但必须遵守：
+
+- 只接受公开、免费、无 DRM 的直接音频文件；下载规则和授权状态由 `investment-radar/references/podcast-ingestion.md` 决定。本 Skill 不自行抓网页、不读取浏览器 Cookie，也不尝试平台私有 API。
+- 单次用户操作或信源 `autoProcess=true` 才构成上传授权。仅“添加播客信源”不授权上传。
+- 不带 `--workflow-id`，保留为 `local_transcription`；稳定标题包含节目短名、发布日期和单集 ID 短哈希，但不得包含用户私人标签。
+- PLAUD transcript 成功后，把 `sourceKind=podcast`、`transcriptProvider=plaud` 与公开 episode 元数据交回 Router。下游 `asr-notes` 只能读取 `transcriptPath`，不得重新对音频运行本地 ASR。
+- PLAUD 关闭、登录失效、连接失败或生成超时时，保留精确 `fileId`／阶段并暂停；不得回退到 Qwen、Whisper 或其他转写服务。
+- 上传确认后是否删除临时播客音频由上游保留策略决定；上传或生成结果不确定时不得删除。
+
 ## 安全边界
 
 - 禁止调用全局 CLI 的 `plaud auth`；它会输出鉴权头。
@@ -63,6 +74,7 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - 除用户明确触发 `login` 外，CLI 必须通过 macOS 的隐藏后台启动模式运行专用浏览器，不得激活 Chrome／Tabbit 的日常窗口；同一专用 Profile 的命令必须串行执行，禁止通过重复启动生成多个 `Plaud Web` 标签页。
 - `sync-pending` 会在 PLAUD 中触发生成。只有用户明确要求生成、同步或运行 domi 主工作流时才能执行。
 - `transcribe-local` 会把本地音频上传到 PLAUD 并触发生成。只有用户明确要求上传／生成，或明确启动了说明“停止后上传 PLAUD 并整理”的快速讨论工作流时才能执行；普通 Mac 录音停止不构成上传授权。
+- 对公开播客，用户为单集点击“生成纪要”或为信源明确开启“自动处理”视为对应范围的上传／生成授权；默认关闭，停用后不再处理新单集。
 - `--retry-upload` 与 `--retry-generation` 都是结果不确定后的显式风险恢复选项；必须分别取得用户对“可能重复上传”或“可能重复提交生成”的明确同意，不得自动追加。
 - 如果待生成数量超过 10，先向用户报告数量并确认本批处理范围。
 - 默认把下载文件写到当前工作区的 `work/domi/plaud/<run-id>/`；不要写入插件目录。
