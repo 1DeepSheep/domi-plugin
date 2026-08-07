@@ -1,4 +1,4 @@
 interface:
   display_name: "ASR Notes"
   short_description: "转写或处理录音，并按话题生成经核验的结构化纪要。"
-  default_prompt: "Use $asr-notes to process this transcript into verified structured notes, including the quick-discussion profile when provided."
+  default_prompt: "Use $asr-notes to process this transcript into verified structured notes; when sourceKind is podcast, require transcriptProvider=plaud and never run local ASR."

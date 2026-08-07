@@ -26,6 +26,8 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 
 当 PLAUD 已关闭而用户只说无修饰的“开始录音”时，降级为 `mac-recording` 本地单阶段录音，并明确说明停止后只保存音频、不上传、不转写；不得静默切换到其他云端转写。用户另行明确提供本地音频并要求整理文字稿／纪要时，可以采用 `asr-notes` 的本地转写路径，该请求不等于重新开启 PLAUD。
 
+播客是例外：播客处理明确固定使用用户自己的 PLAUD。PLAUD 已关闭、登录失效或不可用时，把单集暂停为 `waiting_for_plaud`，不得降级为 `asr-notes` 本地音频转写，也不得改用其他云端 ASR。
+
 ## 当前工作流
 
 | 工作流 | 触发 | 顺序 |
@@ -34,6 +36,8 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 | Mac 本机录音即时控制 | “开始本地录音”“仅本地录音”“只录音，不上传／不整理”“停止后只保存文件”“录音状态” | `mac-recording` 单阶段即时控制；不进入 PLAUD 工作流 |
 | 快速讨论 | 无修饰的“开始录音”“现在开始录音”“启动 Mac 录音”，以及“开始快速讨论”“录下这段讨论”“停止快速讨论并整理” | `mac-recording` → `plaud` 本地音频上传与文字稿 → 上下文确认 → `asr-notes` → 完整纪要 → 核心要点与跟进事项 |
 | 行业新闻雷达 | “看一下／搜一下／更新一下 XX 领域最新的新闻／动态／融资信息” | `investment-radar` 联网检索、分类归一、原文核验、事件去重与评分 → 必要时 taxonomy-sync → 按后端写入行业事件库 → 只返回值得关注项 |
+| 行业信源管理 | “添加新闻源／RSS／重点公众号／播客”“管理行业动态信源” | `investment-radar sources` → 只读测试公开 URL → 保存本机私有信源配置；没有自动处理授权时到此结束 |
+| 播客纪要 | “下载这期播客并转纪要”“处理小宇宙单集”，或已授权播客自动命中 | `investment-radar podcast` 公开发现与授权 → 临时下载 → `plaud transcribe-local` → `asr-notes` 读取 PLAUD 文字稿 → `investment-mgmt` 唯一主归档与多处关联 → Radar 写入有增量的行业事件 |
 | 投资项目只读研究 | “查一下这个项目”“研究一下这个项目”“看看这个项目” | `desk-research` → 交付研究 → 主动询问是否继续评级分析并入库；用户确认后复用研究产物进入 `investment-review` → `investment-mgmt` 按后端归档 |
 | 投资项目研究入库 | “研究并入库”“查完加入 Watching List”“完整处理这个项目”“跑项目 intake” | `desk-research` → `investment-review` → `investment-mgmt` 按后端完成文档、材料与结构化记录 |
 | 人物只读研究 | “找一下 XX 方向的人”“研究一下这个人”“看看这位创始人”“调查一下某人” | `sourcing` 的 `discover/profile`，仅在用户明确要求背调时使用 `background-check` → 交付候选或人物画像 → 主动询问是否写入／更新《1.1 People人际关系管理》 |
@@ -46,6 +50,7 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 执行 PLAUD 投资录音处理时，必须先完整读取 [references/plaud-investment-recording-workflow.md](references/plaud-investment-recording-workflow.md)。
 执行快速讨论时，必须先完整读取 [references/quick-discussion-workflow.md](references/quick-discussion-workflow.md)。
 执行行业新闻雷达时，必须先完整读取 [references/industry-news-radar-workflow.md](references/industry-news-radar-workflow.md)，再采用插件内 `investment-radar` Skill；Router 只负责触发、交接和回传，不复制其检索、评分或写入逻辑。
+执行行业信源管理或播客纪要时，必须先完整读取 [references/podcast-ingestion-workflow.md](references/podcast-ingestion-workflow.md)；信源配置遵循 `investment-radar/references/source-registry.md`，播客下载、PLAUD 转写和归档遵循 `investment-radar/references/podcast-ingestion.md`。
 执行投资项目只读研究或研究入库时，必须先完整读取 [references/project-intake-workflow.md](references/project-intake-workflow.md)，再按该文件的模式与阶段契约逐一采用对应 Skill；仅说“查一下”时不得推断入库授权，研究交付后的主动询问也不等于用户已授权写入。
 执行人物只读研究、人物研究入库或人脉记录更新时，必须先完整读取 [references/people-intake-workflow.md](references/people-intake-workflow.md)，再采用插件内 `sourcing` Skill；飞书模式采用 `lark-base` 并读取实时 schema，本地模式采用 `domi-repo.cjs`。仅说“找一下／研究一下某人”时不得推断写入授权；开放式发现或批量写入即使已有入库授权，也必须先确认精确变更计划。
 执行待办事项时直接采用插件内 `todo` Skill；飞书模式维护 `1.待办事项`，本地模式维护工作区根目录的 `0.待办事项.md`，并尊重旧账本中的忽略、进行中和完成状态。
@@ -77,7 +82,7 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 6. 外部写入前执行去重和字段校验；遇到多个可能匹配项时先让用户确认。
 7. 某一步失败时保留已完成产物和阶段标识，从失败点恢复；PLAUD 不重复触发生成，项目 intake 不重复创建文档或记录，people intake 不重发已成功的人物写入。
 8. 对 `project` 类型的新项目，当前后端的结构化记录、文档和材料目录都是强制阶段；任一层失败时不得跳过并直接标为 `managed`。
-9. 最终报告所选工作流实际产生的关键产物：快速讨论直接展示核心要点与跟进事项，并提供音频、PLAUD 文字稿、完整纪要和讨论摘要；PLAUD 投资工作流报告文字稿、纪要、项目判断、评分／评级、飞书 Wiki 链接、本地资料库项目路径和 Watching List 结果；行业新闻雷达报告扫描范围、值得关注项、taxonomy 复用／镜像修复／新增／延期／孤立／同步失败／回滚／部分完成／分类修正状态（部分完成须列已改变侧和人工修复项）、覆盖缺口，以及 Base 的新增／更新／分类修正／无变化／跳过／失败数量与链接，默认不展示未达到关注阈值的事件；项目 `research` mode 先完整交付只读研究，并以“是否继续进行投资评级分析，并将项目归档、加入 Watching List？”收尾；用户明确确认前不得评级、建文档或写入。确认后复用既有研究产物切换到 `intake`，不得重复研究；项目 `intake/update` mode 报告研究结论、评分／评级、文档归档、项目库归档和 Watching List 结果；人物 `research` mode 报告候选／人物画像、证据、置信度、覆盖缺口和下一步，并询问是否写入／更新人脉表，确认前零写入；人物 `intake/update` mode 报告新增、更新、无变化、跳过、歧义和失败数量，每人的 `record_id`、字段变化与后续动作。
+9. 最终报告所选工作流实际产生的关键产物：快速讨论直接展示核心要点与跟进事项，并提供音频、PLAUD 文字稿、完整纪要和讨论摘要；PLAUD 投资工作流报告文字稿、纪要、项目判断、评分／评级、飞书 Wiki 链接、本地资料库项目路径和 Watching List 结果；行业新闻雷达报告扫描范围、值得关注项、taxonomy 复用／镜像修复／新增／延期／孤立／同步失败／回滚／部分完成／分类修正状态（部分完成须列已改变侧和人工修复项）、覆盖缺口，以及 Base 的新增／更新／分类修正／无变化／跳过／失败数量与链接，默认不展示未达到关注阈值的事件；播客工作流报告节目与单集、PLAUD 文字稿状态、唯一主纪要、主归档类型和关联项目／行业，默认不展示临时缓存路径、PLAUD `fileId` 或私有信源规则；项目 `research` mode 先完整交付只读研究，并以“是否继续进行投资评级分析，并将项目归档、加入 Watching List？”收尾；用户明确确认前不得评级、建文档或写入。确认后复用既有研究产物切换到 `intake`，不得重复研究；项目 `intake/update` mode 报告研究结论、评分／评级、文档归档、项目库归档和 Watching List 结果；人物 `research` mode 报告候选／人物画像、证据、置信度、覆盖缺口和下一步，并询问是否写入／更新人脉表，确认前零写入；人物 `intake/update` mode 报告新增、更新、无变化、跳过、歧义和失败数量，每人的 `record_id`、字段变化与后续动作。
 
 ## 新增多阶段工作流的写法
 
