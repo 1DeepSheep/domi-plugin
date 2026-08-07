@@ -1,4 +1,4 @@
 interface:
   display_name: "domi Router"
-  short_description: "编排录音、行业雷达、投资项目与人物研究入库及投研归档闭环。"
+  short_description: "编排录音、播客、行业雷达、项目与人物研究及归档闭环。"
   default_prompt: "使用 $domi-router 研究一位潜在创始人，核验身份和公开履历，并在写入 1.1 People 前确认。"

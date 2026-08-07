@@ -1,4 +1,4 @@
 interface:
   display_name: "Investment Radar"
-  short_description: "追踪投资新闻，并优先提醒重点项目与人脉的实质动态。"
-  default_prompt: "Use $investment-radar to scan the latest investment news, load priority projects from the local snapshot, cross-check deep-tracking people, archive verified events, and proactively surface priority alerts."
+  short_description: "追踪新闻、公众号与播客信源，并优先提醒重点对象动态。"
+  default_prompt: "Use $investment-radar to scan verified investment news and user-managed public sources, route authorized podcasts through the user's PLAUD account, archive event-level facts, and proactively surface priority alerts."

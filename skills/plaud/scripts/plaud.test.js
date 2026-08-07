@@ -15,10 +15,15 @@ process.env.DOMI_PLAUD_STATE_DIR = path.join(sandbox, 'state');
 const scriptPath = path.join(__dirname, 'plaud.js');
 const { __test } = require('./plaud.js');
 const {
+  BROWSER_CLOSE_BUDGET_MS,
+  BROWSER_GRACEFUL_EXIT_BUDGET_MS,
+  BROWSER_TERM_EXIT_BUDGET_MS,
   PlaudClient,
+  SIGNAL_SHUTDOWN_BUDGET_MS,
   acquireManagedSessionLock,
   backgroundTabbitArgs,
   clearDevToolsActivePort,
+  clearManagedShutdownMarker,
   clearManagedSessionRestoreState,
   compactManagedPages,
   connectToDevToolsWithRetry,
@@ -30,13 +35,16 @@ const {
   managedProfileDir,
   managedProfileNeedsSessionRecovery,
   managedSessionLockPath,
+  managedShutdownMarkerPath,
   mediaExecutable,
   navigatePlaudWithRetry,
   pageShowsPlaudLogin,
   releaseManagedSessionLock,
   removeManagedProfile,
   waitForDevToolsEndpoint,
+  waitForPriorManagedShutdown,
   waitForPlaudAuthorization,
+  writeManagedShutdownMarker,
   withLoopbackNoProxy,
 } = require('../vendor/plaud-cli/src/plaud.js');
 
@@ -389,6 +397,24 @@ test('PLAUD launches Tabbit as a separate non-activating headless instance', () 
   assert.equal(args.includes('https://web.plaud.ai'), false);
 });
 
+test('only an explicit login command may create a visible PLAUD window', () => {
+  for (const command of [
+    'connection',
+    'status',
+    'pending',
+    'sync-pending',
+    'transcribe-local',
+    'download',
+  ]) {
+    assert.equal(__test.plaudCommandClientOptions(command).headless, true, command);
+  }
+  assert.equal(__test.plaudCommandClientOptions('login').headless, false);
+  assert.equal(
+    __test.plaudCommandClientOptions('connection', { headless: false }).headless,
+    true,
+  );
+});
+
 test('PLAUD managed browser supports a visible Chrome login with a private profile', async () => {
   const previousRoot = process.env.DOMI_PLAUD_PROFILE_ROOT;
   const profileRoot = path.join(sandbox, 'managed-browser-root');
@@ -569,6 +595,39 @@ test('PLAUD browser selection comes only from the local config', () => {
   }
 });
 
+test('PLAUD never guesses a different browser when local configuration is missing', () => {
+  const previousConfig = process.env.DOMI_CONFIG_PATH;
+  const previousRoot = process.env.DOMI_PLAUD_PROFILE_ROOT;
+  const previousBrowser = process.env.DOMI_PLAUD_BROWSER;
+  const profileRoot = path.join(sandbox, 'strict-browser-selection');
+  process.env.DOMI_CONFIG_PATH = path.join(sandbox, 'missing-browser-config.json');
+  process.env.DOMI_PLAUD_PROFILE_ROOT = profileRoot;
+  delete process.env.DOMI_PLAUD_BROWSER;
+  try {
+    assert.throws(() => configuredBrowserKind(), /PLAUD_BROWSER_CONFIG_REQUIRED/);
+
+    fs.mkdirSync(path.join(profileRoot, 'tabbit'), { recursive: true });
+    assert.equal(configuredBrowserKind(), 'tabbit');
+
+    fs.mkdirSync(path.join(profileRoot, 'chrome'), { recursive: true });
+    assert.throws(() => configuredBrowserKind(), /PLAUD_BROWSER_CONFIG_REQUIRED/);
+
+    fs.writeFileSync(
+      process.env.DOMI_CONFIG_PATH,
+      JSON.stringify({ plaudBrowser: 'safari' }),
+      { mode: 0o600 },
+    );
+    assert.throws(() => configuredBrowserKind(), /PLAUD_BROWSER_CONFIG_REQUIRED/);
+  } finally {
+    if (previousConfig == null) delete process.env.DOMI_CONFIG_PATH;
+    else process.env.DOMI_CONFIG_PATH = previousConfig;
+    if (previousRoot == null) delete process.env.DOMI_PLAUD_PROFILE_ROOT;
+    else process.env.DOMI_PLAUD_PROFILE_ROOT = previousRoot;
+    if (previousBrowser == null) delete process.env.DOMI_PLAUD_BROWSER;
+    else process.env.DOMI_PLAUD_BROWSER = previousBrowser;
+  }
+});
+
 test('PLAUD starts background Tabbit through its exact executable without activating an app bundle', async () => {
   const profileDir = path.join(sandbox, 'direct-background-profile');
   const child = new EventEmitter();
@@ -623,10 +682,94 @@ test('PLAUD API requests abort independently instead of waiting for the parent t
     client.page = {
       evaluate: async (callback, payload) => callback(payload),
     };
-    await assert.rejects(client.api('/file/simple/web'), /PLAUD 接口读取超时（1 秒）/);
+    await assert.rejects(client.api('/file/simple/web'), /PLAUD_NETWORK_TIMEOUT: PLAUD 接口读取超时（1 秒）/);
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('PLAUD silently refreshes the same profile and retries one read after HTTP 401', async () => {
+  const client = Object.create(PlaudClient.prototype);
+  client.browserLabel = 'Tabbit';
+  client.headless = true;
+  client.loginTimeoutMs = 12000;
+  client.authorization = 'old';
+  client.headers = { authorization: 'old' };
+  let reloads = 0;
+  client.page = {
+    isClosed: () => false,
+    evaluate: async () => false,
+    reload: async () => {
+      reloads += 1;
+      client.authorization = 'new';
+      client.headers.authorization = 'new';
+    },
+    waitForTimeout: async () => {},
+  };
+  const responses = [
+    { status: 401, body: {} },
+    { status: 200, body: { status: 0, data: [] } },
+  ];
+  let requests = 0;
+  client.apiOnce = async () => responses[requests++];
+
+  const result = await client.api('/file/simple/web');
+  assert.equal(result.status, 200);
+  assert.equal(requests, 2);
+  assert.equal(reloads, 1);
+});
+
+test('PLAUD asks for login only after a read remains unauthorized after silent refresh', async () => {
+  const client = Object.create(PlaudClient.prototype);
+  client.browserLabel = 'Google Chrome';
+  client.headless = true;
+  client.loginTimeoutMs = 12000;
+  client.authorization = 'old';
+  client.headers = { authorization: 'old' };
+  client.page = {
+    isClosed: () => false,
+    evaluate: async () => false,
+    reload: async () => {
+      client.authorization = 'new';
+      client.headers.authorization = 'new';
+    },
+    waitForTimeout: async () => {},
+  };
+  let requests = 0;
+  client.apiOnce = async () => {
+    requests += 1;
+    return { status: 401, body: {} };
+  };
+  await assert.rejects(client.api('/file/simple/web'), /PLAUD_AUTH_REQUIRED/);
+  assert.equal(requests, 2);
+});
+
+test('PLAUD never replays a write after HTTP 401', async () => {
+  const client = Object.create(PlaudClient.prototype);
+  client.browserLabel = 'Tabbit';
+  client.page = { evaluate: async () => false };
+  let requests = 0;
+  client.apiOnce = async () => {
+    requests += 1;
+    return { status: 401, body: {} };
+  };
+  await assert.rejects(
+    client.api('/ai/transsumm/example', { method: 'POST', data: { safe: true } }),
+    /PLAUD_UNAUTHORIZED/,
+  );
+  assert.equal(requests, 1);
+});
+
+test('PLAUD distinguishes access denial and rate limiting from login expiry', async () => {
+  const makeClient = (status) => {
+    const client = Object.create(PlaudClient.prototype);
+    client.browserLabel = 'Tabbit';
+    client.page = { evaluate: async () => false };
+    client.apiOnce = async () => ({ status, body: {} });
+    return client;
+  };
+  await assert.rejects(makeClient(403).api('/file/simple/web'), /PLAUD_ACCESS_DENIED/);
+  await assert.rejects(makeClient(429).api('/file/simple/web'), /PLAUD_RATE_LIMITED/);
 });
 
 test('PLAUD retries the private DevTools endpoint until the browser socket is ready', async () => {
@@ -742,6 +885,47 @@ test('PLAUD serializes access to one managed browser profile across processes', 
   assert.equal(releaseManagedSessionLock(recovered), true);
 });
 
+test('PLAUD shutdown budget exceeds every graceful browser-close phase', () => {
+  const closePhasesMs = BROWSER_CLOSE_BUDGET_MS
+    + BROWSER_GRACEFUL_EXIT_BUDGET_MS
+    + BROWSER_TERM_EXIT_BUDGET_MS;
+  assert.equal(
+    SIGNAL_SHUTDOWN_BUDGET_MS > closePhasesMs,
+    true,
+  );
+
+  const profileDir = path.join(sandbox, 'shutdown-budget-profile');
+  const startedAt = 1000;
+  const markerPath = writeManagedShutdownMarker(profileDir, { now: () => startedAt });
+  const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  assert.equal(marker.safeUntil - startedAt >= closePhasesMs, true);
+  assert.equal(marker.safeUntil - startedAt >= 30000, true);
+  assert.equal(clearManagedShutdownMarker(profileDir), true);
+});
+
+test('PLAUD waits for a prior exact-profile shutdown to flush before orphan cleanup', async () => {
+  const profileDir = path.join(sandbox, 'shutdown-marker-profile');
+  let clock = 0;
+  writeManagedShutdownMarker(profileDir, { now: () => clock, safeForMs: 1000 });
+  const markerPath = managedShutdownMarkerPath(profileDir);
+  assert.equal(fs.statSync(markerPath).mode & 0o777, 0o600);
+  const markerText = fs.readFileSync(markerPath, 'utf8');
+  assert.equal(/authorization|cookie|token/i.test(markerText), false);
+
+  let checks = 0;
+  const stillRunning = await waitForPriorManagedShutdown(profileDir, '/Applications/Tabbit', {
+    now: () => clock,
+    pause: async (delay) => { clock += delay; },
+    listPids: () => {
+      checks += 1;
+      return clock < 400 ? [4242] : [];
+    },
+  });
+  assert.equal(stillRunning, false);
+  assert.equal(checks >= 4, true);
+  assert.equal(fs.existsSync(markerPath), false);
+});
+
 test('PLAUD reads the private DevTools endpoint created by background Tabbit', async () => {
   const profileDir = path.join(sandbox, 'devtools-profile');
   fs.mkdirSync(profileDir, { recursive: true });
@@ -821,6 +1005,7 @@ test('an explicitly temporary managed profile and background browser are removed
   fs.writeFileSync(path.join(profileDir, 'Cookies'), 'sensitive-test-placeholder');
   const calls = [];
   const client = new PlaudClient({
+    browserKind: 'chrome',
     profileDirFactory: () => profileDir,
     terminateBrowser: async (targetProfileDir) => calls.push(['terminate', targetProfileDir]),
   });
@@ -829,7 +1014,10 @@ test('an explicitly temporary managed profile and background browser are removed
       send: async (method) => calls.push(['cdp', method]),
     }),
   };
-  await client.close();
+  const firstClose = client.close();
+  const secondClose = client.close();
+  assert.equal(firstClose, secondClose);
+  await firstClose;
   assert.deepEqual(calls, [
     ['cdp', 'Browser.close'],
     ['terminate', profileDir],
