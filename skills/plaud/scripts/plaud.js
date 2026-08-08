@@ -1279,12 +1279,25 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
         throw new Error(`documented local backend requires a verified storageReceipt${missing.length ? `: ${missing.join(', ')}` : ''}`);
       }
       metadata = { ...metadata, projectId: receipt.projectId };
-    } else {
+    } else if (candidate.storageReceipt?.backend === 'legacy_feishu_primary') {
+      const receipt = candidate.storageReceipt;
+      const required = ['recordId', 'documentUri', 'libraryPath'];
+      const missing = required.filter((key) => !receipt[key]);
+      if (missing.length > 0 ||
+          !receipt.recordVerified ||
+          !receipt.documentVerified ||
+          !receipt.filesVerified) {
+        throw new Error(`documented legacy Feishu-primary backend requires a verified storageReceipt${missing.length ? `: ${missing.join(', ')}` : ''}`);
+      }
+      metadata = { ...metadata, recordId: receipt.recordId };
+    } else if (!candidate.storageReceipt) {
       const required = ['wikiUrl', 'wikiNodeToken', 'docToken', 'oneDrivePath'];
       const missing = required.filter((key) => !candidate[key]);
       if (missing.length > 0) {
-        throw new Error(`documented requires metadata fields: ${missing.join(', ')}`);
+        throw new Error(`legacy documented queue requires metadata fields: ${missing.join(', ')}`);
       }
+    } else {
+      throw new Error(`documented does not support storageReceipt backend: ${candidate.storageReceipt.backend || 'unset'}`);
     }
     metadata = { ...metadata, archiveError: null };
   }

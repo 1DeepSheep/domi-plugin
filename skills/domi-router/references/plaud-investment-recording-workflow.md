@@ -2,7 +2,7 @@
 
 ## 目标
 
-把 PLAUD 录音处理为文字稿和结构化纪要；若内容属于创业项目或创始人交流，继续完成投资快评，并把纪要、快评、材料和结构化记录写入本地 SQLite＋Markdown 权威资料库。连接飞书不改变归档路径；只有用户明确要求创建／编辑飞书文档交付副本时，才在本地闭环成功后按 `feishu-knowledge-extension.md` 另行交付。
+把 PLAUD 录音处理为文字稿和结构化纪要；若内容属于创业项目或创始人交流，继续完成投资快评，并把纪要、快评、材料和结构化记录写入本轮已经锁定的资料库后端。`repositoryBackend=local` 写本地 SQLite＋Markdown；`repositoryBackend=legacy_feishu_primary` 按 `legacy-feishu-primary.md` 继续写既有 Base／Wiki／本地材料链路。任务中途不得因飞书登录状态或写入失败切换后端。
 
 ## 一、恢复未完成任务
 
@@ -12,8 +12,8 @@
    - `context_pending`：处理用户补充或跳过，不重新生成文字稿；
    - `context_ready`：进入 ASR Notes；
    - `notes_project`：先 `verify <fileId>`，通过后进入投资快评；
-   - `reviewed`：先 `verify <fileId>`，通过后恢复本地归档；
-   - `documented`：先 `verify <fileId>`，通过后核验本地结构化记录并标记完成；旧队列若只有 Wiki token，必须显式导入本地并回读验证，禁止继续把飞书当管理后端；
+   - `reviewed`：先 `verify <fileId>`，通过后按该队列锁定的资料库后端恢复归档；
+   - `documented`：先 `verify <fileId>`，通过后按已保存的 `storageReceipt.backend` 回读结构化记录、主文档和材料目录，再标记完成；没有新式回执的历史队列沿用其原始 Wiki／本地材料链路，不得暗中迁移或新建第二份项目；
    - 失败或超时项先报告原因；`generation_timeout` 先尝试下载，不重复生成。
 3. 恢复项处理后再发现新录音。
 
@@ -68,32 +68,38 @@ mark <fileId> notes_project <notesPath> {"notesAudit":{"status":"passed","eviden
 mark <fileId> reviewed <reviewPath> {"score":X,"rating":"A","reviewAudit":{"status":"passed","educationConsistency":true,"careerModelConsistency":true}}
 ```
 
-## 七、本地归档与项目记录
+## 七、按锁定后端归档与项目记录
 
-本阶段是 `project` 录音的强制阶段。采用 `domi:investment-mgmt`，固定使用本地网关：
+本阶段是 `project` 录音的强制阶段。先按 `investment-mgmt/references/storage-backends.md` 读取并锁定 `repositoryBackend`，再采用 `domi:investment-mgmt`：
 
 1. 从纪要和快评提取规范公司名、会议日期、领域、子领域和评级；分类来自 taxonomy。
-2. 用 `project search` 同时检查中英文名、产品名和主体名；多个相似命中时先确认。
-3. 用 `project upsert` 创建／更新 SQLite 记录、稳定项目目录与 `项目主页.md`。
-4. 用 `document create` 把纪要和快评分别写入 `纪要/` 与 `研究/`；PLAUD 原始文字稿、BP／slides 和其他实际存在材料按类型归档。相同内容跳过，不同版本保留，不静默覆盖。
-5. 真实交流纪要产生后，项目阅读顺序为“交流纪要在前、桌面研究独立 Part 在后”；不得简单追加到研究末尾或交叉改写。
-6. 用 `project get`、`project search` 与 `workspace verify` 回读结构化字段、Markdown、目录、关键文件大小／哈希。只创建文件而未写 SQLite，或只写 SQLite 而未归档文件，都不算完成。
+2. `local` 分支用 `project search` 检查中英文名、产品名和主体名，用 `project upsert` 创建／更新 SQLite 记录和稳定项目目录，再用 `document create` 把纪要、快评与实际存在材料归入同一项目。
+3. `legacy_feishu_primary` 分支完整执行 `legacy-feishu-primary.md`：在既有 Watching List／Wiki 查重，复用或创建唯一 Wiki 项目文档，将源材料保留在原有本地材料目录，最后 upsert 既有项目 Base；禁止调用本地网关或生成第二个本地项目记录。
+4. 两个分支都保持“交流纪要在前、桌面研究独立 Part 在后”的阅读顺序；相同内容跳过，不同版本并存，不静默覆盖。
+5. 两个分支都回读结构化记录、主文档和材料目录。只创建文档未写记录，或只写记录未归档材料，都不算完成。
 
-结构化字段包括：公司名称、领域／子领域、真实进展状态、项目评级、Notes、历史融资、最新估值、八家关注投资机构、本地文档 URI、系统生成的入库时间和有信息增量时的最后更新时间。业务字段与最后更新时间同次 upsert；评分和完整决策链留在文档，Notes 只放高密度摘要。
+结构化字段包括：公司名称、领域／子领域、真实进展状态、项目评级、Notes、历史融资、最新估值、八家关注投资机构、系统生成的入库时间和有信息增量时的最后更新时间。评分和完整决策链留在文档，Notes 只放高密度摘要。
 
-完成后运行：
+本地主库完成后运行：
 
 ```text
-mark <fileId> documented - {"projectId":"prj_xxx","storageReceipt":{"backend":"local","projectId":"prj_xxx","documentUri":"file:///.../项目主页.md","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}
-mark <fileId> managed - {"action":"created|updated","projectId":"prj_xxx","storageReceipt":{"backend":"local","projectId":"prj_xxx","documentUri":"file:///.../项目主页.md","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}
+mark <fileId> documented - {"storageReceipt":{"backend":"local","projectId":"prj_xxx","documentUri":"file:///.../项目主页.md","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}
+mark <fileId> managed - {"action":"created|updated","storageReceipt":{"backend":"local","projectId":"prj_xxx","documentUri":"file:///.../项目主页.md","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}
 ```
 
-任一可恢复归档步骤失败时保持 `reviewed`，保存 `archiveError` 后从同一快评恢复；不得伪造 `documented`／`managed`。旧队列中的 `wikiUrl`、`wikiNodeToken`、`docToken`、`recordId` 仅用于定位历史资料并执行一次显式本地导入；导入与回读未完成前保持兼容读取提示，不得把旧 token 作为新写入目标。
+旧飞书主库兼容分支完成后运行：
+
+```text
+mark <fileId> documented - {"storageReceipt":{"backend":"legacy_feishu_primary","recordId":"rec_xxx","documentUri":"https://.../wiki/...","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}
+mark <fileId> managed - {"action":"created|updated","storageReceipt":{"backend":"legacy_feishu_primary","recordId":"rec_xxx","documentUri":"https://.../wiki/...","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}
+```
+
+任一可恢复归档步骤失败时保持 `reviewed`，保存 `archiveError` 后从同一快评恢复；不得伪造 `documented`／`managed`。历史队列没有 `storageReceipt` 时，旧字段只用于恢复其原有后端；是否迁移必须由用户显式发起并完整执行安全导入，不能由录音任务顺带完成。
 
 ## 八、可选飞书交付
 
-仅当用户明确说“把这篇纪要／项目文档创建到飞书”或“编辑这篇飞书文档”时执行。必须先完成第七节本地归档，再按 `investment-mgmt/references/feishu-knowledge-extension.md` 通过 App 受控 Markdown 导出服务交付；服务不可用时返回 `FEISHU_EXPORT_HANDOFF_REQUIRED`，状态为未导出。禁止退化成简单 `docs +create` 而丢本地图片，也不得顺带创建 Base、Wiki 管理结构或回填成权威记录。
+本地主库用户只有明确说“把这篇纪要／项目文档创建到飞书”或“编辑这篇飞书文档”时才执行。必须先完成第七节本地归档，再按 `investment-mgmt/references/feishu-knowledge-extension.md` 通过 App 受控 Markdown 导出服务交付；服务不可用时返回 `FEISHU_EXPORT_HANDOFF_REQUIRED`，状态为未导出。旧飞书主库用户的唯一 Wiki 项目文档属于管理闭环，不应再创建同内容副本。禁止退化成简单 `docs +create` 而丢本地图片，也不得顺带创建另一套 Base／Wiki 管理结构。
 
 ## 九、最终报告
 
-按录音报告文字稿、纪要、类型、评分／评级、本地文档 URI、资料目录与本地项目记录。另列失败、待确认说话人、分类低置信度项和实际写入的最后更新时间。`project` 若缺本地文档 URI、结构化记录或项目路径，应报告未完成。只有实际完成受控飞书导出时才另列远端副本；不要输出任何 PLAUD 鉴权信息或私人配置。
+按录音报告文字稿、纪要、类型、评分／评级、归档是否完成和必要下一步。另列失败、待确认说话人、分类低置信度项和实际写入的最后更新时间。默认不展示本机绝对路径、文档 URI、项目／记录 ID、Base／Wiki 标识或 PLAUD 鉴权信息；只有冲突排障或用户明确要求时才展示必要定位信息。

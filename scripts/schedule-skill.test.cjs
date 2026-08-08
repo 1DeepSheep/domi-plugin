@@ -8,6 +8,10 @@ const agent = fs.readFileSync(
   path.join(root, "skills", "schedule", "agents", "openai.yaml"),
   "utf8"
 );
+const router = fs.readFileSync(
+  path.join(root, "skills", "domi-router", "SKILL.md"),
+  "utf8"
+);
 
 assert.match(skill, /一个或多个参会人/);
 assert.match(skill, /主动询问“日程邀请发给哪些邮箱/);
@@ -18,5 +22,7 @@ assert.match(skill, /主题[\s\S]*日期和开始时间[\s\S]*地点或线上方
 assert.match(skill, /Outlook Calendar 连接器/);
 assert.doesNotMatch(skill, /\$domi:todo|待办事项设为|完整读取.*outlook-calendar|检查冲突/);
 assert.match(agent, /如果我没选择参会人，请先问我要发给哪些邮箱/);
+assert.match(router, /仅在用户明确要求时检查冲突/);
+assert.doesNotMatch(router, /核对账号与时区 → 检查冲突/);
 
 console.log("schedule skill checks passed");
