@@ -1342,3 +1342,93 @@ test('discussion_complete binds both notes and brief hashes and verify detects l
   assert.equal(tampered.status, 1);
   assert.match(JSON.parse(tampered.stdout).error, /brief file changed/);
 });
+
+test('documented accepts verified receipts for both locked repository backends', () => {
+  const notesAudit = {
+    status: 'passed',
+    evidenceLedgerComplete: true,
+    degreeIsolation: true,
+    claimConsistency: true,
+    careerLedgerComplete: true,
+    modelWorkLedgerComplete: true,
+    attributionConsistency: true,
+    educationClaimCount: 1,
+    careerClaimCount: 1,
+    modelWorkClaimCount: 1,
+    unresolvedDefinitiveEducationClaims: 0,
+    unresolvedDefinitiveCareerClaims: 0,
+    unresolvedDefinitiveModelWorkClaims: 0,
+  };
+  const reviewMetadata = {
+    score: 8,
+    rating: 'A',
+    reviewAudit: {
+      status: 'passed',
+      educationConsistency: true,
+      careerModelConsistency: true,
+    },
+  };
+
+  function prepareReviewed(fileId) {
+    const state = __test.loadState();
+    __test.updateRecord(state, fileId, { stage: 'context_ready' });
+    const notesPath = path.join(sandbox, `${fileId}-notes.md`);
+    const reviewPath = path.join(sandbox, `${fileId}-review.md`);
+    fs.writeFileSync(notesPath, '# Notes\n', { mode: 0o600 });
+    fs.writeFileSync(reviewPath, '# Review\n', { mode: 0o600 });
+    const notesMarked = spawnSync(process.execPath, [
+      scriptPath, 'mark', fileId, 'notes_project', notesPath,
+      JSON.stringify({ notesAudit }),
+    ], { encoding: 'utf8', env: process.env });
+    assert.equal(notesMarked.status, 0, notesMarked.stderr || notesMarked.stdout);
+    const reviewed = spawnSync(process.execPath, [
+      scriptPath, 'mark', fileId, 'reviewed', reviewPath,
+      JSON.stringify(reviewMetadata),
+    ], { encoding: 'utf8', env: process.env });
+    assert.equal(reviewed.status, 0, reviewed.stderr || reviewed.stdout);
+  }
+
+  prepareReviewed('local-documented');
+  const local = spawnSync(process.execPath, [
+    scriptPath, 'mark', 'local-documented', 'documented', '-',
+    JSON.stringify({
+      storageReceipt: {
+        backend: 'local',
+        projectId: 'prj_local',
+        documentUri: 'file:///tmp/project.md',
+        libraryPath: '/tmp/project',
+        recordVerified: true,
+        documentVerified: true,
+        filesVerified: true,
+      },
+    }),
+  ], { encoding: 'utf8', env: process.env });
+  assert.equal(local.status, 0, local.stderr || local.stdout);
+  assert.equal(JSON.parse(local.stdout).record.projectId, 'prj_local');
+
+  prepareReviewed('legacy-documented');
+  const legacy = spawnSync(process.execPath, [
+    scriptPath, 'mark', 'legacy-documented', 'documented', '-',
+    JSON.stringify({
+      storageReceipt: {
+        backend: 'legacy_feishu_primary',
+        recordId: 'rec_legacy',
+        documentUri: 'https://example.invalid/wiki/project',
+        libraryPath: '/tmp/legacy-project',
+        recordVerified: true,
+        documentVerified: true,
+        filesVerified: true,
+      },
+    }),
+  ], { encoding: 'utf8', env: process.env });
+  assert.equal(legacy.status, 0, legacy.stderr || legacy.stdout);
+  assert.equal(JSON.parse(legacy.stdout).record.recordId, 'rec_legacy');
+
+  prepareReviewed('unsupported-documented');
+  const unsupported = spawnSync(process.execPath, [
+    scriptPath, 'mark', 'unsupported-documented', 'documented', '-',
+    JSON.stringify({ storageReceipt: { backend: 'unexpected' } }),
+  ], { encoding: 'utf8', env: process.env });
+  assert.equal(unsupported.status, 1);
+  assert.match(JSON.parse(unsupported.stdout).error, /does not support storageReceipt backend/);
+});

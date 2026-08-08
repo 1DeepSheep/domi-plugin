@@ -140,7 +140,7 @@
 `intake/update` mode 向用户报告：
 
 - `created / updated / unchanged / skipped / ambiguous / failed` 数量；
-- 每位已处理人物的动作、`person_id` 和关键字段变化；
+- 每位已处理人物的动作和关键字段变化；默认不展示内部 `person_id/record_id`，仅在冲突排查或用户明确要求时提供必要标识；
 - 因隐私、低置信、重复或 schema 不匹配而未写的内容；
 - 尚待确认、需要人工合并或可从当前阶段恢复的项目；
 - 最有价值的后续引荐、联系或验证动作。
