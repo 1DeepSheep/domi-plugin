@@ -1,17 +1,20 @@
 ---
 name: sourcing
-description: Investment sourcing workflow for discovering potential founders, mapping founder talent pools, running public-source background checks, planning warm introductions, and managing investor relationship data in domi's local SQLite/Markdown repository.
+description: Investment sourcing workflow for discovering potential founders, mapping founder talent pools, running public-source background checks, planning warm introductions, and managing investor relationship data in domi's currently configured people repository.
 ---
 
 # Sourcing
 
 Use this skill to turn ad hoc founder leads and relationship notes into a disciplined sourcing system: discover people, verify background signals, map relationship paths, and keep the current domi people repository current.
 
-When the task reads or writes internal people data, first read `../investment-mgmt/references/storage-backends.md`, then use the plugin-level `scripts/domi-repo.cjs person search/upsert` commands. Local SQLite/Markdown is always authoritative; never require Feishu authorization, Base identifiers, or a backend choice.
+When the task reads or writes internal people data, first read `../investment-mgmt/references/storage-backends.md` and lock the returned backend:
+
+- `repositoryBackend=local`: use the plugin-level `scripts/domi-repo.cjs person search/upsert` commands; Feishu remains an explicit external action only.
+- `repositoryBackend=legacy_feishu_primary`: also read `../investment-mgmt/references/legacy-feishu-primary.md` and use the existing People Base plus its Feishu document chain. Do not call `domi-repo.cjs` or create a parallel local person record.
 
 ## Operating Modes
 
-Start by identifying the mode. If the request mixes modes, run them in this order: source candidates -> enrich profiles -> plan outreach -> update the local people repository.
+Start by identifying the mode. If the request mixes modes, run them in this order: source candidates -> enrich profiles -> plan outreach -> update the current people repository.
 
 | Mode | Use for | Typical output |
 |---|---|---|
@@ -19,7 +22,7 @@ Start by identifying the mode. If the request mixes modes, run them in this orde
 | `profile` | Build a structured profile for one person. | Person profile with identity, career, projects, public signals, relationship path, and confidence. |
 | `background-check` | Verify a person's public track record before meeting, investing, hiring, referencing, or introducing. | Background memo with verified facts, open questions, and risk flags. |
 | `relationship` | Maintain investor relationship context and follow-ups. | Relationship map, intro path, touchpoint log, next follow-up, Base updates. |
-| `base-maintenance` | Query, dedupe, enrich, or update the local people repository. | Clean records, proposed field mapping, update summary. |
+| `base-maintenance` | Query, dedupe, enrich, or update the current people repository. | Clean records, proposed field mapping, update summary. |
 
 ## Step 0: Scope and Guardrails
 
@@ -35,7 +38,8 @@ Before collecting data, lock the brief:
 
 Use the narrowest tool that matches the task:
 
-- Use `domi-repo.cjs person search/upsert`; SQLite is the structured authority and `人物主页.md` is the structured master/index. Every full profile or background-research result must be passed as `researchContentFile` or `researchContent` during upsert and archived under the person's `研究/` directory; it must not remain only in the chat response. Do not create a second root-level `姓名-人物资料.md`. Real interaction notes belong in `纪要/` and are also registered in “交流文档”.
+- In local mode use `domi-repo.cjs person search/upsert`; SQLite is the structured authority and `人物主页.md` is the structured master/index. Every full profile or background-research result must be archived under the person's `研究/` directory; real interaction notes belong in `纪要/` and are also registered in “交流文档”.
+- In legacy Feishu-primary mode use `lark-base` for the configured People Base and `lark-doc`／`lark-wiki` for the existing document chain exactly as specified in `legacy-feishu-primary.md`; every write is read back by `record_id`, and no local gateway write is allowed.
 - Use `lark-contact` only when a Feishu/Lark user identity must be resolved from a name, email, or open_id.
 - Use `lark-im`, `lark-calendar`, or `lark-mail` only when the user explicitly asks to use communication history or schedule context and permissions are available.
 - Use `desk-research` when a person is tied to a company/project that needs a company or sector investment profile.
@@ -43,18 +47,18 @@ Use the narrowest tool that matches the task:
 - Use Google or Google-style web search for anti-omission discovery when available, especially for niche people sourcing. If a dedicated Google surface is unavailable, use the available web search with Google operators (`"exact phrase"`, `site:`, `OR`, `-exclude`) and state the limitation. Treat search snippets as discovery leads only; verify important facts on primary pages.
 - Use web search for current public facts, public profiles, news, funding, publications, GitHub/HuggingFace output, podcasts, talks, and adverse media.
 
-## Step 2: Inspect the Local People Repository
+## Step 2: Inspect the Current People Repository
 
-Read the current local gateway schema before writing; do not assume obsolete field names.
+Read the current backend schema before writing; do not assume obsolete field names. Local mode reads the gateway schema; legacy Feishu-primary mode reads the configured People Base schema and first verifies system `入库时间` plus text `交流文档`.
 
 1. Search before creating: dedupe by name + current organization + canonical profile URL + authorized email/open_id when available.
 2. Prefer updating an existing person record over creating a duplicate.
-3. If a useful field does not exist, place the information in an existing notes/summary field or ask before extending the local schema.
+3. If a useful field does not exist, place the information in an existing notes/summary field or ask before extending the current schema.
 4. For bulk writes or uncertain merges, show the proposed changes and wait for confirmation. If the user explicitly asks to update a specific record and the match is unambiguous, proceed.
 
 Common field concepts to map if present: name, current organization, role/title, location, sector tags, source, canonical profile URL, contact channel, relationship owner, relationship strength, mutual contacts, intro path, touchpoints, last interaction date, next follow-up date, status, background summary, risk flags, confidence, related project/company, and notes.
 
-Local people field conventions:
+People field conventions across both backends:
 
 - `类型` is a single primary relationship/category label in business usage. Do not assign multiple type labels to one person, even if the API returns the field as accepting multiple values. If the CLI requires an array shape, pass exactly one option, e.g. `["大厂"]`.
 - Put secondary context such as school, employer, previous company, role, and why the person matters into `所属组织&身份` or `情报`, not into extra `类型` options.
@@ -95,7 +99,7 @@ For high-value searches, scan enough results to see at least three consecutive r
 
 Candidate sources:
 
-- Internal: local people/project records, local Markdown documents, past meeting notes, portfolio founders, advisors, co-investors, event lists, and introductions. Legacy Feishu sources may be read during a verified migration window but never receive new management writes.
+- Internal: current people/project records, authorized documents, past meeting notes, portfolio founders, advisors, co-investors, event lists, and introductions. A legacy Feishu-primary repository continues receiving its management writes until the verified migration atomically switches to local.
 - Public professional signals: company websites, LinkedIn, X/Twitter, GitHub, HuggingFace, Product Hunt, app stores, patents, papers, talks, podcasts, newsletters, communities, demo days, accelerators, funding databases, and reputable media.
 - Momentum signals: new product launches, open-source velocity, hiring, fundraising, customer traction, technical benchmarks, community adoption, and repeated high-quality output.
 
@@ -194,4 +198,4 @@ For Base updates:
 - Run an alias/source-graph coverage check for niche technical sourcing before finalizing; do not rely only on direct keyword search over names.
 - Avoid over-weighting school/company prestige; explain why the person is relevant to the investment thesis.
 - Distinguish public facts, internal relationship notes, and investment judgment.
-- When writing to the local people repository, optimize for future retrieval: consistent tags, canonical URLs, clear next actions, and no duplicate people.
+- When writing to the current people repository, optimize for future retrieval: consistent tags, canonical URLs, clear next actions, and no duplicate people.

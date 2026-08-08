@@ -9,29 +9,58 @@ const read = (...segments) => fs.readFileSync(path.join(root, ...segments), "utf
 const router = read("skills", "domi-router", "SKILL.md");
 const investmentMgmt = read("skills", "investment-mgmt", "SKILL.md");
 const storage = read("skills", "investment-mgmt", "references", "storage-backends.md");
+const legacy = read("skills", "investment-mgmt", "references", "legacy-feishu-primary.md");
 const extension = read("skills", "investment-mgmt", "references", "feishu-knowledge-extension.md");
 const delivery = read("skills", "investment-mgmt", "references", "delivery-channels.md");
 const exporter = read("scripts", "feishu-markdown-export.cjs");
+const todo = read("skills", "todo", "SKILL.md");
+const radar = read("skills", "investment-radar", "SKILL.md");
+const radarSchema = read("skills", "investment-radar", "references", "base-schema.md");
+const projectWorkflow = read("skills", "domi-router", "references", "project-intake-workflow.md");
+const peopleWorkflow = read("skills", "domi-router", "references", "people-intake-workflow.md");
+const radarWorkflow = read("skills", "domi-router", "references", "industry-news-radar-workflow.md");
+const sourcing = read("skills", "sourcing", "SKILL.md");
 
-test("local SQLite and Markdown remain authoritative while Feishu is optional", () => {
+test("local SQLite and Markdown remain authoritative for new and migrated users", () => {
   for (const contract of [investmentMgmt, storage, delivery]) {
     assert.match(contract, /权威资料库.*本地|本地.*权威/);
   }
-  assert.match(investmentMgmt, /固定为本地 SQLite \+ Markdown/);
-  assert.match(storage, /backend` 必须为 `local`/);
+  assert.match(investmentMgmt, /新用户与完成安全导入的用户以 SQLite、Markdown 和本地附件目录为权威来源/);
+  assert.match(storage, /`backend=local`/);
   assert.match(storage, /禁止\*\*自动\*\*创建、迁移或维护项目／人脉／行业 Base 作为 domi 管理后端/);
   assert.match(storage, /明确要求搜索／读取既有 Base.*使用 `lark-base`/);
-  assert.doesNotMatch(investmentMgmt, /飞书模式：Watching List/);
+  assert.match(investmentMgmt, /`legacy_feishu_primary`/);
   assert.doesNotMatch(storage, /本地 → 飞书/);
 });
 
-test("legacy Feishu management data remains read-compatible until verified import", () => {
-  assert.match(storage, /legacyFeishuReadCompatible=true/);
-  assert.match(storage, /只读历史来源/);
+test("legacy Feishu management remains the single primary backend until verified cutover", () => {
+  for (const contract of [router, investmentMgmt, storage]) {
+    assert.match(contract, /legacy_feishu_primary/);
+  }
+  assert.match(storage, /legacyFeishuPrimary=true/);
+  assert.match(storage, /旧 Base／Wiki 继续读写/);
   assert.match(storage, /localAuthorityMigrationCompleted=true/);
-  assert.match(storage, /全部对象验证成功后/);
-  assert.match(storage, /迁移期间新任务.*只写本地/);
-  assert.match(storage, /不删除、移动或覆盖原飞书内容/);
+  assert.match(storage, /不得先切换再补数据/);
+  assert.match(legacy, /旧版飞书主库兼容契约/);
+  assert.match(legacy, /Watching List 与 Wiki/);
+  assert.match(legacy, /人脉 Base/);
+  assert.match(legacy, /行业动态 Base/);
+  assert.match(legacy, /`1\.待办事项`/);
+  assert.match(legacy, /禁止执行/);
+  assert.match(legacy, /原子切换/);
+  assert.match(legacy, /不删除、移动或覆盖原飞书内容/);
+});
+
+test("every management entry point explicitly routes legacy Feishu-primary users", () => {
+  for (const contract of [todo, radar, radarSchema, projectWorkflow, peopleWorkflow, radarWorkflow, sourcing]) {
+    assert.match(contract, /legacy_feishu_primary/);
+    assert.match(contract, /legacy-feishu-primary\.md/);
+  }
+  assert.match(todo, /不得初始化或写 `0\.待办事项\.md`/);
+  assert.match(radar, /禁止调用本地 `news get\/list\/upsert`/);
+  assert.match(projectWorkflow, /不得创建仅本地可见的第二个项目/);
+  assert.match(peopleWorkflow, /不得调用 `person upsert` 或创建本地第二主档/);
+  assert.match(sourcing, /Do not call `domi-repo\.cjs` or create a parallel local person record/);
 });
 
 test("Feishu keeps the complete capability scope without becoming the authority", () => {

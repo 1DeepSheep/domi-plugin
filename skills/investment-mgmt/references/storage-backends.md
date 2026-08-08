@@ -1,8 +1,15 @@
-# domi 本地权威资料库契约
+# domi 资料库路由契约
 
-所有 domi 用户都使用同一种权威资料库：本机 SQLite + Markdown + 工作区附件目录。飞书只作为可选知识外挂和外部文档通道，完整遵循 [feishu-knowledge-extension.md](feishu-knowledge-extension.md)；连接飞书永远不改变本契约。
+新安装、明确选择本地主库以及已完成安全导入的用户，统一以本机 SQLite +
+Markdown + 工作区附件目录为唯一权威资料库；飞书只作为可选知识外挂和外部
+文档通道，完整遵循 [feishu-knowledge-extension.md](feishu-knowledge-extension.md)。
 
-## 1. 固定路由
+唯一的过渡例外是升级前已经以飞书作为主库、且尚未完成安全导入的既有用户。
+为了避免客户端仍读飞书而插件把新数据写进空本地库，这些用户继续沿用原飞书
+主库读写链路，完整遵循 [legacy-feishu-primary.md](legacy-feishu-primary.md)，
+直到导入回读验证和原子切换全部成功。
+
+## 1. 显式路由
 
 从 `investment-mgmt/SKILL.md` 所在插件根目录解析本地网关：
 
@@ -11,19 +18,30 @@ DOMI_REPO="<plugin-root>/scripts/domi-repo.cjs"
 node "$DOMI_REPO" config get
 ```
 
-返回的 `backend` 必须为 `local`。项目、人脉、行业事件、待办事项、研究文档和材料归档均通过 `domi-repo.cjs` 或工作区中的 Markdown 完成。
+只按返回值路由，不根据飞书登录、令牌、网络错误或本地是否命中猜测：
+
+- `backend=local`：设置 `repositoryBackend=local`。项目、人脉、行业事件、
+  待办事项、研究文档和材料归档均通过 `domi-repo.cjs` 或工作区 Markdown
+  完成；本文件后续本地规则全部生效。
+- `backend=feishu` 且 `legacyFeishuPrimary=true`：设置
+  `repositoryBackend=legacy_feishu_primary`，立即读取
+  [legacy-feishu-primary.md](legacy-feishu-primary.md)。本文件后续本地命令
+  不适用，禁止调用 `domi-repo.cjs` 的任何写入／初始化命令。
+- 只有本机配置明确为 `storageBackend=feishu` 且
+  `localAuthorityMigrationCompleted != true` 才能进入兼容分支。普通飞书
+  连接、链接或动作请求不能触发该分支。
 
 强制守卫：
 
 - 禁止因飞书已连接、用户给出飞书链接、飞书授权失败或本地未命中而切换 `repositoryBackend`。
 - 禁止**自动**创建、迁移或维护项目／人脉／行业 Base 作为 domi 管理后端，不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID。用户明确要求搜索／读取既有 Base，或明确指定外部 Base 的创建／编辑动作时，按 [feishu-knowledge-extension.md](feishu-knowledge-extension.md) 使用 `lark-base`；该外部动作不改变本地权威源。
-- 禁止把普通飞书文档或 Wiki 节点当作权威项目主页、人物主页、行业事件或待办事项账本。
-- 旧配置含 `storageBackend=feishu` 且尚未完成经回读验证的本地导入时，设置 `legacyFeishuReadCompatible=true`：现有 Base／Wiki 继续作为**只读历史来源**，避免升级后资料突然不可见；所有新写入仍只进入本地。完成下述显式导入并验证后才关闭兼容读取。不得删除任何已有飞书或本地内容。
+- 本地主库分支禁止把普通飞书文档或 Wiki 节点当作权威项目主页、人物主页、行业事件或待办事项账本；旧飞书主库兼容分支只使用本机既有固定映射，不把任意飞书资源提升为主库。
+- 旧配置含 `storageBackend=feishu` 且尚未完成经回读验证的本地导入时，必须设置 `legacyFeishuPrimary=true`；旧 Base／Wiki 继续读写，所有新管理写入仍进入旧飞书主库，绝不能同时写入尚未接管的本地库。
 - 本地配置缺失时只提示用户选择工作区目录；不得让用户通过连接飞书绕过本地初始化。
 
 ### 飞书外挂与交付不是资料库后端
 
-用户明确要求飞书搜索、读取、创建或编辑时，读取 [feishu-knowledge-extension.md](feishu-knowledge-extension.md)。已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容：
+本节只适用于 `repositoryBackend=local`。用户明确要求飞书搜索、读取、创建或编辑时，读取 [feishu-knowledge-extension.md](feishu-knowledge-extension.md)。已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容：
 
 - 飞书连接继续保留 Base、Wiki、Docs、Drive、IM、Contact 的完整授权能力；本地主库只改变数据权威与默认路由，不缩减飞书连接权限。
 - Base／Wiki／Docs／Drive 可以在用户明确指定时作为外部参考搜索读取；外部创建、编辑和发布同样按明确目标执行，但不进入本地管理事务，也不反向切换后端。
@@ -35,19 +53,25 @@ node "$DOMI_REPO" config get
 
 ### 旧飞书管理库 → 本地的显式导入
 
-这只服务于已安装旧版且尚未迁移的用户，不是新的双后端模式：
+这只服务于已安装旧版且尚未迁移的用户，不是新的双后端模式。迁移期间仍按
+[legacy-feishu-primary.md](legacy-feishu-primary.md) 把旧飞书主库作为唯一写入端：
 
-1. 先初始化本地工作区与 SQLite；未初始化时继续允许只读旧飞书数据，并提示完成迁移，不能假装本地已有全部资料。
+1. 先初始化本地工作区与 SQLite；未初始化时旧飞书仍正常读写，不能假装本地已有全部资料。
 2. 从本机旧配置读取既有 Base／Wiki 映射，禁止让用户重新粘贴 Token／ID，也禁止发现不到时另建同名 Base 或 Wiki。
 3. 旧项目、人脉、行业事件与文档按业务键读取，逐条写入本地网关；同名多候选、schema 冲突、目标已有不同内容时停止对应条目并展示差异，不猜测覆盖。
 4. Wiki 文档导出为本地 Markdown 时保留标题、段落、列表、表格、代码、链接和图片；图片下载到实体目录并改写为相对引用。任何图片或 block 丢失都使该文档为失败。
-5. 每条记录和文档写后回读 SQLite、Markdown、目录与附件；全部对象验证成功后才写入 `localAuthorityMigrationCompleted=true` 并关闭 `legacyFeishuReadCompatible`。
-6. 迁移期间新任务产生的项目、人脉、行业事件、纪要和研究只写本地，不能继续写旧 Base／Wiki。
-7. 导入永远不删除、移动或覆盖原飞书内容。部分失败时保留只读兼容和迁移账本，后续幂等恢复。
+5. 每条记录和文档写后回读 SQLite、Markdown、目录与附件；最终切换前冻结新的管理写入并补齐快照后的飞书增量。
+6. 全部对象和最终增量验证成功后，App 才能在同一配置事务中写入 `localAuthorityMigrationCompleted=true` 并把 `storageBackend` 改为 `local`；不得先切换再补数据。
+7. 导入永远不删除、移动或覆盖原飞书内容。部分失败时保持旧飞书主库和迁移账本，后续幂等恢复。
 
-迁移完成前的搜索应合并“本地结果 + 旧飞书只读结果”，明确标注来源并按 canonical 实体去重；本地命中优先。迁移完成后普通内部搜索只查本地，用户仍可按 [feishu-knowledge-extension.md](feishu-knowledge-extension.md) 显式搜索飞书知识库。
+迁移完成前普通内部搜索只以旧飞书主库为权威；本地导入副本仅供迁移校验，
+不得与生产结果混合后让调用方误判最新记录。原子切换完成后普通内部搜索只查
+本地，用户仍可按 [feishu-knowledge-extension.md](feishu-knowledge-extension.md)
+显式搜索飞书知识库。
 
 ## 2. 本地资料库三层一致性
+
+本节及其后的本地命令只适用于 `repositoryBackend=local`。
 
 1. **SQLite**：项目、人脉、行业事件、文档索引和关系的结构化权威记录。
 2. **Markdown**：项目主页、人物主页、行业事件、纪要与研究文档的可读权威内容。

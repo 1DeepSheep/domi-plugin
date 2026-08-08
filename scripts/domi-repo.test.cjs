@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 const {
   defaultConfigPath,
@@ -21,14 +22,21 @@ test("config path prefers domi and falls back to the legacy application director
   assert.equal(defaultConfigPath(homeDir, () => false), current);
 });
 
-test("legacy Feishu backend remains a read-only compatibility source while writes route local", (t) => {
+test("legacy Feishu backend remains primary until a verified local import", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-local-authority-"));
   const configPath = path.join(root, "domi-plugin-config.json");
   const repositoryDir = path.join(root, "domi工作区");
   fs.writeFileSync(configPath, JSON.stringify({
     storageBackend: "feishu",
     localRepositoryDir: repositoryDir,
-    localLibraryDir: path.join(root, "legacy-materials")
+    localLibraryDir: path.join(root, "legacy-materials"),
+    projectBaseToken: "placeholder",
+    projectTableId: "placeholder",
+    peopleBaseToken: "placeholder",
+    peopleTableId: "placeholder",
+    radarBaseToken: "placeholder",
+    radarTableId: "placeholder",
+    wikiSpaceId: "placeholder"
   }));
   const previous = process.env.DOMI_CONFIG_PATH;
   process.env.DOMI_CONFIG_PATH = configPath;
@@ -39,10 +47,12 @@ test("legacy Feishu backend remains a read-only compatibility source while write
   });
 
   const config = readConfig();
-  assert.equal(config.backend, "local");
-  assert.equal(config.libraryDir, repositoryDir);
-  assert.notEqual(config.libraryDir, config.materialDir);
+  assert.equal(config.backend, "feishu");
+  assert.equal(config.libraryDir, config.materialDir);
+  assert.notEqual(config.libraryDir, repositoryDir);
+  assert.equal(config.legacyFeishuPrimary, true);
   assert.equal(config.legacyFeishuReadCompatible, true);
+  assert.equal(config.legacyFeishuConfigured, true);
 });
 
 test("verified legacy import disables Feishu read compatibility", (t) => {
@@ -60,7 +70,35 @@ test("verified legacy import disables Feishu read compatibility", (t) => {
     else process.env.DOMI_CONFIG_PATH = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
-  assert.equal(readConfig().legacyFeishuReadCompatible, false);
+  const config = readConfig();
+  assert.equal(config.backend, "local");
+  assert.equal(config.legacyFeishuPrimary, false);
+  assert.equal(config.legacyFeishuReadCompatible, false);
+});
+
+test("legacy Feishu-primary config rejects accidental local repository writes", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-feishu-primary-guard-"));
+  const configPath = path.join(root, "domi-plugin-config.json");
+  fs.writeFileSync(configPath, JSON.stringify({
+    storageBackend: "feishu",
+    localLibraryDir: path.join(root, "legacy-materials")
+  }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, "domi-repo.cjs"), "init"],
+    {
+      encoding: "utf8",
+      env: { ...process.env, DOMI_CONFIG_PATH: configPath }
+    }
+  );
+  assert.equal(result.status, 1);
+  const output = JSON.parse(result.stdout.trim());
+  assert.equal(output.ok, false);
+  assert.equal(output.code, "legacy_feishu_primary");
+  assert.match(output.error, /禁止|停止|不能调用|本地 domi-repo 命令已停止/);
+  assert.equal(fs.existsSync(path.join(root, "domi-repository.sqlite3")), false);
 });
 
 function createRepository(t) {

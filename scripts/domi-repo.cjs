@@ -87,13 +87,14 @@ function readConfig() {
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const materialDir = resolveHomePath(config.localLibraryDir || config.oneDriveProjectDir);
   const repositoryDir = resolveHomePath(config.localRepositoryDir);
-  // SQLite + Markdown is always authoritative. Keep legacy storageBackend and
-  // material paths readable for migration diagnostics, but never route normal
-  // repository operations to Feishu or treat a legacy 3.项目库 path as a root.
-  const backend = "local";
-  const libraryDir = repositoryDir;
-  const legacyFeishuReadCompatible = config.storageBackend === "feishu"
+  // New and migrated users use the local repository. Existing users whose
+  // explicit backend is still Feishu must keep the original Feishu-primary
+  // workflow until a verified import finishes; routing their writes to a new
+  // empty local database would split the App UI and the plugin.
+  const legacyFeishuPrimary = config.storageBackend === "feishu"
     && config.localAuthorityMigrationCompleted !== true;
+  const backend = legacyFeishuPrimary ? "feishu" : "local";
+  const libraryDir = legacyFeishuPrimary ? materialDir : repositoryDir;
   const databasePath = resolveHomePath(
     config.localDatabasePath || path.join(path.dirname(configPath), "domi-repository.sqlite3")
   );
@@ -104,7 +105,18 @@ function readConfig() {
     materialDir,
     repositoryDir,
     databasePath,
-    legacyFeishuReadCompatible
+    legacyFeishuPrimary,
+    legacyFeishuReadCompatible: legacyFeishuPrimary,
+    legacyFeishuConfigured: Boolean(
+      config.projectBaseToken
+      && config.projectTableId
+      && config.peopleBaseToken
+      && config.peopleTableId
+      && config.radarBaseToken
+      && config.radarTableId
+      && config.wikiSpaceId
+      && materialDir
+    )
   };
 }
 
@@ -963,10 +975,20 @@ function main() {
       localLibraryDir: config.materialDir,
       localRepositoryDir: config.repositoryDir,
       localDatabasePath: config.databasePath,
-      configured: Boolean(config.libraryDir && config.databasePath),
+      configured: config.legacyFeishuPrimary
+        ? config.legacyFeishuConfigured
+        : Boolean(config.libraryDir && config.databasePath),
+      legacyFeishuPrimary: config.legacyFeishuPrimary,
       legacyFeishuReadCompatible: config.legacyFeishuReadCompatible
     })}\n`);
     return;
+  }
+
+  if (config.legacyFeishuPrimary) {
+    throw Object.assign(
+      new Error("当前仍是旧版飞书主库模式；本地 domi-repo 命令已停止，必须按 legacy-feishu-primary 契约读写既有 Base／Wiki。完成安全导入并切换为本地主库后再运行本地命令。"),
+      { code: "legacy_feishu_primary" }
+    );
   }
 
   let repository;

@@ -28,7 +28,7 @@ event_types: 用户指定；默认项目融资、行业趋势、公司动态、�
 
 ### 1. 采用 Radar
 
-完整读取并采用插件内 `investment-radar` Skill，以及该 Skill 为当前模式要求读取的 references。把上述结构化范围交给其 `scan` 模式。
+先按 `investment-mgmt/references/storage-backends.md` 锁定后端，再完整读取并采用插件内 `investment-radar` Skill，以及该 Skill 为当前模式要求读取的 references。当 `repositoryBackend=legacy_feishu_primary` 时还必须读取 `legacy-feishu-primary.md` 的 Radar 分支；把上述结构化范围交给 `scan` 模式。
 
 本机存在用户信源注册表时，同时读取 `investment-radar/references/source-registry.md`，让已启用的新闻／RSS／重点公众号／播客源与通用检索并行发现候选。信源读取失败与其他检索隔离；公众号和播客元数据不替代原文核验。播客 quick scan 默认只发现元数据，下载、PLAUD 转写和纪要进入独立后台队列，不占用本轮 Radar 完成时间。
 
@@ -45,13 +45,13 @@ Radar 先以项目表 canonical taxonomy 为准完成分类归一。若发现真
 3. 按 `target_field` 独立计算差集和引用，再按 `kind` 分支：`new_subdomain` 才新增项目子领域、更新 canonical source 并刷新插件；`mirror_missing` 只补同一新闻字段镜像；`orphan` 只清同字段零引用项，有引用则保留并报告迁移项。任何新闻字段 PUT 都必须保留同字段其他被引用 orphan，并在 PUT 紧前重查引用。完成回读后，把含字段定位及 `changes / errors / changed_side / manual_repair / retained_orphans` 的 `taxonomy_sync` 回执交还 Radar。
 4. Radar 刷新字段并恢复事件写入。同步失败时使用较宽的既有分类或只写一级领域，并明确报告；不得写 raw 未知选项。最终包必须消解所有 `pending` 和 `pending_taxonomy`；没有安全降级分类的事件记为 `failed`。
 
-Router 不自行修改本地 SQLite schema，只负责交接和恢复。
+Router 不自行修改 SQLite 或 Base schema，只负责交接和恢复。
 
 ### 3. 归档
 
-Radar 把全部通过采纳门槛的事件写入本地行业事件库，而不是只写最终推荐项。Router 不直接操作 SQLite，也不在 Radar 之外再次创建记录。
+Radar 把全部通过采纳门槛的事件写入当前权威行业事件库，而不是只写最终推荐项。本地主库写 SQLite／Markdown，旧飞书主库写既有行业动态 Base；Router 不直接操作底层库，也不在 Radar 之外再次创建记录。
 
-如果检索完成但本地事件库不可访问、schema 不一致或写后无法验证，保留研究结果并标为“搜索完成、归档未完成”；不得声称已经写入，也不得改写飞书作为替代。
+如果检索完成但当前事件库不可访问、schema 不一致或写后无法验证，保留研究结果并标为“搜索完成、归档未完成”；不得声称已经写入，也不得切换另一后端作为替代。
 
 ### 4. 回传
 
@@ -64,7 +64,7 @@ Router 只把 `noteworthy_events` 作为主结果返回，默认最多 8 条，�
 
 重要性很高但可信度不足的事件继续归档供后续核验，默认不回传；不得混入已确认的值得关注项。
 
-最后报告扫描范围、taxonomy 的 `reused / created / deferred / partial / classification_updated`、覆盖缺口及本地 `created / updated / classification_updated / unchanged / skipped / failed` 数量。`partial` 必须列明原因和人工修复项。没有达到阈值时直说，不为凑数返回低价值信息；已采纳的低分事件仍按 Radar 契约归档。
+最后报告扫描范围、taxonomy 的 `reused / created / deferred / partial / classification_updated`、覆盖缺口、当前后端及 `created / updated / classification_updated / unchanged / skipped / failed` 数量。`partial` 必须列明原因和人工修复项。没有达到阈值时直说，不为凑数返回低价值信息；已采纳的低分事件仍按 Radar 契约归档。
 
 用户信源参与时追加聚合覆盖回执；播客只有在需要用户授权、PLAUD 恢复、主归档歧义或失败时才显示单集任务。正常后台处理不展开临时下载路径、PLAUD `fileId`、真实信源清单或内部关键词。
 

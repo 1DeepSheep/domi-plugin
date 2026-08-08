@@ -1,6 +1,6 @@
 ---
 name: domi-router
-description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音处理为文字稿和结构化纪要；把无修饰的“开始录音”默认串联为 Mac 录音、PLAUD 文字稿、ASR Notes 纪要、核心要点与跟进事项；仅在用户明确要求本地录音且不上传时执行单阶段录音；识别创业项目交流后继续投资评分，并统一归档到本地 SQLite/Markdown 资料库；也路由飞书知识外挂、行业雷达、项目研究、intake、人物、待办事项和 Outlook 约日程工作流。
+description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音处理为文字稿和结构化纪要；把无修饰的“开始录音”默认串联为 Mac 录音、PLAUD 文字稿、ASR Notes 纪要、核心要点与跟进事项；仅在用户明确要求本地录音且不上传时执行单阶段录音；识别创业项目交流后继续投资评分，并按已锁定的资料库后端归档；也路由飞书知识外挂、行业雷达、项目研究、intake、人物、待办事项和 Outlook 约日程工作流。
 ---
 
 # domi Router
@@ -9,13 +9,16 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 
 ## 资料库与交付路由守卫
 
-任何涉及项目、人脉、行业事件、待办事项、文档或资料文件的工作流，在读取内部数据或进入写入阶段前，必须先采用 `domi:investment-mgmt` 并读取 `references/storage-backends.md`。`repositoryBackend` 固定为 `local`：结构化记录写 SQLite，文档写 Markdown，附件写本地实体目录。
+任何涉及项目、人脉、行业事件、待办事项、文档或资料文件的工作流，在读取内部数据或进入写入阶段前，必须先采用 `domi:investment-mgmt` 并读取 `references/storage-backends.md`，再按 `config get` 锁定一次任务内的 `repositoryBackend`：
+
+- `local`：结构化记录写 SQLite，文档写 Markdown，附件写本地实体目录；飞书只按明确指令作外挂／发布。
+- `legacy_feishu_primary`：完整读取 `investment-mgmt/references/legacy-feishu-primary.md`，既有 Base／Wiki／本地材料继续作为唯一主库链路；禁止调用本地网关写入。
 
 - 连接飞书不创建第二套管理库，不自动迁移到 Base／Wiki，也不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID；连接本身仍保留 Base、Wiki、Docs、Drive、IM、Contact 的完整授权能力。
-- 旧版飞书管理库尚未完成回读验证的本地导入时，仅按 `legacyFeishuReadCompatible` 继续只读；新写入仍一律本地。导入完成前不能假装旧资料已全部迁移。
-- 飞书鉴权失败只影响飞书知识外挂或交付阶段，不影响本地资料库；本地错误也不得通过写飞书来绕过。
+- 旧版飞书管理库尚未完成回读验证的本地导入时设置 `legacyFeishuPrimary=true`，继续原飞书主库读写，不能把新写入分流到空本地库；导入与原子切换完成后才改走本地。
+- 本地主库的飞书鉴权失败只影响外挂／交付阶段；旧飞书主库的鉴权失败会阻塞该主库阶段，但仍不得静默切换本地。本地错误也不得通过写飞书来绕过。
 
-飞书是按需知识外挂。用户明确要求搜索／读取飞书知识库或提供飞书文档 URL 时，读取 `investment-mgmt/references/feishu-knowledge-extension.md` 并设置 `feishu_knowledge_action=search|read`。用户明确要求创建／编辑飞书文档或发送私聊时，设置 `feishu_knowledge_action=create|edit` 或兼容值 `delivery_only=feishu_doc|feishu_dm`：
+当 `repositoryBackend=local` 时，飞书是按需知识外挂。用户明确要求搜索／读取飞书知识库或提供飞书文档 URL 时，读取 `investment-mgmt/references/feishu-knowledge-extension.md` 并设置 `feishu_knowledge_action=search|read`。用户明确要求创建／编辑飞书文档或发送私聊时，设置 `feishu_knowledge_action=create|edit` 或兼容值 `delivery_only=feishu_doc|feishu_dm`：
 
 - 本地权威源保持不变；显式 Base 查询／操作采用 `lark-base`，知识空间采用 `lark-wiki`，文档采用 `lark-doc`，文件采用 `lark-drive`，收件人解析采用 `lark-contact`，私聊采用 `lark-im`。
 - 外挂和交付不要求任何项目／人脉／行业 Base 或 Wiki 固定映射，也不得据此自动创建管理 Base；用户明确指定的外部 Base／Wiki／Docs／Drive 搜索、读取、创建或编辑仍可正常执行。
@@ -39,18 +42,18 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 
 | 工作流 | 触发 | 顺序 |
 |---|---|---|
-| PLAUD 投资录音处理 | “运行 domi”“处理 PLAUD 未生成录音”“同步录音并入库” | `plaud` → 文字稿回忆提示与对话上下文确认 → `asr-notes` → 条件判断 → `investment-review` → `investment-mgmt` 本地归档 |
+| PLAUD 投资录音处理 | “运行 domi”“处理 PLAUD 未生成录音”“同步录音并入库” | `plaud` → 文字稿回忆提示与对话上下文确认 → `asr-notes` → 条件判断 → `investment-review` → `investment-mgmt` 按已锁定后端归档 |
 | Mac 本机录音即时控制 | “开始本地录音”“仅本地录音”“只录音，不上传／不整理”“停止后只保存文件”“录音状态” | `mac-recording` 单阶段即时控制；不进入 PLAUD 工作流 |
 | 快速讨论 | 无修饰的“开始录音”“现在开始录音”“启动 Mac 录音”，以及“开始快速讨论”“录下这段讨论”“停止快速讨论并整理” | `mac-recording` → `plaud` 本地音频上传与文字稿 → 上下文确认 → `asr-notes` → 完整纪要 → 核心要点与跟进事项 |
-| 行业新闻雷达 | “看一下／搜一下／更新一下 XX 领域最新的新闻／动态／融资信息” | `investment-radar` 联网检索、分类归一、原文核验、事件去重与评分 → 必要时 taxonomy 更新 → 写入本地行业事件库 → 只返回值得关注项 |
+| 行业新闻雷达 | “看一下／搜一下／更新一下 XX 领域最新的新闻／动态／融资信息” | `investment-radar` 联网检索、分类归一、原文核验、事件去重与评分 → 必要时 taxonomy 更新 → 写入当前后端行业事件库 → 只返回值得关注项 |
 | 行业信源管理 | “添加新闻源／RSS／重点公众号／播客”“管理行业动态信源” | `investment-radar sources` → 只读测试公开 URL → 保存本机私有信源配置；没有自动处理授权时到此结束 |
 | 播客纪要 | “下载这期播客并转纪要”“处理小宇宙单集”，或已授权播客自动命中 | `investment-radar podcast` 公开发现与授权 → 临时下载 → `plaud transcribe-local` → `asr-notes` 读取 PLAUD 文字稿 → `investment-mgmt` 唯一主归档与多处关联 → Radar 写入有增量的行业事件 |
-| 投资项目只读研究 | “查一下这个项目”“研究一下这个项目”“看看这个项目” | `desk-research` → 交付研究 → 主动询问是否继续评级分析并入库；用户确认后复用研究产物进入 `investment-review` → `investment-mgmt` 本地归档；用户明确要求飞书文档／私聊时再追加对应外部动作 |
-| 投资项目研究入库 | “研究并入库”“查完加入项目库”“完整处理这个项目”“跑项目 intake” | `desk-research` → `investment-review` → `investment-mgmt` 完成本地文档、材料与结构化记录 |
+| 投资项目只读研究 | “查一下这个项目”“研究一下这个项目”“看看这个项目” | `desk-research` → 交付研究 → 主动询问是否继续评级分析并入库；用户确认后复用研究产物进入 `investment-review` → `investment-mgmt` 按当前后端归档；本地主库下用户明确要求飞书文档／私聊时再追加外部动作 |
+| 投资项目研究入库 | “研究并入库”“查完加入项目库”“完整处理这个项目”“跑项目 intake” | `desk-research` → `investment-review` → `investment-mgmt` 按当前后端完成文档、材料与结构化记录 |
 | 人物只读研究 | “找一下 XX 方向的人”“研究一下这个人”“看看这位创始人”“调查一下某人” | `sourcing` 的 `discover/profile`，仅在用户明确要求背调时使用 `background-check` → 交付候选或人物画像 → 主动询问是否写入／更新本地人脉库 |
-| 人物研究入库 | “找人并入库”“查完加入人脉库”“完整处理这个人”“跑 people intake” | `sourcing` → 本地查重 → 单人唯一匹配直接 upsert；开放式或批量候选确认变更计划后写入 → 回读验证 |
-| 人脉记录更新 | “更新人脉库里的 XX”“把这次互动／跟进补到人脉库” | `sourcing relationship` → 定位唯一既有本地记录 → 增量 patch → 回读验证；找不到时询问是否切换 `intake`，不得暗中新建 |
-| 待办事项 | “同步待办事项”“我最近该做什么”“刷新 0.待办事项.md”“看待办事项看板” | `todo` → 读取本地项目、人脉、行业动态和旧账本 → 去重与排序 → 精确更新本地待办事项文档 → 回读验证 |
+| 人物研究入库 | “找人并入库”“查完加入人脉库”“完整处理这个人”“跑 people intake” | `sourcing` → 当前后端查重 → 单人唯一匹配直接 upsert；开放式或批量候选确认变更计划后写入 → 回读验证 |
+| 人脉记录更新 | “更新人脉库里的 XX”“把这次互动／跟进补到人脉库” | `sourcing relationship` → 定位当前后端唯一既有记录 → 增量 patch → 回读验证；找不到时询问是否切换 `intake`，不得暗中新建 |
+| 待办事项 | “同步待办事项”“我最近该做什么”“刷新待办事项”“看待办事项看板” | `todo` → 读取当前后端项目、人脉、行业动态和账本 → 去重与排序 → 精确更新 `0.待办事项.md` 或旧主库 `1.待办事项` → 回读验证 |
 | 飞书知识外挂 | “去飞书知识库／多维表格／云盘搜”“读取／创建／编辑这个飞书资源”“发到飞书” | `investment-mgmt` 飞书知识外挂守卫 → 按目标采用 `lark-base`／`lark-wiki`／`lark-doc`／`lark-drive`／`lark-contact`／`lark-im`；只做用户明确动作，不改变本地权威源 |
 | Outlook 约日程 | “约日程”“把这个会面放进 Outlook”“发日程”“在手机日历显示” | `schedule` → 核对账号与时区 → 检查冲突 → 写入 Outlook 默认个人日历 → 按 event ID 验证 |
 | 单次自定义串联 | 用户明确指定“X 完成后使用 Y” | 按用户顺序执行，并定义完成标准与交接产物 |
@@ -60,8 +63,8 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 执行行业新闻雷达时，必须先完整读取 [references/industry-news-radar-workflow.md](references/industry-news-radar-workflow.md)，再采用插件内 `investment-radar` Skill；Router 只负责触发、交接和回传，不复制其检索、评分或写入逻辑。
 执行行业信源管理或播客纪要时，必须先完整读取 [references/podcast-ingestion-workflow.md](references/podcast-ingestion-workflow.md)；信源配置遵循 `investment-radar/references/source-registry.md`，播客下载、PLAUD 转写和归档遵循 `investment-radar/references/podcast-ingestion.md`。
 执行投资项目只读研究或研究入库时，必须先完整读取 [references/project-intake-workflow.md](references/project-intake-workflow.md)，再按该文件的模式与阶段契约逐一采用对应 Skill；仅说“查一下”时不得推断入库授权，研究交付后的主动询问也不等于用户已授权写入。
-执行人物只读研究、人物研究入库或人脉记录更新时，必须先完整读取 [references/people-intake-workflow.md](references/people-intake-workflow.md)，再采用插件内 `sourcing` Skill；写入只采用 `domi-repo.cjs`。仅说“找一下／研究一下某人”时不得推断写入授权；开放式发现或批量写入即使已有入库授权，也必须先确认精确变更计划。
-执行待办事项时直接采用插件内 `todo` Skill；维护工作区根目录的 `0.待办事项.md`，并尊重旧账本中的忽略与完成状态。
+执行人物只读研究、人物研究入库或人脉记录更新时，必须先完整读取 [references/people-intake-workflow.md](references/people-intake-workflow.md)，再采用插件内 `sourcing` Skill；本地主库写入采用 `domi-repo.cjs`，旧飞书主库写入采用既有人脉 Base。仅说“找一下／研究一下某人”时不得推断写入授权；开放式发现或批量写入即使已有入库授权，也必须先确认精确变更计划。
+执行待办事项时直接采用插件内 `todo` Skill；本地主库维护 `0.待办事项.md`，旧飞书主库维护既有 `1.待办事项`，并尊重旧账本中的忽略与完成状态。
 执行约日程时直接采用插件内 `schedule` Skill；日历写入走 Outlook Calendar 连接器，不读取或持久化 OAuth 凭据。
 
 ### 人物与项目消歧
