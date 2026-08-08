@@ -1,18 +1,18 @@
 ---
 name: investment-mgmt
 description: |
-  管理 domi 的本地投资资料库。SQLite、Markdown 和本地附件目录永远是项目、人脉、行业事件、待办事项与研究文档的权威来源；负责分类、项目状态、评级、历史融资、最新估值、投资机构、入库时间、最后更新时间、文档索引、播客归档和数据质量。飞书作为可选知识外挂与发布平台，完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力；按用户明确指令搜索／读取外部资料，或创建／编辑／发布飞书内容，但不作为 domi 管理基础。
+  管理 domi 投资资料库。新用户与完成安全导入的用户以 SQLite、Markdown 和本地附件目录为权威来源；尚未完成安全导入的旧版飞书主库用户继续沿用既有 Base、Wiki 与本地材料读写，避免客户端与插件分裂。负责分类、项目状态、评级、历史融资、最新估值、投资机构、入库时间、最后更新时间、文档索引、播客归档和数据质量。本地主库下飞书是可选知识外挂与发布平台，完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力。
   当用户提到项目库、人脉库、行业信息库、投资资料库、领域/子领域、分类、项目评级、进展状态、融资、估值、投资机构、入库时间、交流文档、项目文件整理、播客归档、本地资料库、飞书知识库或多维表格搜索、读取飞书资源、创建、编辑或发送飞书内容时触发。
 ---
 
 # 投资管理
 
-每次运行先完整读取并执行 [references/storage-backends.md](references/storage-backends.md)。权威资料库固定为本地 SQLite + Markdown + 工作区附件目录：
+每次运行先完整读取并执行 [references/storage-backends.md](references/storage-backends.md)，再锁定一次任务内的 `repositoryBackend`：
 
-- 所有“研究并入库”“更新项目／人脉／行业动态”“同步待办事项”都写本地资料库。
-- 连接飞书不切换资料库、不自动迁移结构化表，也不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID；但连接授权仍完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力。
-- 用户明确要求飞书搜索、读取、创建或编辑时，再完整读取并执行 [references/feishu-knowledge-extension.md](references/feishu-knowledge-extension.md)。
-- 已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容，完整读取 [references/delivery-channels.md](references/delivery-channels.md)；外部副本不改变本地权威源。
+- `local`：所有“研究并入库”“更新项目／人脉／行业动态”“同步待办事项”都写本地资料库；本文件后续规则全部适用。
+- `legacy_feishu_primary`：必须完整读取并执行 [references/legacy-feishu-primary.md](references/legacy-feishu-primary.md)。既有 Base／Wiki 继续作为唯一管理主库，禁止调用本地网关写入；后续本地命令、目录和“飞书知识外挂”段仅在该 reference 没有覆盖的业务口径上适用。
+- 本地主库连接飞书不切换资料库、不自动迁移结构化表，也不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID；但连接授权仍完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力。
+- 仅在 `local` 且用户明确要求飞书搜索、读取、创建或编辑时，完整读取 [references/feishu-knowledge-extension.md](references/feishu-knowledge-extension.md)。已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容，完整读取 [references/delivery-channels.md](references/delivery-channels.md)。
 
 ## 本机配置
 
@@ -24,7 +24,8 @@ DOMI_REPO="<plugin-root>/scripts/domi-repo.cjs"
 node "$DOMI_REPO" config get
 ```
 
-只要求 `localRepositoryDir` 和 `localDatabasePath`。缺失时提示用户在 domi“设置 → 资料连接”选择本地工作区上级目录；不得改为索要飞书资料库标识。
+- `repositoryBackend=local` 只要求 `localRepositoryDir` 和 `localDatabasePath`。缺失时提示用户在 domi“设置 → 资料连接”选择本地工作区上级目录；不得改为索要飞书资料库标识。
+- `repositoryBackend=legacy_feishu_primary` 复用本机已有项目／人脉／行业 Base、Wiki 和材料目录映射；缺失时提示恢复原飞书连接配置，不要求在对话中粘贴，也不得自动初始化本地空库。
 
 ## 领域与子领域
 
@@ -90,7 +91,7 @@ node <plugin-root>/skills/investment-mgmt/scripts/financing-fields.js --json-fil
 
 ## 搜索与写入
 
-查询、去重和统计只走本地网关，不递归扫描全工作区：
+`repositoryBackend=local` 时，查询、去重和统计只走本地网关，不递归扫描全工作区；旧飞书主库分支改按 `legacy-feishu-primary.md` 查询既有 Base／Wiki：
 
 ```bash
 node "$DOMI_REPO" project search --query "公司名"
@@ -132,9 +133,9 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 - 一个单集只有一个 `canonicalDocumentId` 和一份可编辑主纪要；其他入口只保存引用。
 - 播客归档不得暗中新建项目，也不自动新增评级或改变投资状态。
 
-## 飞书知识外挂
+## 本地主库的飞书知识外挂
 
-飞书动作必须是显式的：
+本节只适用于 `repositoryBackend=local`。飞书动作必须是显式的：
 
 - “去飞书知识库／多维表格／云盘搜，或读取这个飞书链接” → `feishu_knowledge_action=search|read`；使用 `lark-base`／`lark-wiki`／`lark-doc`／`lark-drive` 只读，不改本地。
 - “把这份飞书文档保存到项目” → 读取后通过本地 `document create` 导入；没有隐式双向同步。
@@ -147,4 +148,4 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 
 ## 回执
 
-工作流完成时后台生成并验证 `storage_receipt`，其 `backend` 固定为 `local`。默认完成报告只展示成功／部分完成／失败、更新内容和必要下一步，不展示项目内部 ID、文档 URI、本机路径或逐字段审计明细。出现冲突、部分完成或用户明确要求时才展开必要回执。
+工作流完成时后台生成并验证 `storage_receipt`：本地主库为 `backend=local`，旧飞书主库兼容分支为 `backend=legacy_feishu_primary`。默认完成报告只展示成功／部分完成／失败、更新内容和必要下一步，不展示项目内部 ID、文档 URI、本机路径、Base／Wiki 标识或逐字段审计明细。出现冲突、部分完成或用户明确要求时才展开必要回执。

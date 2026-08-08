@@ -2,21 +2,27 @@
 
 ## 目标
 
-把赛道／人才池条件、人物姓名、截图、链接、公开履历、关系线索或互动记录处理成可追溯的人物研究结果，并在获得明确授权后去重写入本地人脉库。Router 直接编排各阶段；进入人物研究前必须采用并完整读取 `domi:sourcing`，写入前按 `investment-mgmt/references/storage-backends.md` 使用 `domi-repo.cjs person search/upsert`。
+把赛道／人才池条件、人物姓名、截图、链接、公开履历、关系线索或互动记录处理成可追溯的人物研究结果，并在获得明确授权后去重写入当前人脉库。Router 直接编排各阶段；进入人物研究前必须采用并完整读取 `domi:sourcing`，写入前按 `investment-mgmt/references/storage-backends.md` 锁定后端。
 
-本工作流只负责人选发现、人物画像、公开背景核验、关系路径和本地人脉库。不得自动调用 `investment-review` 给人物做 B/A/S 评级，也不自动创建项目记录；用户另行要求研究人物关联公司时，才把已核实的人物资料交给项目工作流。
+本工作流只负责人选发现、人物画像、公开背景核验、关系路径和当前人脉库。不得自动调用 `investment-review` 给人物做 B/A/S 评级，也不自动创建项目记录；用户另行要求研究人物关联公司时，才把已核实的人物资料交给项目工作流。
+
+## 资料库分支守卫
+
+- `repositoryBackend=local`：使用 `domi-repo.cjs person search/upsert`、`人物主页.md`、`研究/` 与 `纪要/`；
+- `repositoryBackend=legacy_feishu_primary`：完整读取 `investment-mgmt/references/legacy-feishu-primary.md`，按“人脉库与交流文档”分支使用既有人脉 Base 与飞书交流文档；本文件中所有本地网关写入和目录创建均跳过；
+- `research` mode 在两个分支都保持零内部写入。
 
 ## 一、模式与授权边界
 
 | Mode | 触发 | 允许动作 |
 |---|---|---|
-| `research` | “找一下 XX 方向的人／研究一下这个人／看看这位创始人／调查一下某人” | 只读发现或人物画像；交付后主动询问是否写入／更新本地人脉库，确认前不得创建或修改记录 |
-| `intake` | “找人并入库／查完加入人脉表／把这个人加入人脉库／完整处理这个人／跑 people intake” | 完成人物研究、本地查重、生成精确变更计划并 upsert；开放式或批量名单必须再次确认后才写 |
+| `research` | “找一下 XX 方向的人／研究一下这个人／看看这位创始人／调查一下某人” | 只读发现或人物画像；交付后主动询问是否写入／更新当前人脉库，确认前不得创建或修改记录 |
+| `intake` | “找人并入库／查完加入人脉表／把这个人加入人脉库／完整处理这个人／跑 people intake” | 完成人物研究、当前后端查重、生成精确变更计划并 upsert；开放式或批量名单必须再次确认后才写 |
 | `update` | “更新人脉库里的 XX／把这次互动或跟进补到人脉库／更新这个人的记录” | 只查找并增量更新唯一既有记录；找不到记录时询问是否切换 `intake`，不得自动新建 |
 
-不要因用户提到 domi、发送人物截图或只说“找一下／研究一下”就推断写入授权。`research` 完成后必须询问：“是否将以上 Included／指定人物写入或更新到本地人脉库？”只有用户明确确认后才切换到 `intake`；未回复、拒绝或表达不确定时保持零写入。
+不要因用户提到 domi、发送人物截图或只说“找一下／研究一下”就推断写入授权。`research` 完成后必须询问：“是否将以上 Included／指定人物写入或更新到当前人脉库？”只有用户明确确认后才切换到 `intake`；未回复、拒绝或表达不确定时保持零写入。
 
-确认升级后复用已完成的检索范围、候选集、人物指纹、画像、信源和事实状态，从本地查重阶段继续；除非时效事实已过期或用户改变筛选条件，不得重新做一遍 sourcing。
+确认升级后复用已完成的检索范围、候选集、人物指纹、画像、信源和事实状态，从当前后端查重阶段继续；除非时效事实已过期或用户改变筛选条件，不得重新做一遍 sourcing。
 
 `intake` 的写入授权不等于候选选择授权。满足以下任一条件时，必须先展示 `create/update/skip/ambiguous` 变更计划并等待一次明确确认：
 
@@ -34,12 +40,12 @@
 | 范围锁定 | Router + `domi:sourcing` | 赛道、角色、姓名、截图、链接或关系线索 | `search_brief`、purpose、纳入／排除条件 | 对象、用途、范围和写入模式可执行；关键范围仍歧义时先确认 |
 | 人选发现 | `domi:sourcing discover` | `search_brief` | `candidate_set`、Included／Watchlist／Excluded、`coverage_note` | 完成 source graph、alias graph 和 anti-omission 检查；每位候选有证据与状态 |
 | 人物画像 | `domi:sourcing profile`；按需 `background-check` | 候选、用户材料 | `person_fingerprint`、结构化画像、`source_ledger`、置信度、缺口 | 身份唯一；关键履历、builder 信号、当前状态和来源均有结论或明确缺口 |
-| 人脉库查重（仅 `intake/update`） | `domi-repo` | 人物指纹与画像 | `dedupe_result`、`person_id?` | 在本地 SQLite 与人物目录完成多键查重；中低置信匹配不得自动合并 |
-| 变更计划 | `domi:sourcing base-maintenance` + 本地网关 | 画像、查重结果 | 每人 `create/update/skip/ambiguous`、字段 diff | 批量／开放式／冲突计划已经用户确认；敏感或不确定字段已排除 |
-| 人脉库写入 | 本地网关 | 已授权的精确计划 | `person_id`、逐记录写入状态 | 只写 Included／用户点名人物；每条写后按 ID 回读验证 |
+| 人脉库查重（仅 `intake/update`） | 当前后端 | 人物指纹与画像 | `dedupe_result`、`person_id/record_id?` | 本地查 SQLite／人物目录；旧主库查既有人脉 Base；中低置信匹配不得自动合并 |
+| 变更计划 | `domi:sourcing base-maintenance` + 当前后端 | 画像、查重结果 | 每人 `create/update/skip/ambiguous`、字段 diff | 批量／开放式／冲突计划已经用户确认；敏感或不确定字段已排除 |
+| 人脉库写入 | 当前后端 | 已授权的精确计划 | `person_id/record_id`、逐记录写入状态 | 只写 Included／用户点名人物；每条写后按 ID 回读验证 |
 | 终检 | 上述对应 Skills | 所有阶段标识 | 一致性快照与恢复清单 | 无重复人物；字段类型、单值类型、接触事实、来源和隐私均正确 |
 
-`research` mode 只执行范围锁定、人选发现和人物画像，跳过本地查重与写入。只有用户明确询问“人脉库里有没有／我们是否认识／有什么引荐路径”时，才可在 `research` 内只读查询本地人脉库；查询不会升级写入权限。旧飞书主库尚未完成显式迁移时，可额外只读查询历史记录，但不得在飞书新增或更新人物。
+`research` mode 只执行范围锁定、人选发现和人物画像，跳过内部查重与写入。只有用户明确询问“人脉库里有没有／我们是否认识／有什么引荐路径”时，才可在 `research` 内只读查询当前人脉库；查询不会升级写入权限。
 
 若用户已经给出一个明确人物，跳过广泛 `discover`，直接执行身份核验与 `profile`。若用户要求人才池、若干候选或某赛道潜在创始人，必须先 `discover` 再为 Included 候选补齐最小可入库画像。
 
@@ -72,14 +78,17 @@
 
 ## 五、读取 schema 并查重
 
-仅在 `intake/update` 或用户明确要求只读关系查询时进入本地人脉库。使用 `person search --query` 查重、`person upsert` 写入；SQLite schema 由网关管理，不得自行改表。人物唯一结构化主档保存在 `4.人脉库/<姓名>/人物主页.md`，完整人物画像／背景研究必须通过同一次 upsert 的 `researchContentFile` 或 `researchContent` 写入 `4.人脉库/<姓名>/研究/`，不得只停留在对话回答中，也不再创建根目录下的“<姓名>-人物资料.md”。真实发生的交流、访谈或会议单独写入 `4.人脉库/<姓名>/纪要/`，并同步维护本地记录的“交流文档”URI；写后再次 search 并验证人物主页、`documents` 中的研究文档以及交流文档 URI。
+仅在 `intake/update` 或用户明确要求只读关系查询时进入当前人脉库：
+
+- 本地主库使用 `person search --query` 查重、`person upsert` 写入；SQLite schema 由网关管理，不得自行改表。人物唯一结构化主档保存在 `4.人脉库/<姓名>/人物主页.md`，完整人物画像／背景研究必须通过同一次 upsert 的 `researchContentFile` 或 `researchContent` 写入 `4.人脉库/<姓名>/研究/`，不得只停留在对话回答中，也不再创建根目录下的“<姓名>-人物资料.md”。真实交流单独写入 `纪要/` 并维护本地“交流文档”URI。
+- 旧飞书主库读取人脉 Base 实时 schema，运行系统入库时间检查，并按姓名＋组织／身份＋canonical profile 查重；人物研究与真实交流归档到既有飞书文档链路，交流链接增量写回 Base 的 `交流文档`。不得调用 `person upsert` 或创建本地第二主档。
 
 1. 优先用稳定标识查重：`open_id`、用户授权的职业邮箱、canonical professional URL、个人主页、GitHub／Hugging Face／Scholar 等；再用规范化姓名与别名 + 当前／历史组织 + 角色／时间线复核。
 2. 将结果分为：`create`、`update(person_id, high-confidence)`、`skip(no delta)`、`ambiguous`。多条命中、身份中低置信或疑似重复时不得自动 merge、覆盖或删除。
 3. `update` mode 只能定位唯一既有 `person_id`；无记录时暂停并询问是否切换 `intake`，不得把“更新”解释成“找不到就新建”。
-4. 永远按本地网关 schema 映射字段。字段缺失时，只在内容适合且安全时写入现有 Notes／Summary／`情报`；否则询问是否扩展本地 schema。不得擅自改变字段类型或用文档名替代结构化字段。
+4. 永远按当前后端实时 schema 映射字段。字段缺失时，只在内容适合且安全时写入现有 Notes／Summary／`情报`；否则询问是否扩展 schema。不得擅自改变字段类型或用文档名替代结构化字段。
 
-本地 `intake` 的写入顺序是强制的：先生成完整人物研究 Markdown 临时文件，再将其作为 `researchContentFile` 与结构化字段一起传给 `person upsert`；随后按姓名回读并确认 `人物主页.md`、`研究/<标题>.md` 与 SQLite 人物记录都存在。任一项缺失时状态为部分完成，不得声称已入库。`update` 有实质研究增量时同样写入新的可辨识研究文档，避免只覆盖结构化摘要而丢失完整成果。
+本地 `intake` 的写入顺序是强制的：先生成完整人物研究 Markdown 临时文件，再将其作为 `researchContentFile` 与结构化字段一起传给 `person upsert`；随后按姓名回读并确认 `人物主页.md`、`研究/<标题>.md` 与 SQLite 人物记录都存在。旧飞书主库的顺序以 legacy reference 为准。任一项缺失时状态为部分完成，不得声称已入库。
 
 本地人脉记录的 `类型` 只能保留一个最利于检索的主标签；即使网关接受数组也只传一个选项。学校、雇主、历史公司、身份和 why-now 放入 `所属组织&身份`、`情报` 或其他实时存在的适配字段，不得堆成多个 `类型`。
 
@@ -109,7 +118,7 @@
 |---|---|
 | 人物身份不唯一 | 暂停该人物，保留候选身份与排除证据 |
 | 关键来源不可访问 | 标记缺口，换独立来源；不编造，不阻塞其他独立候选 |
-| 本地人脉库／schema 不可读 | 交付研究产物并暂停写入；不得转而写飞书或按旧 schema 猜写 |
+| 当前人脉库／schema 不可读 | 交付研究产物并暂停写入；不得切换后端或按旧 schema 猜写 |
 | 确认前中断 | 保留计划，恢复后继续等待；不得视沉默为确认 |
 | schema 在确认后变化 | 刷新映射；若字段语义或计划有实质变化，重新确认 |
 | create／update 响应丢失 | 先按人物指纹和目标 `person_id` 搜索、回读，再决定是否重试 |
@@ -126,7 +135,7 @@
 - Included／Watchlist／Excluded 候选及原因；
 - 每位重点人物的核心证据、置信度、关系路径、待验证问题和建议下一步；
 - 可能遗漏与不可访问来源；
-- 明确说明本次零资料库写入，并询问是否将 Included／指定人物写入或更新到本地人脉库。
+- 明确说明本次零资料库写入，并询问是否将 Included／指定人物写入或更新到当前人脉库。
 
 `intake/update` mode 向用户报告：
 
