@@ -21,7 +21,7 @@ Start by identifying the mode. If the request mixes modes, run them in this orde
 | `discover` | Find potential founders or founder-like talent for a thesis, sector, geography, school/company alumni pool, or emerging technology area. | Ranked candidate list with evidence and next action. |
 | `profile` | Build a structured profile for one person. | Person profile with identity, career, projects, public signals, relationship path, and confidence. |
 | `background-check` | Verify a person's public track record before meeting, investing, hiring, referencing, or introducing. | Background memo with verified facts, open questions, and risk flags. |
-| `relationship` | Maintain investor relationship context and follow-ups. | Relationship map, intro path, touchpoint log, next follow-up, Base updates. |
+| `relationship` | Maintain investor relationship context and follow-ups. | Relationship map, intro path, touchpoint log, next follow-up, repository updates. |
 | `base-maintenance` | Query, dedupe, enrich, or update the current people repository. | Clean records, proposed field mapping, update summary. |
 
 ## Step 0: Scope and Guardrails
@@ -181,7 +181,7 @@ For a background-check memo:
 - Gaps to verify directly
 - Sources and dates
 
-For Base updates:
+For current people repository updates:
 
 - Records found
 - Duplicates or merge candidates
