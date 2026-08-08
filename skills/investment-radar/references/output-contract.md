@@ -66,7 +66,7 @@ events:
     priority_matches:
       - entity_type: project|person
         entity_name: 规范名称
-        source: priority-watchlist.md|1.1 People人际关系管理
+        source: priority-watchlist.md|local-people-index
         rating: A|S|人脉表中明确高于A的选项
         tracking_status: 项目为深度跟踪；人物保留关系进展原值
         match_type: direct|related
@@ -150,5 +150,5 @@ taxonomy_sync:
 ## 下游边界
 
 - 用户说“研究第 N 条”时，把该事件的实体指纹、Claim、来源链、冲突和待验证项交给 `desk-research`，仍保持只读。
-- 用户说“研究并入库／加入 Watching List”时，交给现有项目 intake 工作流；不得由 Radar 直接 upsert Watching List。
+- 用户说“研究并入库／加入项目库”时，交给现有项目 intake 工作流；不得由 Radar 直接 upsert 项目记录。
 - 用户只说“继续关注”时，只保留在 Radar 事件库，不等于项目入库。

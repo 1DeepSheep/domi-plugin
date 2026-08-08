@@ -1,13 +1,18 @@
 ---
 name: investment-radar
-description: 按需追踪并整理投资所需的最新行业新闻、项目融资、行业趋势、重要公司与投资机构动态；支持用户维护新闻／RSS／重点公众号／播客信源，并把获准处理的重要播客经用户自己的 PLAUD 转写为纪要。完成联网检索、原文核验、实体归一、事件级去重、重要性与可信度评分，并按用户选择写入飞书《1.2 行业信息追踪》或本地 SQLite/Markdown 行业事件库。每次 scan 从重点项目与人脉数据加载监控对象。当用户明确要求查看某个行业、赛道或主题的最新新闻、近期动态、融资、信源或播客时使用。
+description: 按需追踪并整理投资所需的最新行业新闻、项目融资、行业趋势、重要公司与投资机构动态；支持用户维护新闻／RSS／重点公众号／播客信源，并把获准处理的重要播客经用户自己的 PLAUD 转写为纪要。完成联网检索、原文核验、实体归一、事件级去重、重要性与可信度评分，并写入当前资料库的行业事件库。新用户写本地 SQLite/Markdown；尚未安全导入的旧飞书主库用户继续写既有行业动态 Base。
 ---
 
 # Investment Radar
 
-把零散新闻、公开文章和高信息量播客整理为可追溯、可评分、可检索的投资事件。一行代表一个真实世界事件，而不是一篇转载文章或一整期节目。每次扫描从本地快照加载重点项目，并只读加载重点人脉；命中时先提醒，再汇报一般行业新闻。
+把零散新闻、公开文章和高信息量播客整理为可追溯、可评分、可检索的投资事件。一行代表一个真实世界事件，而不是一篇转载文章或一整期节目。每次扫描从当前权威资料库加载重点项目与人脉；命中时先提醒，再汇报一般行业新闻。
 
-每次 `scan/quick_scan/brief` 开始前先读取 `../investment-mgmt/references/storage-backends.md` 并锁定后端。飞书错误不得触发本地回退，本地错误也不得触发飞书回退。
+每次 `scan/quick_scan/brief` 开始前先读取 `../investment-mgmt/references/storage-backends.md` 并锁定后端：
+
+- `repositoryBackend=local`：事件写本地 SQLite + Markdown；飞书知识库只有在用户明确把它列为本轮信源时才只读查询。
+- `repositoryBackend=legacy_feishu_primary`：完整读取 `../investment-mgmt/references/legacy-feishu-primary.md`，既有行业动态 Base 是唯一写入端，项目／人脉监控集来自既有 Base；禁止调用本地 `news get/list/upsert`。
+
+任一后端错误都只阻塞其对应归档阶段，不得静默切换另一后端。
 
 ## 运行模式
 
@@ -17,13 +22,13 @@ description: 按需追踪并整理投资所需的最新行业新闻、项目融�
 - **explain**：解释某条事件的评分、证据状态、投资含义或去重判断。
 - **sources**：新增、测试、启用、停用或删除用户信源；完整遵循 [references/source-registry.md](references/source-registry.md)，不得把真实信源清单写入插件或 Git。
 - **podcast**：对单个公开播客或已授权自动处理的播客信源执行发现、下载、PLAUD 转写、纪要和多处关联；完整遵循 [references/podcast-ingestion.md](references/podcast-ingestion.md)。
-- **setup**：仅在用户明确要求初始化或修复时使用。正常扫描不得创建新 Base、移动节点或修改字段。
+- **setup**：仅在用户明确要求初始化或修复当前事件库时使用。本地主库正常扫描不得创建飞书 Base；旧飞书主库只能修复本机已配置的既有目标，不得另建同名 Base。
 
 完整 `scan` 或 setup 读写前，完整读取 [references/base-schema.md](references/base-schema.md)、[references/priority-watchlist.md](references/priority-watchlist.md)、本机 `~/Library/Application Support/domi/investment-radar/priority-watchlist.md` 与 [../sourcing/SKILL.md](../sourcing/SKILL.md)，并读取 [../investment-mgmt/references/taxonomy.md](../investment-mgmt/references/taxonomy.md) 与 [../investment-mgmt/references/taxonomy-sync.md](../investment-mgmt/references/taxonomy-sync.md)。执行联网检索、评分、分类、重点对象匹配或去重前，完整读取 [references/research-and-scoring.md](references/research-and-scoring.md)。向 Router 或其他 Skill 交付结果前，读取 [references/output-contract.md](references/output-contract.md)。
 
 存在用户信源注册表，或用户要求添加／管理信源时，完整读取 [references/source-registry.md](references/source-registry.md)。候选来自播客，或用户要求下载、转写、归档播客时，同时完整读取 [references/podcast-ingestion.md](references/podcast-ingestion.md)。普通网页候选不得因为这两个 reference 存在就自动获得音频下载或 PLAUD 上传授权。
 
-`quick_scan` 不走上述全量预读。它只读取 [references/quick-scan.md](references/quick-scan.md)、[references/base-schema.md](references/base-schema.md) 中的目标表与必填字段段落、本机重点项目快照，以及 [references/research-and-scoring.md](references/research-and-scoring.md) 中的采纳门槛与事件 ID 段落。调用方若提供来自本机缓存的 A/S 人物别名索引，可直接用于候选匹配与身份消歧，但不得逐人搜索。除非写入返回 schema/选项错误，否则不得加载 taxonomy-sync；除非用户明确要求人物雷达，否则不得读取 People 表或 sourcing；除非重点项目快照缺失或损坏，否则不得查询 Watching List。
+`quick_scan` 不走上述全量预读。它只读取 [references/quick-scan.md](references/quick-scan.md)、[references/base-schema.md](references/base-schema.md) 中的当前事件字段、当前后端重点项目快照／一次性索引，以及 [references/research-and-scoring.md](references/research-and-scoring.md) 中的采纳门槛与事件 ID 段落。调用方若提供可信的 A/S 人物别名索引，可直接用于候选匹配与身份消歧，但不得逐人搜索。除非写入返回 schema 错误，否则不得加载 taxonomy 更新；除非用户明确要求人物雷达，否则不得扫描全部人脉。
 
 ## Quick Scan 快速增量流程
 
@@ -31,15 +36,15 @@ domi 首页刷新默认采用该流程，目标 6 分钟内完成：
 
 1. 使用调用方给出的 `discovery_from / checked_after / checked_through`：`discovery_from` 默认取 `max(checked_after - 48 小时, checked_through - 72 小时)`；缺失时扫描最近 72 小时。重叠窗口中水位之前发布但此前未收录的迟索引事件仍可新增；不得仅按发布时间排除。零新增时不得扩大到 7 天或 30 天。
 2. 读取本机重点项目快照，并接收调用方提供的 A/S 重点人物别名索引；两者仅用于候选事件实体匹配和消歧。人物关系进展不是准入条件。不得逐一对全部重点项目或人物发起搜索。
-3. 一次性读取整个发现窗口的既有 `事件ID / 新闻标题 / 原文链接 / 信息发布时间`，在内存建立去重索引。不得对每个候选都先单独调用 Base 查重。
+3. 一次性从当前事件库（本地 SQLite 或既有行业动态 Base）读取整个发现窗口的 `事件ID / 新闻标题 / 原文链接 / 信息发布时间`，在内存建立去重索引。不得对每个候选逐条启动完整资料库查询。
 4. 对五个一级领域并发执行宽口径检索，优先官方公告、监管披露、公司官网、论文和高质量专业媒体；同时对已启用的用户 RSS／网站／重点公众号／播客信源执行一次轻量增量读取，按 GUID／canonical URL 先去重后合入同一候选池。每轮必须执行一次中文专业科技媒体扫源，至少覆盖 `DeepTech 深科技`，并加入 `对话 / 访谈 / 专访 / 公开观点 / 趋势判断` 等信号词；该扫源不得被新闻稿候选提前挤掉。宽搜出现某个重点对象的直接事件信号后，才允许对该对象追加一次定向检索。播客只把公开元数据和观点候选送入 Radar；没有单次或 `autoProcess` 授权时不得下载音频或上传 PLAUD。
 5. 最多保留 12 个高质量候选，其中在停止扩展前为“深度访谈／公开观点等投资论点信号”保留最多 2 个候选位；达到 8 条合格新增后停止扩展搜索。打开原文核验主体、时间、事实和 URL，按 research-and-scoring 的既有规则归一、评分和生成稳定事件 ID。
-6. 用一次性索引先排除已知事件；仅对疑似同事件但键不确定的少数候选做精确 Base 查询。写入可串行，但不得重复加载 schema；失败后按事件 ID 回查一次再决定是否重试。
+6. 用一次性索引先排除已知事件；仅对疑似同事件但键不确定的少数候选按当前后端做精确查询。写入可串行，但不得重复加载 schema；失败后按事件 ID 回查一次再决定是否重试。
 7. 全部写入结束后只做一次批量回读。没有合格增量是正常完成，不得标记失败。
 8. 为每个被拒候选记录一个主原因：`duplicate / not_event / unverified / unavailable / out_of_scope`，保留规范标题或搜索线索与原因；不得只留下 added=0。
 9. 最后一行必须输出：`RADAR_RESULT {"added":N,"updated":N,"unchanged":N,"failed":N,"checked_through":"ISO-8601","discovery_from":"ISO-8601","candidates":N,"rejected":{"duplicate":N,"not_event":N,"unverified":N,"unavailable":N,"out_of_scope":N}}`。
 
-任何关键依赖不可用时采用局部降级：搜索失败只标记对应领域未覆盖；单条写入失败不阻塞其他事件；Base 整体不可用时返回“搜索完成、归档未完成”。不得为了补偿失败而回退到无界全量扫描。
+任何关键依赖不可用时采用局部降级：搜索失败只标记对应领域未覆盖；单条写入失败不阻塞其他事件；当前事件库不可用时返回“搜索完成、归档未完成”。不得为了补偿失败而切换后端或回退到无界全量扫描。
 
 ## Scan 标准流程
 
@@ -57,9 +62,9 @@ domi 首页刷新默认采用该流程，目标 6 分钟内完成：
 - 默认覆盖项目融资、行业趋势、公司动态和投资机构动态，并按领域补充政策、技术、并购、财务或人事事件。
 - 存在启用的用户信源时，把注册表覆盖作为扫描范围的一部分；已知信源增量与通用搜索并行，失败相互隔离。公众号只读取公开可访问内容；播客自动处理还必须具备单集或信源级明确授权。
 - 每次 `scan` 固定追加“重点对象覆盖”：项目侧直接读取本机 `~/Library/Application Support/domi/investment-radar/priority-watchlist.md`，只纳入评级 A 及以上且状态为“深度跟踪”的对象；人脉侧只读加载评级 A 及以上的对象，关系进展只作身份与关系背景，不作为人物雷达准入条件。`A 及以上` 按 `A / S` 处理；若字段明确存在 `A+` 等更高等级，也一并纳入，B 不纳入。
-- 普通 `scan` 禁止为了建立重点项目列表而查询《1.0 项目Watching List》项目记录。只有用户明确要求“同步／刷新重点项目名单”、快照缺失或无法解析时，才允许回源读取一次项目记录并重建名单；快照日期较旧不自动触发回源，只写入覆盖缺口。
+- 普通 `scan` 禁止为了建立重点项目列表而反复全量查询项目库。只有用户明确要求“同步／刷新重点项目名单”、快照缺失或无法解析时，才允许从当前后端一次读取项目记录并重建名单；快照日期较旧不自动触发回源，只写入覆盖缺口。
 - 指定领域扫描时，优先覆盖与该领域、子领域或用户主题相关的重点对象；全局雷达扫描覆盖全部重点对象。不得因对象数量多而静默跳过，批次受限时列出未覆盖对象。
-- 领域与子领域优先匹配 `1.0 项目Watching List` 的 canonical 词表，并按 `investment-mgmt` taxonomy 校验父子关系。用户原词保留在扫描范围中，但 Base 只写 canonical 名称。
+- 领域与子领域匹配 `investment-mgmt` 的本地 canonical 词表并校验父子关系。用户原词保留在扫描范围中，事件库只写 canonical 名称。
 - 可由现有多个子领域表达时使用 MultiSelect 组合；不要为“语音大模型”等交叉表达重复造词。
 - 发现真正的新行业分类时输出 `taxonomy_request(kind=new_subdomain)`；Radar 不直接修改 schema，交由 Router 采用 `investment-mgmt taxonomy-sync` 受控创建后再恢复写入。
 
@@ -68,17 +73,17 @@ domi 首页刷新默认采用该流程，目标 6 分钟内完成：
 ### 1. 建立批次并读取已有事件
 
 - 生成扫描批次，例如 `radar_20260714T143000+0800_ai4s`；同一次失败重试复用原批次。
-- 读取真实 Base 和字段结构，确认目标仍是 `新闻事件` 表。
-- 分别读取项目表「领域／子领域」完整选项并与新闻表对应字段比较；项目表词表为 canonical，新闻表只做镜像。项目表已有而新闻表缺失、或新闻表存在孤立选项时，也要输出带 `target_field: domain|subdomain` 的 `taxonomy_request(kind=mirror_missing|orphan)`；受影响事件先标 `pending_taxonomy`，不得绕过同步。
+- 读取当前事件库 schema，确认本地 `news_events`／Markdown 或既有行业动态 Base 可写。
+- 读取本地 canonical taxonomy 并校验领域／子领域父子关系。发现真正的新子领域时输出 `taxonomy_request(kind=new_subdomain)`；受影响事件先标 `pending_taxonomy`，不得绕过用户确认。
 - 查询该领域和时间窗内的已有事件，用于判断信息增量和避免重复。
-- Base 目标、表或必填字段不符合契约时停止写入；仍可继续只读研究，但必须标为“搜索完成、归档未完成”。
+- 本地 schema 或必填字段不符合契约时停止写入；仍可继续只读研究，但必须标为“搜索完成、归档未完成”。
 
 同时建立 `priority_watch` 只读监控集：
 
 - 从本机 `~/Library/Application Support/domi/investment-radar/priority-watchlist.md` 读取重点项目，按本次领域／子领域范围筛选后直接建立项目别名集合。该快照已按 `项目评级 ∈ {A,S}` 且 `进展状态 = 深度跟踪` 生成，普通扫描不得再次查询项目记录验证。
-- 仅在用户明确要求同步名单、快照缺失或无法解析时，从《1.0 项目Watching List》读取 `公司名称 / 项目评级 / 进展状态 / 领域 / 子领域`，重建同一筛选条件的项目列表。历史值“找投资窗口”只在读取时归一为“深度跟踪”，不得恢复该选项。同步后必须报告新旧数量和变更名称，并写入本机运行时快照；禁止把真实名单回写插件源码。
+- 仅在用户明确要求同步名单、快照缺失或无法解析时，从当前项目库读取 `公司名称 / 项目评级 / 进展状态 / 领域 / 子领域`，重建同一筛选条件的项目列表。历史值“找投资窗口”只在读取时归一为“深度跟踪”，不得恢复。同步后报告新旧数量和变更名称，并写入本机私有快照；禁止把真实名单回写插件源码。
 - 快照超过文件声明的 `review_after_days` 时继续使用，不得阻塞扫描或自动回源；在 `priority_watch.coverage_gaps` 标记 `project_snapshot_stale`，提示后续单独同步。
-- 从《1.1 People人际关系管理》读取当前 schema 后定位“评级／重要程度”字段，纳入 A 及以上人物；“进展／跟进状态”仅作关系背景和身份消歧，不得因为“待 Pitch／待联系／已联系”等关系阶段而排除。只有明确标为“不相关／不再跟进／排除”且字段语义无歧义时才排除。必须按 `sourcing` 做姓名、组织、角色和 canonical profile 去重；同名但身份不能确认时不得匹配。
+- 从当前人脉库读取“评级／重要程度”字段，纳入 A 及以上人物；“进展／跟进状态”仅作关系背景和身份消歧，不得因为“待 Pitch／待联系／已联系”等关系阶段而排除。只有明确标为“不相关／不再跟进／排除”且语义无歧义时才排除。必须按 `sourcing` 做姓名、组织、角色和 canonical profile 去重；同名但身份不能确认时不得匹配。
 - 人脉表缺少评级字段、选项语义不明确或不可访问时，不得猜测、创建字段或把全部人脉视为重点；继续项目侧扫描，并在 `priority_watch.coverage_gaps` 说明缺口。缺少关系进展字段不影响人物纳入。
 - 为每个重点对象建立中文名、英文名、品牌／公司名、历史别名、创始人／当前组织与产品名的别名集合。项目与人物指向同一公司时保留两个来源关系，但新闻只形成一个事件和一条提醒。
 - 重点对象只用于检索优先级与提醒，不修改项目或人脉的评级、状态、Notes、链接、最后更新时间或跟进记录。
@@ -116,12 +121,12 @@ domi 首页刷新默认采用该流程，目标 6 分钟内完成：
 
 ### 5. 写入当前行业事件库
 
-飞书模式写入《1.2 行业信息追踪》；本地模式用 `domi-repo.cjs news get/list/upsert` 写入 SQLite 并生成 Markdown 镜像。两种模式共用以下业务规则：
+本地主库用 `domi-repo.cjs news get/list/upsert` 写入 SQLite 并生成 Markdown 镜像；旧飞书主库按 `legacy-feishu-primary.md` 写入既有行业动态 Base。两种分支共用以下业务规则：
 
 - 所有 `accepted_events` 均写入，不只写高分事件。
 - 写入前按 `事件ID` 精确查询。匹配 0 条才创建；匹配 1 条时仅在有实质增量时使用其 `record_id` 更新；匹配多条时停止该事件写入并报告重复数据。
 - 官方确认、金额／投资方补充、事实更正、独立来源增加等属于实质增量；措辞变化和新增转载不属于。
-- Radar 自身不得随意修改 schema 或 canonical taxonomy。飞书模式的 schema 扩展路径仍是 Router 采用 `investment-mgmt taxonomy-sync`；本地模式只校验 taxonomy 父子关系，新子领域必须先获得确认并更新 canonical 词表。
+- Radar 自身不得随意修改 schema 或 canonical taxonomy；只校验 taxonomy 父子关系，新子领域必须先获得确认并更新 canonical 词表。旧飞书主库分类还须核对 Watching List 真实选项，不得自行创建近似选项。
 - 只有分类不一致的既有事件可保留原 `事件ID` 并仅修正「领域／子领域」，事件 `write_status` 与分类回执均记为 `classification_updated`；这不属于新闻事实增量。
 - 写请求超时或结果不确定时，先重新查询 `事件ID`，再判断是否重试，避免重复创建。
 - 写后回读事件 ID、标题、发布时间、链接和评分；未回读成功不得声称归档完成。
@@ -141,14 +146,14 @@ domi 首页刷新默认采用该流程，目标 6 分钟内完成：
 - 不为凑数量补低价值新闻，默认最多 8 条。
 - 重要性很高但可信度不足的事件照常归档为“传闻／待核验”，默认不向用户回传；用户明确要求查看未核实信号时才可单独读取。
 - 返回每条事件的核心事实、投资含义、重要性／可信度、建议动作、发布时间和原文链接。
-- 最后报告扫描窗口、后端、覆盖缺口，以及 `created / updated / unchanged / skipped / failed` 的简洁归档结果；详细资料库回执仅在失败、部分完成或用户明确要求时展开。
+- 最后报告扫描窗口、覆盖缺口，以及本地 `created / updated / unchanged / skipped / failed` 的简洁归档结果；详细资料库回执仅在失败、部分完成或用户明确要求时展开。
 - 没有达到阈值的事件时直说；已通过采纳门槛的低分事件仍应正常归档。
 
 ## 边界
 
-- 不自动新增或修改 `1.0 项目Watching List`，不自动评级，不刷新其最后更新时间。
-- 不自动新增或修改《1.1 People人际关系管理》，不更新人脉评级、跟进状态、最后互动或下次跟进时间。
-- taxonomy-sync 只新增或镜像字段选项，不创建、更新或评级任何 Watching List 项目记录，因此不构成项目入库。
+- 不自动新增或修改当前项目库，不自动评级，不刷新项目最后更新时间。
+- 不自动新增或修改当前人脉库，不更新人脉评级、跟进状态、最后互动或下次跟进时间。
+- taxonomy 更新只维护本地 canonical 词表，不创建、更新或评级项目记录，因此不构成项目入库。
 - 雷达发现的新公司只能标为候选；用户明确要求研究或入库后，再交给 `desk-research` 或项目 intake 工作流。
 - 新闻提到某机构不等于该机构真实投资，不得据此修改项目的「投资机构」字段。
 - 不长期保存或大段复制受版权保护的新闻正文；只保存结构化事实、短摘要和原文链接。
@@ -160,4 +165,4 @@ domi 首页刷新默认采用该流程，目标 6 分钟内完成：
 
 ## 完成标准
 
-一次扫描只有在范围明确、重点项目快照与重点人脉已加载或记录明确覆盖缺口、分类已复用或获得明确 taxonomy-sync 状态、原文已打开、事件完成重点对象匹配、去重与评分、每条事件获得明确写入或拒绝状态、成功写入项已回读验证、用户先收到重点对象动态再收到一般值得关注项与简洁归档结果后才算完成。详细回执留在后台审计信息中。无有效新闻也可以完成，但必须保留候选与拒绝原因统计；Base、重点对象读取或 taxonomy-sync 失败时只能报告“搜索完成、归档未完成”或具体部分完成状态。
+一次扫描只有在范围明确、重点项目快照与重点人脉已加载或记录明确覆盖缺口、分类已复用或获得明确 taxonomy 状态、原文已打开、事件完成重点对象匹配、去重与评分、每条事件获得明确写入或拒绝状态、成功写入项已从当前后端回读验证、用户先收到重点对象动态再收到一般值得关注项与简洁归档结果后才算完成。详细回执留在后台审计信息中。无有效新闻也可以完成，但必须保留候选与拒绝原因统计；当前事件库、重点对象读取或 taxonomy 更新失败时只能报告“搜索完成、归档未完成”或具体部分完成状态。
