@@ -1,11 +1,11 @@
 ---
 name: desk-research
-description: 一级市场（VC/PE）和二级市场（公开股票）投资的桌面研究与分析编排器。交付两类成果——「公司/标的深度画像」和「行业/赛道扫描」——采用统一研究框架并按一级/二级市场分支。整合三类信息源（公开网络搜索、专业金融数据、内部知识库），并把结构化成果落到飞书文档/多维表格。当用户提到「桌面研究」「desk research」「标的画像」「公司画像」「赛道扫描」「行业扫描」「行业研究」「投前研究」「看一个项目/股票」「研究某公司/某赛道」「一级/二级市场研究」「投资尽调（桌面）」「初筛」「投资逻辑梳理」时触发。区别于纯写作（ic-memo）、纯排版或一次性事实问答；本 skill 负责「收集→结构化分析→落库」的完整研究流程。
+description: 一级市场（VC/PE）和二级市场（公开股票）投资的桌面研究与分析编排器。交付两类成果——「公司/标的深度画像」和「行业/赛道扫描」——采用统一研究框架并按一级/二级市场分支。整合三类信息源（公开网络搜索、专业金融数据、内部知识库），按当前资料库后端归档，并可在用户明确要求时额外交付普通飞书文档或飞书私聊。当用户提到「桌面研究」「desk research」「标的画像」「公司画像」「赛道扫描」「行业扫描」「行业研究」「投前研究」「看一个项目/股票」「研究某公司/某赛道」「一级/二级市场研究」「投资尽调（桌面）」「初筛」「投资逻辑梳理」时触发。区别于纯写作（ic-memo）、纯排版或一次性事实问答；本 skill 负责「收集→结构化分析→归档／交付」的完整研究流程。
 ---
 
 # Desk Research / 投研桌面研究
 
-把零散的检索变成可复用、可追溯、可落库的投资研究成果。本 skill 是**编排器**：它定义研究框架和质量标准，调用已有能力（搜索、金融数据、内部知识库、飞书）完成工作，最终产出落到飞书文档或多维表格。
+把零散的检索变成可复用、可追溯、可落库的投资研究成果。本 skill 是**编排器**：它定义研究框架和质量标准，调用已有能力（搜索、金融数据、内部知识库）完成工作，最终归档到本地 SQLite + Markdown；只有用户明确要求时才扩展搜索飞书知识库或交付飞书文档／私聊。
 
 ## Codex 运行说明
 
@@ -59,7 +59,7 @@ description: 一级市场（VC/PE）和二级市场（公开股票）投资的�
 - 公开网络 → `web-search` / `news-search` skill（Brave）；深度多源编排用 `deep-research`。
 - 二级金融数据 → `daloopa:*`（财报/建模/可比/DCF/tearsheet）、`bigdata-com:*`（company-brief / sector-analysis / peer-comparables / valuation-snapshot / risk-assessment / variant-perception）。
 - 一级项目深挖 → `product-deep-research` skill（团队/商业模式/增长/竞品 8 模块）。
-- 内部知识库 → `investment-mgmt`（Watching List/Wiki/本地资料库）、`lark-wiki`、`lark-base`、`feishu-doc-reader`。**开工前先查内部是否已有该标的/赛道的材料，避免重复劳动。**若当前环境没有相应连接或权限，明确标注“内部资料未覆盖”后继续公开源研究，不把连接缺失误报为标的没有内部记录。
+- 内部知识库 → 默认先查本地 SQLite／Markdown。用户明确要求扩展到飞书知识库时，按 `investment-mgmt/references/feishu-knowledge-extension.md` 采用 `lark-drive`／`lark-wiki`／`lark-doc` 只读搜索。**开工前先查本地是否已有该标的／赛道材料，避免重复劳动。**飞书未连接不等于本地没有记录，也不能阻塞本地研究。
 - **一级项目创始人双语检索（standard/deep 必跑；quick 涉及团队、起源或转型判断时跑）**：对每位创始人同时检索中英文名/常用账号 × `访谈|专访|播客|演讲|融资|创业`，并加公司中文名/英文名；中国项目再定向查甲子光年、36Kr、晚点、Founder Park、暗涌、微信公众号等。standard/deep 即使官网、GitHub、论文已足够成稿，也不得跳过。原站漏索引时查标题精确匹配、转载页和公众号镜像。
 - **一级公司考古与商业动作检索（standard/deep 必跑，quick 按问题聚焦）**：追溯运营主体、旧域名、前身/兄弟产品、历次 pivot、融资与产品发布，建立统一时间线；再检查定价页、产品文档、集成目录、Marketplace、Creator/Affiliate/Referral Program、客户案例、评价平台、招聘与内容索引。目标是找出真正改变产品和增长轨迹的动作，而非只收集公司简介。
 - 技术/研究型标的产出全集（standard/deep 必做）→ **GitHub org + HuggingFace org**（带 star/下载/日期，一次拿齐产出清单+采用度+迭代节奏）；标的官网是 SPA 时用浏览器/CDP 渲染**索引页**（blog/news/benchmarks）枚举其工作，别只信静态抓取首页。quick 只取与用户问题直接相关的仓库/模型及采用度代理，并明确 stars、forks、下载量不等于客户或收入。
@@ -122,13 +122,13 @@ description: 一级市场（VC/PE）和二级市场（公开股票）投资的�
 
 发现存疑就回到第 2 步补数或在成果中明确标注不确定性，不要硬下结论。
 
-### 第 5 步：落库（飞书）
+### 第 5 步：归档与可选交付
 
-按用户偏好把成果写入飞书，方法见 [references/sources-and-output.md](references/sources-and-output.md)：
+按 `investment-mgmt` 的本地权威契约归档，方法见 [references/sources-and-output.md](references/sources-and-output.md)：
 
-- **飞书文档**（默认，长文画像/扫描报告）→ `lark-doc`：由 Markdown 创建文档。
-- **多维表格**（结构化/可对比/入管道）→ `lark-base`：写入记录；若是在管理 deal flow，优先走 `investment-mgmt` 的 Watching List。
-- 落库后回链：把文档链接回填到内部知识库相应位置（Wiki / Watching List），保持三系统一致。
+- **本地权威归档**：长文、结构化结果与项目关系通过 `investment-mgmt`／`domi-repo.cjs` 写入 SQLite + Markdown；不得为了输出飞书文档改写权威位置。
+- **只读研究**：用户没有授权入库时仍只交付研究，不因本步骤暗中创建项目记录。
+- **可选飞书交付**：用户明确要求时，读取并执行 [../investment-mgmt/references/delivery-channels.md](../investment-mgmt/references/delivery-channels.md)，追加 `delivery_only=feishu_doc` 或 `delivery_only=feishu_dm`。这不改变后端，不要求任何项目／人脉／行业 Base 或 Wiki 映射。
 
 ## 质量基线
 
@@ -143,6 +143,6 @@ description: 一级市场（VC/PE）和二级市场（公开股票）投资的�
 
 ## 与其他 skill 的衔接
 
-- 上游：`investment-mgmt`（从 Watching List 取待研究项目）。
+- 上游：`investment-mgmt`（从本地项目库取待研究项目）。
 - 下游：研究底稿 → `ic-memo`（一级 IC memo）/ `bigdata-com:investment-memo`（二级）/ `deal-negotiation`（进入谈判）。
 - 平行：`product-deep-research`（一级产品深挖）、`daloopa:*` 与 `bigdata-com:*`（二级建模与数据）。

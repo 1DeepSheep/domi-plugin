@@ -128,7 +128,7 @@ python3 "<本 Skill 目录>/scripts/transcribe_diarized.py" \
 **快速讨论交接例外**：若上游同时传入 `workflowKind=quick-discussion` 与 `outputProfile=quick_discussion`：
 
 - 输入必须使用 PLAUD 下载的 `transcriptPath`，跳过本地 Qwen 音频转写；完整沿用上游的 `discussionTopic`、`contextStatus` 与已知类型、目的和参会人。
-- 内部讨论默认使用模式 B；只有用户明确说明这是项目拜访／创始人交流时才使用模式 A。即使内容属于创业项目，本工作流也只生成纪要，不自动触发投资评级、归档或 Watching List。
+- 内部讨论默认使用模式 B；只有用户明确说明这是项目拜访／创始人交流时才使用模式 A。即使内容属于创业项目，本工作流也只生成纪要，不自动触发投资评级、归档或项目库写入。
 - 默认纪要文件名使用 `[YYYYMMDD]-[主题]-快速讨论.md`；主题从用户输入与文字稿提炼，不强行填入公司名。仍须执行适用的实体、数字、联网核验和完整性审计，不得因“快速”降低事实质量。
 - 本阶段只交付完整结构化纪要并返回 `notesPath`。跟进事项不塞回纪要正文；由上游基于最终纪要和原始文字稿生成独立的讨论摘要文件，避免与本 Skill 对会议元信息／Next Steps 的过滤规则冲突。
 
@@ -136,7 +136,7 @@ python3 "<本 Skill 目录>/scripts/transcribe_diarized.py" \
 
 - 必须同时存在 `transcriptProvider=plaud` 和 PLAUD 下载的 `transcriptPath`；只读取该文字稿，跳过本地 Qwen 音频转写。
 - 采用上游的 `episodeUrl / episodeId / podcastName / episodeTitle / publishedAt / guests / description` 作为上下文，不再询问用户“参会人”。嘉宾缺失时从公开页面和文字稿核验，无法确认则写“嘉宾待识别”。
-- 默认使用模式 B。单集主要介绍某家公司也只生成纪要和归档建议，不自动执行投资评级、项目新建或 Watching List 写入。
+- 默认使用模式 B。单集主要介绍某家公司也只生成纪要和归档建议，不自动执行投资评级或项目新建。
 - 纪要保留公开单集链接，并返回 `canonicalDocumentTitle` 与 `archiveSignals`（涉及公司、行业、嘉宾、内容占比），交由 Router／investment-mgmt 判定唯一主归档。
 - 实体存在疑义时先回看 PLAUD 文字稿上下文并联网核验；不得截取播客音频用本地 ASR 重转。确需重新听写时只能由 Router 恢复同一 PLAUD 文件或请求用户确认 PLAUD 侧重新生成。
 

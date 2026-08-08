@@ -66,7 +66,6 @@
 
 ## 写入与回读
 
-1. 飞书模式写入前动态读取字段结构；字段缺失时创建 `历史融资` Text、`最新估值` Number 和所需投资机构选项。
-2. 本地模式把相同内容写入 SQLite/Markdown 的 `financingHistory`、`latestValuationUsd100m` 和 `investors`。
-3. 同一项目的三个字段应在同一次更新中提交，并同时刷新“最后更新时间”。
-4. 写后回读并核对：历史融资最新一行、最新估值数值、投资机构集合和汇率说明互相一致。
+1. 通过本地网关把内容写入 SQLite／Markdown 的 `financingHistory`、`latestValuationUsd100m` 和 `investors`；字段缺失时停止并修复本地 schema，不得转而创建飞书 Base 字段。
+2. 同一项目的三个字段应在同一次更新中提交，并同时刷新“最后更新时间”。
+3. 写后回读并核对：历史融资最新一行、最新估值数值、投资机构集合和汇率说明互相一致。

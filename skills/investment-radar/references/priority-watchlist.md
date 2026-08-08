@@ -8,7 +8,7 @@ Radar 在运行时读取：
 ~/Library/Application Support/domi/investment-radar/priority-watchlist.md
 ```
 
-该文件由 domi 在本机初始化，或由用户明确执行“同步重点项目名单”时生成。文件不存在或无法解析时，Radar 才可以回源读取 Watching List；普通扫描不得为刷新名单而重新读取项目表。
+该文件由 domi 在本机初始化，或由用户明确执行“同步重点项目名单”时从本地 SQLite 生成。文件不存在或无法解析时，Radar 才可以回源读取本地项目库；普通扫描不得为刷新名单而重新读取全量项目表。
 
 运行时文件至少包含：
 

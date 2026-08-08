@@ -1,6 +1,6 @@
 {
   "name": "domi",
-  "version": "0.3.9+codex.20260807131844",
+  "version": "0.3.10+codex.20260808210714",
   "description": "Personal investment and work assistant for todo planning, Outlook scheduling, industry news radar, founder sourcing, people relationship management, recordings, startup intake, structured research, investment reviews, documentation, and deal-flow management.",
   "author": {
     "name": "domi"
@@ -29,7 +29,7 @@
   "interface": {
     "displayName": "domi",
     "shortDescription": "\u7f16\u6392\u5f55\u97f3\u3001\u884c\u4e1a\u96f7\u8fbe\u3001\u9879\u76ee\u4e0e\u4eba\u7269\u7814\u7a76\u5165\u5e93\u53ca\u6295\u7814\u5f52\u6863\u95ed\u73af\u3002",
-    "longDescription": "domi 汇集个人投资与工作 Skill：在飞书模式维护 1.待办事项、在本地模式维护 0.待办事项.md，并支持 Outlook 日程、录音、PLAUD 文字稿、结构化纪要、行业雷达、项目研究评级、人物发现与关系维护及资料库归档。PLAUD 由用户在本机 domi 专用 Chrome／Tabbit Profile 中登录；私人邮箱、浏览器登录数据和资料库标识不随插件发布。",
+    "longDescription": "domi 以本地 SQLite、Markdown 与附件目录管理待办、项目、人脉、行业动态和研究资料，并支持 Outlook 日程、录音、PLAUD 文字稿、结构化纪要、行业雷达、项目研究评级、人物发现与关系维护。飞书连接完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力，按明确指令作为外部参考资料库与发布平台，不替代本地管理系统。私人邮箱、浏览器登录数据和资料库标识不随插件发布。",
     "developerName": "domi",
     "category": "Productivity",
     "capabilities": [
