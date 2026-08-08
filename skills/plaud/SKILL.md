@@ -95,9 +95,9 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - `context_ready`：用户已提供具体信息，或未提供具体信息并选择继续；等待整理纪要。
 - `notes_project`：已生成创业项目/创始人交流纪要，且实体、数字、核心成员学历、履历、职级和模型工作证据审计声明已通过，等待投资评分。CLI 校验审计声明的必填字段，并把它绑定到纪要文件 SHA-256；它能阻止纪要被替换或绕过阶段，但不能替代对底层来源的人工/模型核验。
 - `notes_non_project`：非项目纪要，流程结束。
-- `reviewed`：投资快评已完成，评分/评级及学历、履历、模型归因一致性声明已绑定到快评文件哈希，等待飞书 Wiki 文档与本地资料库归档。
-- `documented`：飞书 Wiki 文档和本地资料库归档已完成，等待 Watching List 写入与链接回填。
-- `managed`：Watching List 已新增或更新，流程结束。
+- `reviewed`：投资快评已完成，评分/评级及学历、履历、模型归因一致性声明已绑定到快评文件哈希，等待写入本地 SQLite、Markdown 与项目目录。
+- `documented`：本地文档、材料目录和结构化项目记录已写后验证，等待最终闭环标记；旧队列带 Wiki token 时只作为历史资料导入线索。
+- `managed`：本地权威资料库闭环完成。飞书副本只有用户明确要求且受控导出成功时才另行记录，不影响本阶段。
 - `discussion_notes_ready`：快速讨论的完整纪要已生成，并绑定文字稿、上下文和纪要哈希；等待讨论摘要。
 - `discussion_complete`：完整纪要与讨论摘要均已生成并绑定哈希，快速讨论流程结束。
 - `generation_failed` / `generation_timeout` / `failed`：需要报告并按具体错误恢复。

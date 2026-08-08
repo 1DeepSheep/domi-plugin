@@ -1,6 +1,6 @@
-# 信息源路由 + 飞书落库
+# 信息源路由 + 资料库归档与外部交付
 
-目录：1. 信息源路由表 · 2. 中文/另类数据源 · 3. 平台访问壁垒与绕法 · 4. 检索算子工具箱 · 5. 一手源优先级 · 6. 调用要点 · 7. 取数纪律 · 8. 飞书落库（文档/多维表格）
+目录：1. 信息源路由表 · 2. 中文/另类数据源 · 3. 平台访问壁垒与绕法 · 4. 检索算子工具箱 · 5. 一手源优先级 · 6. 调用要点 · 7. 取数纪律 · 8. 资料库归档与可选飞书交付
 
 ## 1. 信息源路由表
 
@@ -18,7 +18,7 @@
 | 行业/赛道 | `product-deep-research`、搜索 | `bigdata-com:sector-analysis`、`bigdata-com:sector-playbook`、`daloopa:industry` |
 | 风险/治理 | 单点依赖/合规（搜索+判断） | `bigdata-com:risk-assessment`、`bigdata-com:moat-governance-review`、`bigdata-com:earnings-quality-screen` |
 | 产业链/上下游 | 搜索 + 访谈 | `daloopa:supply-chain` |
-| 内部已有材料 | `investment-mgmt`、`lark-wiki`、`lark-base`、`feishu-doc-reader` | 同左 |
+| 内部已有材料 | `investment-mgmt` 查本地 SQLite／Markdown；只有用户明确扩大范围时，才用 `lark-wiki`／`lark-doc` 搜索或读取飞书知识外挂 | 同左 |
 
 > bigdata-com / daloopa 是带 OAuth 的付费数据源 plugin。若调用返回未认证错误，提示用户先在终端完成对应 plugin 的授权，再继续。
 
@@ -91,7 +91,7 @@
 
 ## 6. 调用要点
 
-- **先内部后外部**：开工先用 `investment-mgmt` / `lark-wiki` 查内部是否已有该标的/赛道材料，接续而非重复。若当前环境没有连接或权限，标注“内部资料未覆盖”后继续公开源研究；连接缺失不等于内部没有记录。
+- **先内部后外部**：开工先用 `investment-mgmt` 查本地 SQLite／Markdown，接续而非重复。只有用户明确把本轮范围扩展到飞书时，才按知识外挂契约使用 `lark-drive`／`lark-wiki`／`lark-doc` 只读取数；飞书连接缺失不等于本地没有记录，也不阻塞公开源研究。
 - **网页正文抓取**：需要把某篇长文/网页转成可分析文本时，用 `baoyu-url-to-markdown`；本地 PDF/研报用 `pdf` skill 提取。
 - **SPA 站点用 CDP 渲染索引页**：标的官网/产品站多为 JS 渲染，静态抓取首页常只回一句 slogan、漏掉绝大部分内容；要枚举其产出，用 CDP 渲染 /blog、/news、/benchmarks、/changelog 等**索引页**（本次实测：UniPat 首页静态抓取几乎空，CDP 渲染 /blog+/benchmarks 才拿到全部 7 项工作）。这是「公众号必须 CDP」（§3）的通用化。
 - **深度编排**：depth=deep 时优先让 `deep-research` / `product-deep-research` 做 fan-out 检索与校验，本 skill 负责把结果套进框架并落库。子报告不是事实库：先抽取其 Claim Ledger、回溯最上游来源、折叠同源转载、解决跨模块冲突，再吸收进投资结论。
@@ -114,24 +114,33 @@
 - **就近绑定来源**：关键事实和数字在首次出现处附最上游来源、日期和证据状态；章节末信源清单按「独立核实 / 公司口径 / 可观察动作 / 二手背景 / 受限未覆盖」分类，不用一串 URL 代替逐项证据。
 - 不提供个性化买卖建议；涉及决策时只做事实与逻辑梳理。
 
-## 8. 飞书落库
+## 8. 资料库归档与可选飞书交付
 
-所有飞书操作走 **lark-cli / lark-* skill**（不要用 lark MCP 工具）。
+权威归档位置固定为本地资料库。用户明确要求的飞书搜索或交付走 **lark-cli / lark-* skill**（不要用 lark MCP 工具），但不改变本地源。
 
-### A. 飞书文档（默认：长文画像 / 扫描报告）
+### A. 权威长文归档
 
-1. 用对应 reference 的「报告结构模板」把成果整理成 Markdown；文档标题通过创建参数或 Wiki 节点标题承载，正文主要板块使用 `####`，板块内分组使用 `#####`，禁止生成或自动提升为 `#` / `##` / `###`。
-2. 调 `lark-doc` skill：由 Markdown 创建飞书文档（docs 从 markdown 创建）。
-3. 拿到文档链接后，回填到内部知识库相应位置（Wiki 节点 / Watching List 记录），保持三系统一致。
+1. 用对应 reference 的「报告结构模板」把成果整理成 Markdown；文档标题通过文件名承载，正文主要板块使用 `####`，板块内分组使用 `#####`，禁止自动提升标题层级。
+2. 通过 `investment-mgmt`／`domi-repo.cjs` 把权威研究文档写入本地项目或行业研究目录，并回读 SQLite 文档索引和 Markdown。
+3. 只读 research mode 没有入库授权时，默认只在对话中交付最终研究，不暗中创建权威记录。
 
-### B. 多维表格（结构化 / 可对比 / 入管道）
+### B. 权威结构化归档
 
 适用：sector 玩家地图、入围名单、多标的横向打分、把研究结论并入 deal flow。
 
-- 若是在管理投资管道（Watching List / 项目分类 / 进展状态 / 评级 / 跟进时间），**优先走 `investment-mgmt` skill**，它已封装该多维表格的字段 schema 与一致性规则。
-- 若是新建一张研究专用表或写入临时对比表，用 `lark-base` skill：建表/字段/写记录。
+- 若是在管理投资管道（项目分类 / 进展状态 / 评级 / 跟进时间），**优先走 `investment-mgmt` skill** 写 SQLite。
+- 结构化横评固定写入本地 SQLite，并由 domi 资料库表格视图展示；需要外发时交付 CSV／Markdown 表格副本，不创建飞书 Base。
 - 表头建议（company 横评）：标的 ｜ 市场 ｜ 一句话 ｜ 阶段/估值 ｜ 核心发现 ｜ bull ｜ bear ｜ 结论 ｜ 文档链接 ｜ 更新日期。
 
-### C. 衔接下游
+### C. 可选飞书交付（不切后端）
+
+用户明确要求“创建飞书文档”或“发到飞书私聊”时，完整读取并执行 [../../investment-mgmt/references/delivery-channels.md](../../investment-mgmt/references/delivery-channels.md)：
+
+- `delivery_only=feishu_doc` 先保留本地 Markdown 权威源，再按 `investment-mgmt/references/feishu-knowledge-extension.md` 调用受控保真导出契约创建普通飞书云文档副本；不要求 Wiki Space 或任何 Base Token／Table ID。受控服务不可用时保持未导出，不能退化为纯文本创建。
+- `delivery_only=feishu_dm` 使用 `lark-im` 向当前用户或已确认收件人发送研究摘要／指定内容。
+- 交付副本不回填权威资料库、不创建 Base/Wiki 映射。源为本地 Markdown 时必须调用受控保真 exporter；飞书未登录或权限不足时，只请求连接对应能力并从交付阶段恢复。
+- 文档／消息发送按内容哈希与目标做幂等验证，状态不确定时先查询，不直接重复创建或重发。
+
+### D. 衔接下游
 
 落库后，研究底稿可直接喂给：`ic-memo`（一级 IC memo）、`bigdata-com:investment-memo`（二级）、`deal-negotiation`（进入谈判）。

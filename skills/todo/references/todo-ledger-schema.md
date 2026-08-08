@@ -1,6 +1,6 @@
 # 待办事项账本契约
 
-当前资料库待办事项文档中 caption 为 `domi-task-board-v1` 的 JSON 代码块是客户端与技能共享的单一事实源：飞书模式使用 `1.待办事项`，本地模式使用工作区根目录的 `0.待办事项.md`。marker 沿用旧名称以兼容既有数据。
+工作区根目录 `0.待办事项.md` 中 caption 为 `domi-task-board-v1` 的 JSON 代码块，是客户端与技能共享的唯一可写事实源。marker 沿用旧名称以兼容既有数据。旧飞书 `1.待办事项`／`1.Task` 只允许在尚未完成经回读验证的显式迁移时读取，不得继续写入。
 
 ## 顶层结构
 
@@ -54,8 +54,12 @@
 
 旧账本中的细分类会在读取时映射到以上四类。`ignoredAt`、`completedAt` 只在对应状态出现。未知扩展字段可以保留，但客户端不会依赖它们。
 
+## 旧飞书账本导入
+
+以 `id` 或 `category + source.kind + source.recordId + signalKey` 幂等去重；保留所有生命周期状态和时间戳。导入后必须重新读取本地 ledger 并逐项核对，全部通过才可记录迁移完成。读取失败、字段丢失或有多个冲突账本时保持 `legacyFeishuReadCompatible=true` 并提示用户处理，不得覆盖旧文档或自行选择一个非空账本。
+
 ## 隐私
 
-账本只存待办事项所需的显示名称和飞书 record ID。不得存 Base token、Table ID、文档 URL、邮箱、电话、家庭住址、访问令牌或本机路径。
+账本只存待办所需的显示名称和本地记录 ID。不得存 Base token、Table ID、文档 URL、邮箱、电话、家庭住址、访问令牌或本机路径。
 
 `suggestedAction.prompt` 不得包含私人邮箱或文档链接。执行时由技能从本机配置解析。

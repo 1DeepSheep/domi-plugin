@@ -67,7 +67,7 @@ guests: [公开元数据可确认的嘉宾]
 ## 纪要与归档
 
 - `asr-notes` 输入必须是 PLAUD `transcriptPath`，并传 `sourceKind=podcast`、`transcriptProvider=plaud`。禁止把临时音频交给本地 Qwen。
-- 默认模式 B；播客中一家公司自述其项目，也不自动执行投资评级或 Watching List 写入。
+- 默认模式 B；播客中一家公司自述其项目，也不自动执行投资评级或项目库写入。
 - `investment-mgmt` 先查重再判断 `project_dominant / industry_dominant / ambiguous`。歧义时让用户点击选择；不得凭单集标题新建项目。
 - 只创建一份可编辑主纪要。行业事件、项目主页、人物主页和行业索引只保存同一 `canonicalDocumentId` 的引用。
 - PLAUD 文字稿可在主归档目录保存一次；临时音频按用户保留策略在上传确认后清理。

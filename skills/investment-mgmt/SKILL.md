@@ -1,408 +1,150 @@
 ---
 name: investment-mgmt
 description: |
-  管理 domi 投资资料库。资料库可由用户明确选择为飞书模式（Watching List + Wiki + 本地材料）或完全本地模式（SQLite + Markdown + 本地材料）；负责项目、人脉、行业事件、文档与资料文件的一致性。也涵盖分类统计、领域/子领域维护、新闻与项目分类词表同步、受控新增子领域、进展状态、项目评级、历史融资、最新估值、投资机构、系统入库时间、最后更新时间和数据质量。
-  当用户提到以下内容时触发：Watching List、项目分类、领域/子领域、补填子领域、分类概览、项目统计、投资项目管理、行业分类、项目领域、新闻分类对齐、taxonomy 同步、新子领域、进展状态、项目评级、历史融资、融资轮次、投前估值、投后估值、最新估值、投资机构、入库时间、创建时间、最后更新时间、更新时间、交流文档链接、播客归档、公司播客、行业播客、本地资料库、项目文件整理、三系统一致性、deal flow、投资管道、新增项目、补录项目、Wiki查漏、文档库项目检查。
+  管理 domi 的本地投资资料库。SQLite、Markdown 和本地附件目录永远是项目、人脉、行业事件、待办事项与研究文档的权威来源；负责分类、项目状态、评级、历史融资、最新估值、投资机构、入库时间、最后更新时间、文档索引、播客归档和数据质量。飞书作为可选知识外挂与发布平台，完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力；按用户明确指令搜索／读取外部资料，或创建／编辑／发布飞书内容，但不作为 domi 管理基础。
+  当用户提到项目库、人脉库、行业信息库、投资资料库、领域/子领域、分类、项目评级、进展状态、融资、估值、投资机构、入库时间、交流文档、项目文件整理、播客归档、本地资料库、飞书知识库或多维表格搜索、读取飞书资源、创建、编辑或发送飞书内容时触发。
 ---
 
 # 投资管理
 
-管理 domi 投资资料库及其分类体系。每次运行先完整读取并执行 [references/storage-backends.md](references/storage-backends.md)，根据用户明确选择的后端工作：
+每次运行先完整读取并执行 [references/storage-backends.md](references/storage-backends.md)。权威资料库固定为本地 SQLite + Markdown + 工作区附件目录：
 
-- 飞书模式：Watching List + Wiki + 本地材料目录；飞书操作必须使用 `lark-cli`，禁止使用 MCP 工具操作飞书。
-- 本地模式：SQLite + Markdown + 本地材料目录；禁止要求飞书授权或调用飞书写入。
+- 所有“研究并入库”“更新项目／人脉／行业动态”“同步待办事项”都写本地资料库。
+- 连接飞书不切换资料库、不自动迁移结构化表，也不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID；但连接授权仍完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力。
+- 用户明确要求飞书搜索、读取、创建或编辑时，再完整读取并执行 [references/feishu-knowledge-extension.md](references/feishu-knowledge-extension.md)。
+- 已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容，完整读取 [references/delivery-channels.md](references/delivery-channels.md)；外部副本不改变本地权威源。
 
-## 本机配置（必读）
+## 本机配置
 
-真实 Base、Wiki 标识和本地资料库路径属于用户运行数据，禁止写入 Skill、Git、日志或任务产物。domi 首次安装时把员工自己的配置写入 `$DOMI_CONFIG_PATH`；直接在 Codex 中使用插件时，默认读取 `~/Library/Application Support/domi/domi-plugin-config.json`。
-
-执行飞书或本地资料库操作前先加载配置：
+真实路径、飞书账号与文档标识属于用户运行数据，禁止写入 Skill、Git、研究正文、公开日志或诊断包。默认配置路径：
 
 ```bash
 export DOMI_CONFIG_PATH="${DOMI_CONFIG_PATH:-$HOME/Library/Application Support/domi/domi-plugin-config.json}"
-STORAGE_BACKEND="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.storageBackend==="local"?"local":"feishu")')"
-PROJECT_BASE_TOKEN="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.projectBaseToken||"")')"
-PROJECT_TABLE_ID="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.projectTableId||"")')"
-RADAR_BASE_TOKEN="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.radarBaseToken||"")')"
-RADAR_TABLE_ID="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.radarTableId||"")')"
-WIKI_SPACE_ID="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.wikiSpaceId||"")')"
-LOCAL_LIBRARY_DIR="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.localLibraryDir||c.oneDriveProjectDir||"")')"
-LOCAL_REPOSITORY_DIR="$(node -e 'const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.localRepositoryDir||"")')"
-LOCAL_DATABASE_PATH="$(node -e 'const path=require("node:path"); const c=require(process.env.DOMI_CONFIG_PATH); process.stdout.write(c.localDatabasePath||path.join(path.dirname(process.env.DOMI_CONFIG_PATH),"domi-repository.sqlite3"))')"
+DOMI_REPO="<plugin-root>/scripts/domi-repo.cjs"
+node "$DOMI_REPO" config get
 ```
 
-`STORAGE_BACKEND=feishu` 时 Base、Wiki 与 `LOCAL_LIBRARY_DIR` 本地材料目录为必需值；`STORAGE_BACKEND=local` 时只要求 `LOCAL_REPOSITORY_DIR` 资料库根目录和数据库路径。两个目录是独立配置，禁止把飞书模式已经指向 `3.项目库` 的材料目录直接当作本地模式根目录。任一当前后端的必需值为空时停止，并提示用户到 domi“设置 → 资料连接”补充；不得从 Skill 内容、历史对话或他人配置中猜测。
+只要求 `localRepositoryDir` 和 `localDatabasePath`。缺失时提示用户在 domi“设置 → 资料连接”选择本地工作区上级目录；不得改为索要飞书资料库标识。
 
-当用户从本地资料库切换到飞书并要求迁移文档时，必须执行 `storage-backends.md` 的“本地 → 飞书的显式迁移”契约。普通后端切换不得冒充迁移；迁移未全部验证成功时不得把当前后端改成飞书。
+## 领域与子领域
 
-## ⚠️ 关键字段名映射（必读）
+完整遵循 [references/taxonomy.md](references/taxonomy.md)：
 
-Bitable 中项目名称的字段名是 **`公司名称`**（不是"项目"）。搜索/过滤项目时必须使用此字段名，否则 API 静默返回空结果。
+- SQLite 中的 canonical 领域／子领域是客户端筛选、目录与行业动态共用词表。
+- 项目 `domain` 为唯一主领域，`subdomains` 可多个；目录只使用第一个主子领域。
+- 用户可明确命名新子领域。先做别名归一，确认不能由现有单个或多个子领域表达，再展示“新增子领域 + 所属领域 + 受影响记录”让用户确认。
+- 一级领域新增或移动子领域必须确认，不能由模型静默创建。
+- 无法分类的项目进入 `3.项目库/_未分类/<项目名称>/`，不得凭文件名猜测。
 
-| 字段 | 类型 | 搜索用字段名 |
-|------|------|------------|
-| 公司名称 | Text (1) | `公司名称` |
-| Notes | Text (1) | `Notes` |
-| 领域 | SingleSelect (3) | `领域` |
-| 子领域 | MultiSelect (4) | `子领域` |
-| 进展状态 | SingleSelect (3) | `进展状态` |
-| 项目评级 | SingleSelect (3) | `项目评级` |
-| 城市 | MultiSelect (4) | `城市` |
-| 入库时间 | CreatedTime (`created_at`，系统只读) | `入库时间` |
-| 最后更新时间 | DateTime (5) | `最后更新时间` |
-| 链接 | Text (1) | `链接` |
-| 是否完成后续融资 | SingleSelect (3) | `是否完成后续融资` |
-| 历史融资 | Text (1) | `历史融资` |
-| 最新估值 | Number (2) | `最新估值` |
-| 投资机构 | MultiSelect (4) | `投资机构` |
+分类优先级：
 
-需要 field ID 时用字段列表端点按字段名动态解析，不得把真实 field ID 固化到插件。
+1. 项目已有结构化字段与用户明确判断；
+2. 项目主页、研究与纪要中的主营产品／技术路线证据；
+3. 高置信度关键词；
+4. `_未分类` 并进入分类审核，不创建近似标签。
 
-**进展状态选项**：待交流 → 已交流（一次性会面无后续）→ 深度跟踪（持续关注、反复跟进或寻找投资机会）→ 已投 / Miss / 放弃
+## 项目业务字段
 
-**禁用历史值**：`找投资窗口` 已于 2026-07-12 合并入 `深度跟踪`。后续任何新增、更新、导入、清洗或字段 schema 操作均不得写入、恢复或重新创建 `找投资窗口`；遇到外部数据含该值时，直接归一化为 `深度跟踪`。
-**最后更新时间**：记录项目在 Watching List 中最近一次重要内容变更的操作日期，统一使用 Asia/Shanghai 当天日期。旧字段名 `最近跟进时间` 已于 2026-07-12 原地重命名，后续不得再使用旧字段名。
-**入库时间**：项目表与人脉表统一使用名为 `入库时间` 的 Base 系统创建时间字段（`created_at`）。它由飞书按记录首次创建时刻自动维护，历史记录无需回填；任何 create/update payload 都不得包含该字段，也不得用 `最后更新时间`、研究日期或迁移日期覆盖它。
+| 字段 | 语义 |
+|---|---|
+| name | 公司／项目 canonical 名称 |
+| notes | 结构化摘要，不放过程性回执 |
+| domain / subdomains | 主领域与多个子领域 |
+| status | 待交流、已交流、深度跟踪、已投、Miss、放弃 |
+| rating | S / A / B / C；待交流项目可为空 |
+| cities | 可多选城市 |
+| financingHistory | 历史及进行中融资表格 |
+| latestValuationUsd100m | 最新已完成轮次投后估值，单位亿美元 |
+| investors | 仅记录有融资／股东证据的关注机构 |
+| intakeTime | SQLite 首次创建时间，系统只读 |
+| lastUpdatedAt | 最近一次实质业务内容更新的 Asia/Shanghai 日期 |
 
-飞书模式首次读写项目或人脉、执行待办事项扫描、或发现任一表缺少该字段时，先运行幂等迁移并回读验证：
+`找投资窗口` 是禁用历史值，导入时归一为 `深度跟踪`，不得恢复。评级不使用 5 分的投资快评纪律由 `investment-review` 维护；本 Skill 只保存其最终评级。
+
+### 融资字段
+
+读取或写入融资字段前，完整读取 [references/financing-fields.md](references/financing-fields.md)。优先用：
 
 ```bash
-node <plugin-root>/skills/investment-mgmt/scripts/ensure-intake-time-fields.js ensure
+node <plugin-root>/skills/investment-mgmt/scripts/financing-fields.js --json-file /tmp/project-financing.json
 ```
 
-脚本只从本机 `DOMI_CONFIG_PATH` 读取目标表，缺失才创建；同名字段不是 `created_at` 时停止，禁止创建近似字段或转换已有列。
+- `financingHistory` 同时记录已完成和进行中融资，包含时间、轮次、投前估值、股东出资、投后估值／状态。
+- `latestValuationUsd100m` 只取最新已完成轮次；进行中融资不冒充已完成估值。
+- 人民币换算必须有汇率日期与来源；冲突或无法计算时保留缺口，不猜测。
+- `investors` 只关注红杉、高瓴、IDG、锦秋、Monolith／励思资本、五源、蓝驰、经纬；机构仅被提及、属于创始人履历、竞品股东、在谈或 drop 均不算本项目投资。
 
-**融资字段**：每次读取、创建或更新历史融资、最新估值或投资机构前，完整读取并执行 [references/financing-fields.md](references/financing-fields.md)。`最新估值` 只写“亿美元”数值，`历史融资` 保留原币种、轮次与股东出资细节。
+## 进展状态与数据质量
 
-## 领域 → 子领域 映射
+| 状态 | 是否通常有评级 | 是否通常有交流文档 |
+|---|---:|---:|
+| 待交流 | 否 | 否 |
+| 已交流 | 是 | 是 |
+| 深度跟踪 | 是 | 是 |
+| 已投 / Miss / 放弃 | 是 | 是 |
 
-详见 [references/taxonomy.md](references/taxonomy.md)。
+- 状态为空的新项目默认 `待交流`。
+- 非待交流但无评级／无纪要，列入数据质量提示，不自动捏造。
+- `lastUpdatedAt` 只在公司、团队、产品、技术、客户、融资、收入、评级、状态、分类或重要材料发生实质变化时刷新；排版、错别字和机械迁移不刷新。
+- `intakeTime` 由 SQLite 首次创建自动生成，不允许外部 payload 覆盖。
 
-- `1.0 项目Watching List` 的「领域／子领域」选项名是运行时 canonical 词表。
-- `taxonomy.md` 维护 canonical 名称的父子关系和别名；两者必须一致。
-- 《1.2 行业信息追踪》只镜像项目表的 canonical 选项名。两张 Base 的 option ID 不要求相同。
-- 新闻可跨多个领域，因此新闻表「领域」保持 MultiSelect；项目表「领域」保持 SingleSelect。
-- 新子领域或两表词表漂移时，完整读取并执行 [references/taxonomy-sync.md](references/taxonomy-sync.md)。
+## 搜索与写入
 
-## 功能
-
-### 1. 分类概览
-
-获取全部记录，统计领域/子领域分布和缺失率：
+查询、去重和统计只走本地网关，不递归扫描全工作区：
 
 ```bash
-lark-cli api POST "/open-apis/bitable/v1/apps/${PROJECT_BASE_TOKEN}/tables/${PROJECT_TABLE_ID}/records/search" \
-  --data '{"field_names":["公司名称","领域","子领域"]}' \
-  --page-all --page-size 500
+node "$DOMI_REPO" project search --query "公司名"
+node "$DOMI_REPO" person search --query "姓名"
+node "$DOMI_REPO" news list --from <ISO时间> --to <ISO时间>
 ```
 
-注意：`--page-all` 输出会在 JSON 前插入 `[page N] fetching...` 行，需用 `grep -v '^\[page'` 过滤后再解析。
-
-输出：总数 / 有子领域数 / 缺失数 / 按领域分组覆盖率 / 子领域 TOP 20。
-
-### 2. 搜索项目
-
-**⚠️ 搜索字段名必须用 `公司名称`（不是"项目"）**，否则 API 返回空但不报错。
+创建或更新时，先按中英文名、主体名、产品名查重；多匹配先让用户确认。把 JSON 写到权限受控的临时文件，再调用：
 
 ```bash
-# 按公司名搜索项目
-lark-cli api POST "/open-apis/bitable/v1/apps/${PROJECT_BASE_TOKEN}/tables/${PROJECT_TABLE_ID}/records/search" \
-  --data '{"filter":{"conjunction":"and","conditions":[{"field_name":"公司名称","operator":"contains","value":["关键词"]}]},"page_size":20}'
+node "$DOMI_REPO" project upsert --json-file /tmp/project.json
+node "$DOMI_REPO" person upsert --json-file /tmp/person.json
+node "$DOMI_REPO" news upsert --json-file /tmp/event.json
+node "$DOMI_REPO" document create --json-file /tmp/document.json
 ```
 
-公司名称字段返回格式为 `[{"text":"xxx","type":"text"}]`（富文本），提取文本时需遍历数组拼接 `.text`。
+### 新项目闭环
 
-### 3. 修改项目分类
-
-先搜索定位 record_id，再批量更新：
-
-```bash
-# 批量更新（最多500条/批）
-TODAY_MS="$(($(date +%s) * 1000))"
-lark-cli api POST "/open-apis/bitable/v1/apps/${PROJECT_BASE_TOKEN}/tables/${PROJECT_TABLE_ID}/records/batch_update" \
-  --data "{\"records\":[{\"record_id\":\"recXXX\",\"fields\":{\"子领域\":[\"选项名\"],\"最后更新时间\":${TODAY_MS}}}]}" \
-  --as user
-```
-
-子领域值必须是 [references/taxonomy.md](references/taxonomy.md) 中的合法选项名。
-
-### 4. 补填子领域
-
-对缺失子领域的项目，按优先级尝试三种匹配：
-
-**Step 1 — Wiki 搜索匹配**（最可靠，Wiki 文件夹位置是权威来源）
-
-```bash
-lark-cli api POST "/open-apis/wiki/v1/nodes/search" \
-  --data "{\"query\":\"公司名\",\"space_id\":\"${WIKI_SPACE_ID}\"}" \
-  --params '{"page_size":5}' --as user
-
-lark-cli api GET "/open-apis/wiki/v2/spaces/get_node" \
-  --params '{"token":"NODE_TOKEN"}' --as user
-```
-
-向上遍历 parent_node_token（最多5层），用 folder→子领域 映射表（见 [references/folder_map.md](references/folder_map.md)）确定子领域。
-
-**Step 2 — 关键词规则匹配**
-
-根据领域 + Notes + 公司名称中的关键词推断。规则见 [references/keyword_rules.md](references/keyword_rules.md)。
-
-**Step 3 — 人工确认**
-
-无法自动分类的项目列表呈现给用户（表格形式，含公司名、Notes摘要），由用户指定子领域后批量更新。
-
-### 5. 三系统一致性管理
-
-飞书模式的三个系统分类必须保持一致：
-- **Watching List**（飞书 Bitable）：领域 + 子领域字段
-- **Wiki 知识库**（飞书 Wiki）：文档所在的行业文件夹层级
-- **本地资料库**：`3.项目库/领域/子领域/项目文件` 三层目录结构
-
-**权威性排序**：Wiki > Watching List > 本地资料库（Wiki 分类为主）
-
-本地模式不使用上述权威性排序，改为：SQLite 结构化记录 > Markdown frontmatter > 文件夹路径。写入统一走 `domi-repo.cjs`，由网关同步维护三层；禁止绕过 SQLite 仅创建文件夹或仅写 Markdown。
-
-**本地资料库路径**：使用 `$LOCAL_LIBRARY_DIR`，目录可以位于本机磁盘、iCloud Drive、OneDrive、Dropbox 或已挂载团队盘；不得在 Skill 中固定用户名、同步服务商或目录结构。
-
-**本地资料库项目匹配规则**（严禁仅凭名称猜测分类）：
-
-1. **优先匹配 WL 记录**：提取文件/文件夹中的公司名，搜索 WL（用 `公司名称` 字段），以 WL 的领域/子领域为准
-2. **次选 Wiki 搜索**：WL 无匹配时搜索 Wiki 知识库，根据文档所在文件夹确定分类
-3. **关键词规则**：仅在 WL 和 Wiki 都无匹配时使用，且仅对高置信度关键词（如"碳化硅"→半导体材料）
-4. **兜底放入 `_未分类`**：无法确定的项目放入 `领域/_未分类/`，**绝不凭文件名猜测**
-
-**公司名提取模式**：
-- `NDA（...）- COMPANY revised.doc` → 提取 `COMPANY`
-- `COMPANY BP.pdf` / `COMPANY 商业计划书.pdf` → 提取 `COMPANY`
-- `20260422-COMPANY交流.pdf` → 提取 `COMPANY`
-- `COMPANY路演slides.pdf` → 提取 `COMPANY`
-
-#### 新项目闭环（强制）
-
-当调用来自 domi 的 PLAUD `project` 工作流或项目 `intake`，且查重后确认是新项目时，先按后端执行对应闭环，不得把资料库归档降级成“后续项”。
-
-**飞书模式**按以下顺序执行：
-
-1. **先确定分类**：使用 taxonomy 选择领域和子领域；用 `folder_map.md` 确定 Wiki 与本地资料库的主子领域目录。多子领域只选一个主目录，Watching List 可保留多个子领域。
-2. **Wiki 查重**：按中文名、英文名、产品名和主体名搜索。唯一项目文档则复用并更新；无匹配才创建；多匹配先让用户确认。
-3. **创建或更新文档**：采用 `lark-doc` 与 `lark-wiki`，将结构化纪要／研究底稿和投资快评写入目标行业文件夹。更新既有文档时保留用户已有的独立章节、图片、附件与产品更新。若项目先完成桌面研究、后发生真实交流，整合后的阅读顺序必须是“交流纪要在前、桌面研究作为独立 Part 在后”，不得把新纪要追加在研究末尾或交叉改写两块内容；需要 Part 标签时使用顶格加粗行，不占用纪要与研究正文的 `####` / `#####` 标题层级。
-4. **归档本地资料库**：在 `<项目库>/<领域>/<主子领域>/<YYYYMMDD-公司名-主题-评级>/` 保存源材料、文字稿、纪要、快评和本次处理形成的其他项目文件；相同文件跳过，不同版本并存且名称可辨识。
-5. **写后验证**：fetch 文档核心章节和评分；存在先研究后交流的材料时，额外核验交流纪要位于桌面研究之前；读取 Wiki 节点父链；列出项目目录文件并核验关键二进制文件大小或校验和。
-6. **最后写 Watching List**：同一次 upsert 写入业务字段、Wiki URL 和最后更新时间；写后按公司名反查验证。
-
-新项目缺少 Wiki URL 或本地资料库项目路径时，流程仍是未完成状态，不得写成 `managed`。已有项目的增量更新也应复用现有文档和目录，禁止重复创建近似名称的节点或文件夹。
-
-**本地模式**按以下顺序执行：
-
-1. 用 taxonomy 确定领域、多个子领域与唯一主子领域。
-2. `project search` 按中英文名、产品名和主体名查重；多匹配时先让用户确认。
+1. 用 taxonomy 确定领域、多个子领域和唯一主子领域；不确定则进入 `_未分类`。
+2. `project search` 按名称变体查重；多匹配先确认。
 3. 把纪要、研究或快评整理为 Markdown 临时文件。
-4. 用 `project upsert` 同一次写入 SQLite 并创建／更新 `项目主页.md` 与稳定项目目录。
-5. 用 `document create` 把纪要／研究文档写入项目目录；原始二进制材料归档到 `原始材料/`，同文件跳过、不同版本并存。
-6. 用 `project get` 与 `workspace verify` 回读，核验 SQLite、Markdown 与目录；三项均通过才返回 `managed`。
+4. `project upsert` 同一次写入 SQLite 并创建／更新稳定的 `项目主页.md` 与项目目录。
+5. `document create` 把纪要／研究写入项目目录；BP、录音和附件进入 `原始材料/`，同文件跳过、不同版本并存。
+6. `project get` 与 `workspace verify` 回读；SQLite、Markdown 与目录都通过才返回 `managed`。
 
-#### 播客纪要唯一主归档（强制）
+已有项目必须复用同一稳定目录和文档索引，禁止每个任务创建新的工作区域或 `outputs/` 作为最终项目归档。
 
-来自 `investment-radar`／`domi-router` 的播客纪要必须先读取并遵循 `../investment-radar/references/podcast-ingestion.md`。归档只处理 PLAUD 文字稿生成的纪要；收到播客音频时不得调用本地 ASR。
+### 人物闭环
 
-1. 先按 episode provider、episode ID、公开 URL 和 `canonicalDocumentId` 查重。已有主文档则更新或复用，禁止复制一份近似标题 Markdown。
-2. `project_dominant`：创始人／高管是主嘉宾，或超过一半实质内容围绕同一家公司时，按中英文名、品牌名、产品名和主体名匹配唯一既有项目。主纪要进入该项目的 `纪要/`；行业动态、行业研究和人物索引只保存引用。不能唯一匹配时返回候选让用户确认，不得暗中新建项目。
-3. `industry_dominant`：讨论多家公司、技术路线、市场格局、政策或行业方法论，单一公司只是案例时，主纪要进入 `1.行业研究/<领域>/<主子领域>/播客/<节目名称>/`；被提及项目的“相关文档”只保存同一主文档引用。
-4. `ambiguous`：让用户选择“归入行业研究／归入候选项目／暂不归档”。“同时关联”仍只能建立一个主文档；其他入口只记录 `canonicalDocumentId + URI + 摘要`。
-5. 完整 PLAUD 文字稿在主归档目录保存一次，行业事件只保存短摘要、原始 episode URL 和主文档引用。临时音频不是归档必需品，按用户保留策略处理。
-6. 本地模式必须通过 SQLite 文档索引登记主文档和所有引用，并回读确认路径唯一。飞书模式的项目主文档按既有 Wiki 项目文档规则维护；行业主文档需要用户已明确配置可写的行业研究根目录，缺失时保留私有队列并请求配置，禁止猜测目录或把正文塞入新闻 Base。
-7. 播客归档本身不构成新项目入库、投资评级或 Watching List 写入授权；只有用户另外明确要求时才进入项目 intake。
+唯一结构化主档为 `4.人脉库/<姓名>/人物主页.md`；完整人物研究进入 `研究/`，真实交流进入 `纪要/`。可在同一次 `person upsert` 中提交 `researchTitle` 和 `researchContentFile`。写后再次 `person search`，确认人物主页和文档索引均存在，否则不能报告“已入库”。
 
-### 6. 创建或补填 Wiki 文档链接
+### 播客唯一主归档
 
-WL 的「链接」字段应关联项目在 Wiki 知识库中的项目文档页面 URL。新增项目必须先按上节创建或更新 Wiki 文档并填入链接；批量检查历史记录时，对已有 Wiki 文档补链接，对确实缺文档的非“待交流”项目创建文档或报告为未完成，不能只把缺失留作后续项。
+先完整遵循 `../investment-radar/references/podcast-ingestion.md`。播客音频只交给 PLAUD 转写，不调用本地 ASR。
 
-**查找未链接项目**：
+- `project_dominant`：主纪要进入唯一项目的 `纪要/`。
+- `industry_dominant`：进入 `1.行业研究/<领域>/<主子领域>/播客/<节目名称>/`。
+- `ambiguous`：让用户在行业、候选项目或暂不归档中选择。
+- 一个单集只有一个 `canonicalDocumentId` 和一份可编辑主纪要；其他入口只保存引用。
+- 播客归档不得暗中新建项目，也不自动新增评级或改变投资状态。
 
-```bash
-# 1. 获取所有 WL 记录的 公司名称 和 链接
-lark-cli api POST ".../records/search" \
-  --data '{"field_names":["公司名称","链接"],"page_size":500}' \
-  --page-all --as user | grep -v '^\[page'
+## 飞书知识外挂
 
-# 2. 对链接为空的项目，逐个搜索 Wiki
-lark-cli api POST "/open-apis/wiki/v1/nodes/search" \
-  --data "{\"query\":\"公司名\",\"space_id\":\"${WIKI_SPACE_ID}\"}" \
-  --params '{"page_size":5}' --as user
-```
+飞书动作必须是显式的：
 
-**选取正确文档**：若搜索返回多个文档，选取**顶层文档**（即父节点为行业文件夹的那个），其余文档通常是其子页面。通过 `get_node` 检查 `parent_node_token` 判断层级。
+- “去飞书知识库／多维表格／云盘搜，或读取这个飞书链接” → `feishu_knowledge_action=search|read`；使用 `lark-base`／`lark-wiki`／`lark-doc`／`lark-drive` 只读，不改本地。
+- “把这份飞书文档保存到项目” → 读取后通过本地 `document create` 导入；没有隐式双向同步。
+- “把本地 Markdown 搬到飞书” → `feishu_knowledge_action=create|edit` 或兼容 `delivery_only=feishu_doc`；执行完整 Markdown／图片保真校验。
+- “在这个 Base／Wiki／云盘目标中创建或编辑” → 使用对应 `lark-base`／`lark-wiki`／`lark-drive`，只处理用户唯一指定的外部目标，不把它登记为管理后端。
+- “发到飞书私聊／发给某人” → 先用 `lark-contact` 唯一解析收件人，再用 `lark-im` 发送用户指定内容。
+- “入库／归档”本身只写本地，不创建飞书文档。
 
-**⚠️ Wiki 搜索关键词处理（避免漏匹配与误匹配）**：
+任何飞书读写前完整采用 `lark-shared` 和实际使用的 `lark-base`、`lark-wiki`、`lark-doc`、`lark-drive`、`lark-im`、`lark-contact` Skill。连接权限完整不代表自动调用；飞书失败不影响已完成的本地归档，也不触发资料库切换。
 
-- **截断会漏匹配**：公司名含全角括号 `（）`、斜杠 `/`、空格时，直接拿前 N 字搜索会把噪声带进查询词，导致 Wiki 搜索返回无关结果。例：`心言集团（测测）` 取前6字得 `心言集团（测`，括号污染查询，漏掉文档。**正确做法**：在 `（()/\s&，,` 处切分，用干净的基础名（如 `心言集团`）搜索。
-- **放宽匹配会误命中**：对短名/英文/人名项目过度放宽会大量误匹配。常见陷阱：
-  - 命中通用词：`项目`、`Studio`、`AI`、`数据`、`Link`、`Mate`、`One` 等短 token
-  - 命中**聚合型综述文档**：一篇文档提到几十个公司（如 `行业项目日志`、`AI产品系列分享`、`XX OnePager`、`投资团队科技内部版`），不是单一项目的交流纪要
-  - 同名巧合：人名项目（如 `李超 项目`）命中另一个同名人的无关文档
-- **匹配判定规则**：要求公司的**独特 token**（≥2字、非通用词）完整出现在文档标题中；排除聚合型综述文档；人名项目需结合领域上下文验证（如 AI 项目不应匹配「炒菜机器人」文档）。
-- **批量补链接前必须人工复核**：模糊匹配结果先列给用户确认，不可盲目批量写入。
+## 回执
 
-**写入链接**：链接字段写入 Wiki 页面 URL（纯文本字符串），不支持富文本 link 对象格式：
-
-```bash
-TODAY_MS="$(($(date +%s) * 1000))"
-lark-cli api POST ".../records/batch_update" \
-  --data "{\"records\":[{\"record_id\":\"recXXX\",\"fields\":{\"链接\":\"WIKI_NODE_URL\",\"最后更新时间\":${TODAY_MS}}}]}" \
-  --as user
-```
-
-**注意**：链接字段是 Text 类型，直接传 URL 字符串即可。传富文本数组 `[{"type":"text","text":"...","link":"..."}]` 会导致 lark-cli 静默失败。
-
-### 7. 业务管理逻辑（核心规则）
-
-WL 是 deal flow 管道工具，各字段有明确语义和填写规则：
-
-**进展状态管道层次**（反映与项目的接触深度）：
-
-| 状态 | 含义 | 是否应有评级 | 是否应有交流文档链接 |
-|------|------|------------|-------------------|
-| 待交流 | 初步发现，尚未首次交流 | 否（没聊过无法判断） | 否（没建文档正常） |
-| 已交流 | 一次性会面后无后续 | 是 | 应有 |
-| 深度跟踪 | 持续关注、反复跟进，含明确想投并寻找入场机会 | 是 | 应有 |
-| 已投 / Miss / 放弃 | 终态 | 是 | 应有 |
-
-**派生规则（数据质量检查用）**：
-- **进展状态为空 → 默认「待交流」**（一般是新录入未跟进）
-- **外部或历史数据为「找投资窗口」→ 一律写成「深度跟踪」**，不得恢复旧选项
-- **「待交流」项目无评级、无链接是正常的**（没聊过自然无法判断、无文档）
-- **异常①：非「待交流」却无评级** → 需列出请用户确认（交流过应能打分）
-- **异常②：非「待交流」却无链接** → 去 Wiki 查交流文档补链接（见功能6）；由 domi 新项目／项目交流工作流产生的记录必须创建文档并回填，其他历史记录可列出供用户决定补档或降级为「待交流」
-- **评级口径**：S/A 为重点，B 为一般跟踪，C 偏负面。`跟踪观察`（旧值）按评级拆分：A→深度跟踪，B→已交流
-
-**最后更新时间（重要）**：记录“该项目资料在系统中何时发生实质更新”，不是最近一次与项目方交流的日期。每次执行下列事件时，将字段覆盖为操作当天的 Asia/Shanghai 日期，并与业务字段放在同一个 create/update 请求中：
-
-- 首次把项目新增或补录到 Watching List；
-- 新增或实质补充公司、创始人、团队、产品、技术、客户、融资、收入、盈利、估值、竞争格局等核心信息；
-- 创建项目飞书纪要、桌面研究、OnePager 等文档，或对项目文档作实质性更新，并新增/更新「链接」；
-- 更新项目评级、进展状态、投资机构、领域/子领域等会改变投资判断或管道管理的字段；
-- 新增交流纪要、BP、财务数据、客户验证或其他重要材料。
-
-以下情况不刷新：纯排版、美化、错别字修正、链接格式修复、重复数据清理、无信息增量的机械迁移。若同一任务包含多次重要写入，只需写当天日期一次。历史补录也使用实际补录当天，不再从文档标题日期推导；文档标题日期只作为历史事件信息保留在文档或 Notes 中。
-
-**融资字段同步**：从项目材料抽取各轮融资事实后，优先使用确定性脚本生成三个字段：
-
-```bash
-node skills/investment-mgmt/scripts/financing-fields.js --json-file /tmp/project-financing.json
-```
-
-输入和输出契约见 [references/financing-fields.md](references/financing-fields.md)。同一轮有冲突口径、投后估值不可计算或人民币汇率缺少日期/来源时，不得猜测；保留缺口并停止写入 `最新估值`。
-
-**投资机构标注**：`投资机构` 只关注红杉、高瓴、IDG、锦秋、Monolith/励思资本、五源、蓝驰、经纬。必须读融资历史、股东名单或 Cap Table 判断该机构是否**真实投资了本项目**，严禁“提及即标注”。常见误判：
-- 文档里机构是**竞品/对标公司**的投资方（"a16z 和红杉投资了 Howie"）
-- 机构是创始人/团队成员的**履历背景**（"曾任 IDG 资本合伙人"、"红杉招的第一个应届生"）
-- 机构只是**在谈/看过/被 drop**（"高瓴聊过"、"被红杉 drop 了"、"不是红杉高瓴"）
-- 投资方是 LP 语境（"有 LP 投给红杉"）
-
-判定为投资的依据：融资/股东/轮次上下文中明确列为出资方（"天使轮：红杉…"、"IDG 独家投了 X 万"、"老股东红杉、IDG、高瓴 pro rata"）。`高瓴 IC 过了` 只代表在谈，不得算已投资。历史融资完整时按证据集合增减；历史融资不完整时只允许新增，不自动删除旧值。**批量写入前列证据给用户复核**。
-
-### 8. 字段 schema 操作
-
-项目表和人脉表的系统型 `入库时间` 统一由上述幂等脚本维护。若项目表缺少融资字段，先读取真实字段结构，再创建：
-
-```bash
-lark-cli base +field-create \
-  --base-token "$PROJECT_BASE_TOKEN" --table-id "$PROJECT_TABLE_ID" \
-  --json '{"type":"text","name":"历史融资","description":"按时间从晚到早记录融资时间、轮次、投前估值、股东出资情况和投后估值；保留原币种。"}' \
-  --as user
-
-lark-cli base +field-create \
-  --base-token "$PROJECT_BASE_TOKEN" --table-id "$PROJECT_TABLE_ID" \
-  --json '{"type":"number","name":"最新估值","description":"最新已完成轮次的投后估值，单位：亿美元。人民币按有日期和来源的 USD/CNY 汇率换算。","style":{"type":"plain","precision":3,"percentage":false,"thousands_separator":true}}' \
-  --as user
-```
-
-创建后必须重新 `+field-list` 回读字段名、类型和描述。不得创建同名近似字段；已存在但类型不一致时停止并报告，不要直接转换已有列。
-
-`入库时间` 是系统只读字段，不属于业务字段 diff，也不能出现在 `+record-upsert`、批量创建或批量更新的 JSON 中。写后回读时应读取它，用于验证新增记录已由 Base 自动登记首次入库时刻。
-
-PUT 更新字段可用于**重命名字段**、**增删选项**（已验证可用）：
-
-```bash
-# 重命名字段（如 时间→最后更新时间）：先按字段名解析 FIELD_ID，再保留 type 和 property
-lark-cli api PUT ".../fields/${FIELD_ID}" \
-  --data '{"field_name":"最后更新时间","type":5,"property":{"date_formatter":"yyyy/MM/dd","auto_fill":false}}' --as user
-
-# 增删/重命名 SingleSelect/MultiSelect 选项：PUT 传完整 options 列表（保留所有要留的选项的 id+name+color）
-lark-cli api PUT ".../fields/${FIELD_ID}" \
-  --data '{"field_name":"领域","type":3,"property":{"options":[{"name":"AI","id":"optMDWs3MO","color":0}, ...]}}' --as user
-# 删选项=从列表中移除该项；加选项=列表中加 {"name":"新选项","color":N}（不带id）
-# 重命名选项=保留该选项的 id，只改 name（如 NAS→NAS／私有云）——引用该选项的所有记录会自动跟随更新，无需逐条改
-```
-
-**注意事项**：
-- **取选项必须用 fields 列表端点**：`GET .../fields`（遍历找目标字段），单字段端点 `GET .../fields/{id}` 会返回 404
-- PUT body **必须含 `type`**，否则静默失败
-- **重命名选项首选"保留 id 改 name"**：引用自动跟随，最安全。仅当要彻底移除某选项时才删（删前确认无记录引用，查引用用 search filter `领域 is 选项名`）
-- **删/改一个选项必须传全量 options**：漏掉的选项会被删除，已有记录引用会丢失
-- 重命名跨三系统的行业（一级 领域 或 二级 子领域）流程：① WL 选项原地改 name（引用自动跟随）；② Wiki 对应节点标题 `wiki/v2/spaces/{space}/nodes/{node}/update_title`；③ 本地资料库两处文件夹 `3.项目库/`（项目库）和 `1.行业研究/`（研究库）；④ 更新 skill 的 taxonomy/folder_map/keyword_rules
-- **本地资料库文件夹名含斜杠用全角「／」(U+FF0F)**：半角 `/` 是路径分隔符无法做文件夹名。三系统字符串须完全一致（skill 匹配需要），故 WL 选项名 / Wiki 节点 / 文件夹统一用全角「／」
-- 连续 PUT 间 `sleep 3-5` 避免限流
-- 修改前备份：`lark-cli api GET .../records --page-all > /tmp/backup.json`
-- lark-cli `--page-all` 输出混有 `[page N]` 前缀行，管道处理先 `grep -v '^\[page'`
-- 批量更新最多 500 条/批
-
-#### 8.1 新闻与项目分类同步
-
-当 `investment-radar` 返回任一 `taxonomy_request`（新子领域、镜像缺失或孤立选项），或直接发现项目表与新闻表选项不一致时，采用 `taxonomy-sync` 模式，完整遵循 [references/taxonomy-sync.md](references/taxonomy-sync.md)：
-
-1. 只允许自动新增二级「子领域」；一级「领域」缺失时停止并请求用户确认。
-2. 先做别名归一和组合表达判断；能由现有子领域或多个 MultiSelect 表达时不得新建。
-3. 真新子领域先写项目表，再镜像新闻表；两侧回读一致后，Radar 才能写使用该分类的新闻。
-4. 字段更新必须保留全部既有选项；每次 PUT 前重读并比较选项指纹，防止覆盖并发修改。
-5. 只修正新闻分类时保留原 `事件ID`，仅更新「领域／子领域」，状态记为 `classification_updated`。
-6. schema 同步不得创建、更新或评级 Watching List 项目记录，也不得刷新任何项目的「最后更新时间」。
-
-### 9. 新增项目记录
-
-**⚠️ lark-cli 的 `api POST .../records` 和 `.../records/batch_create` 创建记录会静默失败（rc=1，无输出）**。必须用专用命令 `base +record-upsert`：
-
-```bash
-TODAY_MS="$(($(date +%s) * 1000))"
-lark-cli base +record-upsert \
-  --base-token "$PROJECT_BASE_TOKEN" --table-id "$PROJECT_TABLE_ID" \
-  --json "{\"公司名称\":\"公司名\",\"领域\":\"AI\",\"子领域\":[\"AI数据\"],\"进展状态\":\"已交流\",\"链接\":\"https://...\",\"最后更新时间\":${TODAY_MS},\"项目评级\":\"B\",\"历史融资\":\"| 融资时间 | ...\",\"最新估值\":1.25,\"投资机构\":[\"红杉\",\"IDG\"]}" \
-  --as user
-```
-
-- **文本字段（公司名称/链接）用纯字符串**，不是富文本数组 `[{"type":"text",...}]`（upsert 会报 "Cell value does not match any supported shape"）
-- **不要写 `入库时间`**；Base 会在创建新记录时自动生成，更新既有记录时保持原值
-- SingleSelect 用字符串，MultiSelect 用字符串数组，Number 用具体数字，DateTime 用毫秒时间戳
-- 历史融资、最新估值和投资机构必须来自同一份融资证据；融资材料不足时可不写这三个可选字段，但不得以 `0` 或空数组冒充已核实
-- 来自 domi `project`／`intake` 的新项目，`链接`为必填且必须经过 Wiki 父节点验证；同时必须已有写后验证的本地资料库项目目录。缺任一项时停止创建记录并恢复归档阶段。
-- 无 `--record-id` = 创建；带 `--record-id` = 更新
-- 返回 `{"ok":true,"data":{"created":true}}` 表示成功
-- 删记录：`base +record-delete --record-id recXXX`
-
-### 10. 反向一致性检查（Wiki → WL 查漏）
-
-找出"Wiki 有交流文档、但 WL 中没有"的项目（防止交流过的项目漏入管道）：
-
-**Step 1 — 遍历 Wiki 行业文件夹树**
-
-```bash
-# 列子节点（分页，递归遍历各行业顶层节点的子树，最多5层）
-lark-cli api GET "/open-apis/wiki/v2/spaces/${WIKI_SPACE_ID}/nodes" \
-  --params '{"parent_node_token":"NODE","page_size":50}' --as user
-```
-
-逐个行业顶层节点（AI行业/半导体行业/EV行业…）递归收集所有节点标题。
-
-**Step 2 — 识别项目交流文档并提取公司名**
-
-- 项目文档特征：标题以日期前缀 `YYYYMMDD-公司名-赛道-阶段` 开头，或带 `【S/A/B/C】` 前缀
-- 排除**子行业文件夹**（名含"行业/主题/基础层/应用层/项目集"等）和**非项目文档**（访谈/专家/想法/精修稿/Cheat Sheet/OnePager/日报/综述）
-- 公司名 = 去掉日期前缀后、第一个 `-` 之前的段
-
-**Step 3 — 与 WL 比对 + 必须 API 复核**
-
-- 提取的公司名去 WL 比对（归一化：去空格/括号内容/标点后做包含匹配）
-- **找到的"缺失"项必须逐个用 `公司名称 contains` 直接搜 WL 复核**，排除因名称变体导致的假缺失（如 `千帜科技/UNICUS` 实为 WL 的 `千帜科技/方仔`）
-- 早年（2021-2023）系统扫行业留下的研究文档大量不在 WL 属正常，按行业/年份分层呈现，**聚焦近 1-2 年**
-
-**Step 4 — 批量补录**（见功能9）：领域/子领域（按文档赛道，见 folder_map）、进展状态=已交流、链接=Wiki URL、最后更新时间=实际补录当天、项目评级=标题后缀。标题日期只作为历史交流日期保留，不写入「最后更新时间」。**补录清单先列给用户逐项确认**。
+工作流完成时后台生成并验证 `storage_receipt`，其 `backend` 固定为 `local`。默认完成报告只展示成功／部分完成／失败、更新内容和必要下一步，不展示项目内部 ID、文档 URI、本机路径或逐字段审计明细。出现冲突、部分完成或用户明确要求时才展开必要回执。
