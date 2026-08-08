@@ -57,10 +57,13 @@
 先调用插件的单篇保真预检／交接契约，而不是自行拼接低保真文档写入：
 
 ```bash
+JOB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/domi-feishu-export.XXXXXX")"
+trap 'rm -rf "$JOB_DIR"' EXIT
+
 # 预检并生成权限为 0600 的本机审计清单；它不是写入授权
 node <plugin-root>/scripts/feishu-markdown-export.cjs prepare \
   --source "/absolute/path/report.md" \
-  --out "/private/temp/feishu-export-job.json"
+  --out "$JOB_DIR/feishu-export-job.json"
 
 # 返回 App host handoff；该命令本身不会写飞书
 node <plugin-root>/scripts/feishu-markdown-export.cjs export \
@@ -69,8 +72,10 @@ node <plugin-root>/scripts/feishu-markdown-export.cjs export \
 # App host 完成写入并在内部回读 Markdown 后，使用本命令做结构校验
 node <plugin-root>/scripts/feishu-markdown-export.cjs verify \
   --source "/absolute/path/report.md" \
-  --fetched "/private/temp/fetched-from-feishu.md"
+  --fetched "$JOB_DIR/fetched-from-feishu.md"
 ```
+
+任务结束后必须删除该临时目录；上面的 `trap` 会在 shell 退出时自动清理。
 
 `export` 始终返回 `FEISHU_EXPORT_HANDOFF_REQUIRED` 和 `status=not_exported`；它只表示预检完成并请求 App host 接管，绝不直接写飞书。预检清单本身不是写入授权，Host 不得信任其中的 action／target 作为授权来源。App host 只能依据用户本轮原始明确指令和当前打开的本地 Markdown 路径重新确定操作并执行 `domi.feishuMarkdownExporter.v1`，不向 Codex 暴露 socket、token、run grant 或任何飞书写凭证。Host 完成写入与回读后只把结构化回执返回模型。**绝不能退化为简单 `docs +create`**，因为那会漏掉本地相对图片或结构。`prepare` 和 `export` 都不代表已创建飞书文档。
 
