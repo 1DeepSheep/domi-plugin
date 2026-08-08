@@ -82,17 +82,30 @@ function resolveHomePath(value) {
 function readConfig() {
   const configPath = resolveHomePath(process.env.DOMI_CONFIG_PATH || defaultConfigPath());
   if (!fs.existsSync(configPath)) {
-    throw new Error("没有找到 domi 资料库配置。请先在 domi“设置 → 资料连接”中选择资料库模式。");
+    throw new Error("没有找到 domi 本地资料库配置。请先在 domi“设置 → 资料连接”中选择本地工作区目录。");
   }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const backend = config.storageBackend === "local" ? "local" : "feishu";
   const materialDir = resolveHomePath(config.localLibraryDir || config.oneDriveProjectDir);
   const repositoryDir = resolveHomePath(config.localRepositoryDir);
-  const libraryDir = backend === "local" ? repositoryDir : materialDir;
+  // SQLite + Markdown is always authoritative. Keep legacy storageBackend and
+  // material paths readable for migration diagnostics, but never route normal
+  // repository operations to Feishu or treat a legacy 3.项目库 path as a root.
+  const backend = "local";
+  const libraryDir = repositoryDir;
+  const legacyFeishuReadCompatible = config.storageBackend === "feishu"
+    && config.localAuthorityMigrationCompleted !== true;
   const databasePath = resolveHomePath(
     config.localDatabasePath || path.join(path.dirname(configPath), "domi-repository.sqlite3")
   );
-  return { configPath, backend, libraryDir, materialDir, repositoryDir, databasePath };
+  return {
+    configPath,
+    backend,
+    libraryDir,
+    materialDir,
+    repositoryDir,
+    databasePath,
+    legacyFeishuReadCompatible
+  };
 }
 
 function safeSegment(value, fallback = "_未分类") {
@@ -210,16 +223,10 @@ function readPayload(flags) {
 
 class DomiRepository {
   constructor(config) {
-    if (config.backend !== "local") {
-      throw Object.assign(
-        new Error("当前工作区使用飞书资料库；飞书模式继续按 investment-mgmt 的 lark-cli 契约执行。"),
-        { code: "backend_not_local" }
-      );
-    }
     if (!config.libraryDir || !config.databasePath) {
       throw new Error("本地资料库缺少目录或数据库路径。请回到 domi 设置重新保存资料连接。");
     }
-    this.config = config;
+    this.config = { ...config, backend: "local" };
     this.libraryDir = path.resolve(config.libraryDir);
     this.databasePath = path.resolve(config.databasePath);
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
@@ -956,9 +963,8 @@ function main() {
       localLibraryDir: config.materialDir,
       localRepositoryDir: config.repositoryDir,
       localDatabasePath: config.databasePath,
-      configured: config.backend === "local"
-        ? Boolean(config.libraryDir && config.databasePath)
-        : true
+      configured: Boolean(config.libraryDir && config.databasePath),
+      legacyFeishuReadCompatible: config.legacyFeishuReadCompatible
     })}\n`);
     return;
   }

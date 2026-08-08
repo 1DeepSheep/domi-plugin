@@ -7,7 +7,8 @@ const {
   defaultConfigPath,
   DomiRepository,
   ensureLocalWorkspace,
-  LOCAL_TODO_DOCUMENT_NAME
+  LOCAL_TODO_DOCUMENT_NAME,
+  readConfig
 } = require("./domi-repo.cjs");
 
 test("config path prefers domi and falls back to the legacy application directory", () => {
@@ -18,6 +19,48 @@ test("config path prefers domi and falls back to the legacy application director
   assert.equal(defaultConfigPath(homeDir, (candidate) => candidate === current), current);
   assert.equal(defaultConfigPath(homeDir, (candidate) => candidate === legacy), legacy);
   assert.equal(defaultConfigPath(homeDir, () => false), current);
+});
+
+test("legacy Feishu backend remains a read-only compatibility source while writes route local", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-local-authority-"));
+  const configPath = path.join(root, "domi-plugin-config.json");
+  const repositoryDir = path.join(root, "domi工作区");
+  fs.writeFileSync(configPath, JSON.stringify({
+    storageBackend: "feishu",
+    localRepositoryDir: repositoryDir,
+    localLibraryDir: path.join(root, "legacy-materials")
+  }));
+  const previous = process.env.DOMI_CONFIG_PATH;
+  process.env.DOMI_CONFIG_PATH = configPath;
+  t.after(() => {
+    if (previous === undefined) delete process.env.DOMI_CONFIG_PATH;
+    else process.env.DOMI_CONFIG_PATH = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const config = readConfig();
+  assert.equal(config.backend, "local");
+  assert.equal(config.libraryDir, repositoryDir);
+  assert.notEqual(config.libraryDir, config.materialDir);
+  assert.equal(config.legacyFeishuReadCompatible, true);
+});
+
+test("verified legacy import disables Feishu read compatibility", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-local-migrated-"));
+  const configPath = path.join(root, "domi-plugin-config.json");
+  fs.writeFileSync(configPath, JSON.stringify({
+    storageBackend: "feishu",
+    localAuthorityMigrationCompleted: true,
+    localRepositoryDir: path.join(root, "domi工作区")
+  }));
+  const previous = process.env.DOMI_CONFIG_PATH;
+  process.env.DOMI_CONFIG_PATH = configPath;
+  t.after(() => {
+    if (previous === undefined) delete process.env.DOMI_CONFIG_PATH;
+    else process.env.DOMI_CONFIG_PATH = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  assert.equal(readConfig().legacyFeishuReadCompatible, false);
 });
 
 function createRepository(t) {

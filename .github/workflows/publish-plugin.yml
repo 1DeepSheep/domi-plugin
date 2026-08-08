@@ -51,6 +51,8 @@ jobs:
           node scripts/schedule-skill.test.cjs
           node scripts/todo-ledger.test.cjs
           node scripts/podcast-workflow.test.cjs
+          node scripts/delivery-channels.test.cjs
+          node scripts/feishu-markdown-export.test.cjs
           node scripts/build-plugin-release.test.cjs
           NODE_PATH="$PWD/skills/plaud/vendor/plaud-cli/node_modules" node --test skills/plaud/scripts/plaud.test.js
 
@@ -78,7 +80,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --commit "$GITHUB_SHA" \
             --tag "${{ steps.metadata.outputs.tag }}" \
-            --min-client-version "0.6.0"
+            --min-client-version "0.6.22"
 
       - name: Publish immutable plugin release
         env:
