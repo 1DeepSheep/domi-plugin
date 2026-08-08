@@ -18,7 +18,7 @@
 
 普通用户直接安装 [domi Mac 客户端](https://github.com/1DeepSheep/domi/releases/latest) 即可。客户端会安装与当前版本匹配的 domi 插件，并在升级时同步更新；不需要手动复制 Skills 或修改 Codex 配置。
 
-当前公开安装包面向 Apple Silicon Mac。使用前请先安装并登录 Codex：
+当前公开安装包同时支持 Apple Silicon 和 Intel Mac。使用前请先安装并登录 Codex：
 
 ```bash
 codex --version

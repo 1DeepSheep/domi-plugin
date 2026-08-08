@@ -32,12 +32,16 @@ jobs:
       - name: Validate plugin package
         run: |
           node scripts/domi-repo.test.cjs
+          node scripts/asr-notes-skill.test.cjs
           node scripts/financing-fields.test.cjs
           node scripts/intake-time-fields.test.cjs
+          node scripts/investment-review-skill.test.cjs
           node scripts/schedule-skill.test.cjs
           node scripts/todo-ledger.test.cjs
           node scripts/podcast-workflow.test.cjs
           node scripts/delivery-channels.test.cjs
           node scripts/feishu-markdown-export.test.cjs
           node scripts/build-plugin-release.test.cjs
+          python3 -m unittest skills/asr-notes/tests/test_transcribe_diarized.py
+          node --test skills/investment-radar/scripts/xiaoyuzhou-public.test.js
           NODE_PATH="$PWD/skills/plaud/vendor/plaud-cli/node_modules" node --test skills/plaud/scripts/plaud.test.js

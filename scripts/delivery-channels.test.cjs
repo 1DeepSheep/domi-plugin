@@ -20,6 +20,10 @@ const projectWorkflow = read("skills", "domi-router", "references", "project-int
 const peopleWorkflow = read("skills", "domi-router", "references", "people-intake-workflow.md");
 const radarWorkflow = read("skills", "domi-router", "references", "industry-news-radar-workflow.md");
 const sourcing = read("skills", "sourcing", "SKILL.md");
+const projectAgent = read("skills", "domi-router", "agents", "openai.yaml");
+const sourcingAgent = read("skills", "sourcing", "agents", "openai.yaml");
+const plaudWorkflow = read("skills", "domi-router", "references", "plaud-investment-recording-workflow.md");
+const plaudCommands = read("skills", "plaud", "references", "commands.md");
 
 test("local SQLite and Markdown remain authoritative for new and migrated users", () => {
   for (const contract of [investmentMgmt, storage, delivery]) {
@@ -110,4 +114,25 @@ test("delivery preserves privacy and idempotency without becoming a backend", ()
   assert.match(delivery, /不写回 `storageBackend`/);
   assert.match(delivery, /不建立隐式双向同步/);
   assert.match(extension, /本机路径、文档 token、用户标识和空间标识不得出现/);
+});
+
+test("agent prompts and completion reports follow the selected backend without leaking internal IDs", () => {
+  assert.doesNotMatch(projectAgent, /1\.1 People/);
+  assert.doesNotMatch(sourcingAgent, /1\.1 People|relationship base/);
+  assert.match(projectAgent, /当前资料库后端/);
+  assert.match(sourcingAgent, /currently configured domi people repository/);
+  assert.match(projectWorkflow, /锁定的 `repositoryBackend`/);
+  assert.match(projectWorkflow, /默认不展示 `project_id\/record_id`/);
+  assert.match(peopleWorkflow, /默认不展示内部 `person_id\/record_id`/);
+});
+
+test("PLAUD project archival preserves the backend locked for the queue item", () => {
+  for (const contract of [plaudWorkflow, plaudCommands]) {
+    assert.match(contract, /backend.*local/);
+    assert.match(contract, /legacy_feishu_primary/);
+    assert.match(contract, /storageReceipt/);
+  }
+  assert.match(plaudWorkflow, /任务中途不得.*切换后端/);
+  assert.match(plaudWorkflow, /不得暗中迁移或新建第二份项目/);
+  assert.match(plaudWorkflow, /默认不展示本机绝对路径、文档 URI、项目／记录 ID/);
 });

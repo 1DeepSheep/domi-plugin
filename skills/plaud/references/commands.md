@@ -35,8 +35,8 @@ node <plaud-cli> mark <fileId> <stage> [artifactPath|-] [metadataJson]
 - `mark`：更新 domi 工作流阶段。`metadataJson` 必须是 JSON 对象。
   - `notes_project` 只能从 `context_ready` 进入（已生成项目纪要的重试、纠正分类、旧队列回补审计，或显式重开已完成记录除外），必须提供实际存在的纪要文件和新的 `notesAudit`。除原有实体/数字/学历字段外，还必须包含：`careerLedgerComplete=true`、`modelWorkLedgerComplete=true`、`attributionConsistency=true`、非负整数 `careerClaimCount/modelWorkClaimCount`、`unresolvedDefinitiveCareerClaims=0`、`unresolvedDefinitiveModelWorkClaims=0`。CLI 自动计算并保存纪要 SHA-256，不接受继承旧审计来批准另一份文件。
   - `reviewed` 只能从 `notes_project` 进入或同阶段重试，必须提供实际存在的快评文件、新的 `score`/`rating` 和 `reviewAudit`：`status=passed`、`educationConsistency=true`、`careerModelConsistency=true`。`score` 必须为 1-10 的整数且禁用 5，`rating` 必须为 B/A/S。CLI 自动绑定快评 SHA-256，并在进入 `documented`、`managed` 前重新校验纪要与快评文件未变化。
-  - `documented` 只能从 `reviewed` 进入或同阶段重试。新流程强制要求 `storageReceipt.backend=local`、`projectId`、本地 `documentUri/libraryPath` 与三项回读验证；旧队列无 `storageReceipt` 时仍可识别既有 Wiki token，但只能用于显式导入本地，不得产生新的飞书管理写入。
-  - `managed` 只能从 `documented` 进入或同阶段重试，新流程强制要求 `projectId`；CLI 会拒绝从 `reviewed` 直接跳过归档。`recordId` 仅保留旧队列兼容。
+  - `documented` 只能从 `reviewed` 进入或同阶段重试。新流程按本轮锁定后端要求经过回读的 `storageReceipt`：本地主库使用 `backend=local`、`projectId`、`documentUri/libraryPath`；旧飞书主库兼容分支使用 `backend=legacy_feishu_primary`、`recordId`、`documentUri/libraryPath`。两者都要求记录、文档、材料三项验证。旧队列无 `storageReceipt` 时仍识别原有 Wiki token，用于恢复原始后端；不得暗中迁移或另建第二套记录。
+  - `managed` 只能从 `documented` 进入或同阶段重试：本地主库要求 `projectId`，旧飞书主库兼容分支要求 `recordId`；CLI 会拒绝从 `reviewed` 直接跳过归档。
   - `discussion_notes_ready` 只能从 `context_ready` 进入或同阶段重试，且记录必须有 `workflow=quick_discussion`、合法 `workflowId` 与非空 `discussionTopic`；CLI 自动把工作流身份、主题、文字稿、规范化上下文与纪要 SHA-256 绑定。`mark` metadata 不得覆盖 `workflow/workflowId`、源音频身份、文字稿路径或讨论审计字段。
   - `discussion_complete` 只能从 `discussion_notes_ready` 进入或同阶段重试，必须提供讨论摘要文件；CLI 会重新校验纪要输入指纹并绑定摘要 SHA-256。
 
@@ -53,6 +53,8 @@ node <plaud-cli> mark FILE_ID discussion_complete /absolute/path/to/discussion-b
 node <plaud-cli> mark FILE_ID reviewed /absolute/path/to/review.md '{"score":8,"rating":"A","reviewAudit":{"status":"passed","educationConsistency":true,"careerModelConsistency":true}}'
 node <plaud-cli> mark FILE_ID documented - '{"projectId":"prj_xxx","storageReceipt":{"backend":"local","projectId":"prj_xxx","documentUri":"file:///.../项目主页.md","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}'
 node <plaud-cli> mark FILE_ID managed - '{"action":"updated","projectId":"prj_xxx","storageReceipt":{"backend":"local","projectId":"prj_xxx","documentUri":"file:///.../项目主页.md","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}'
+node <plaud-cli> mark FILE_ID documented - '{"storageReceipt":{"backend":"legacy_feishu_primary","recordId":"rec_xxx","documentUri":"https://.../wiki/...","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}'
+node <plaud-cli> mark FILE_ID managed - '{"action":"updated","storageReceipt":{"backend":"legacy_feishu_primary","recordId":"rec_xxx","documentUri":"https://.../wiki/...","libraryPath":"/absolute/project/path","recordVerified":true,"documentVerified":true,"filesVerified":true,"status":"managed"}}'
 node <plaud-cli> mark FILE_ID failed - '{"error":"reason"}'
 ```
 
@@ -68,8 +70,8 @@ node <plaud-cli> mark FILE_ID failed - '{"error":"reason"}'
 - `context_pending`：等待用户补充；用户提供具体信息或表示不知道、跳过、直接处理后，标记为 `context_ready`。
 - `context_ready`：从文字稿和已保存的上下文继续调用 `asr-notes`。
 - `notes_project`：先运行 `verify <fileId>`；通过后从纪要继续调用 `investment-review`，旧记录缺审计时先重做事实审计并重新标记 `notes_project`。
-- `reviewed`：先运行 `verify <fileId>`；通过后从快评继续完成本地 SQLite、Markdown 和项目材料目录归档，旧记录缺审计时回退重做审计。
-- `documented`：复用已保存的 `projectId` 与 `storageReceipt` 核验本地记录并进入 `managed`；不得重复创建文档或项目目录。旧队列只有 Wiki token 时先显式导入并回读本地，不能直接标记完成。
+- `reviewed`：先运行 `verify <fileId>`；通过后从快评继续完成当前锁定后端的结构化记录、主文档和项目材料目录归档，旧记录缺审计时回退重做审计。
+- `documented`：复用已保存的 `storageReceipt`，按其中锁定的 `local` 或 `legacy_feishu_primary` 后端核验记录、主文档与材料目录后进入 `managed`；不得重复创建文档、目录或第二套项目。没有新式回执的历史队列沿用其原始 Wiki／本地材料字段恢复，不得顺带迁移。
 - `notes_non_project` 和 `managed` 是结束状态，不出现在 `queue`。
 - `generation_timeout` 不代表 PLAUD 已停止处理。稍后先尝试 `download <fileId>`；成功后标记为 `transcript_ready`，不要再次生成。
 - `upload_unknown` 先重新运行同一 `transcribe-local` 等待稳定标题出现，不得默认追加 `--retry-upload`。
