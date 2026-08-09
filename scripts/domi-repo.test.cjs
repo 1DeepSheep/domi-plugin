@@ -186,6 +186,42 @@ test("local project upsert creates SQLite record and lazily creates document fol
   }
 });
 
+test("project upsert rejects archive titles before writing and accepts canonical company names", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+
+  assert.throws(
+    () => repository.upsertProject({
+      name: "20260630-示例主体-技术专题-A",
+      domain: "AI",
+      subdomains: ["AI4S"]
+    }),
+    (error) => error?.code === "DOMI_PROJECT_NAME_REVIEW_REQUIRED"
+      && /只能是公司或项目主体名/.test(error.message)
+  );
+  assert.equal(repository.listProjects().length, 0);
+  assert.equal(
+    fs.existsSync(path.join(
+      repository.libraryDir,
+      "3.项目库",
+      "AI",
+      "AI4S",
+      "20260630-示例主体-技术专题-A"
+    )),
+    false
+  );
+
+  for (const name of ["360", "3D Systems", "B-ON"]) {
+    const result = repository.upsertProject({
+      name,
+      domain: "_未分类",
+      subdomains: []
+    });
+    assert.equal(result.project.name, name);
+  }
+  assert.equal(repository.listProjects().length, 3);
+});
+
 test("unclassified projects avoid and migrate the redundant _未分类/_未分类 layer", (t) => {
   const repository = createRepository(t);
   t.after(() => repository.close());

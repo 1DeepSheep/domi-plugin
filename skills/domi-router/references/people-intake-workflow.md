@@ -8,7 +8,7 @@
 
 ## 资料库分支守卫
 
-- `repositoryBackend=local`：使用 `domi-repo.cjs person search/upsert`、`人物主页.md`、`研究/` 与 `纪要/`；
+- `repositoryBackend=local`：使用 `domi-repo.cjs person search/upsert`、`人物主页.md`、`研究/` 与 `纪要/`；飞书已连接时可围绕已识别人物、组织及必要别名窄范围只读搜索 Wiki、Docs、Base 作为补充参考，失败不阻塞；
 - `repositoryBackend=legacy_feishu_primary`：完整读取 `investment-mgmt/references/legacy-feishu-primary.md`，按“人脉库与交流文档”分支使用既有人脉 Base 与飞书交流文档；本文件中所有本地网关写入和目录创建均跳过；
 - `research` mode 在两个分支都保持零内部写入。
 
@@ -45,7 +45,7 @@
 | 人脉库写入 | 当前后端 | 已授权的精确计划 | `person_id/record_id`、逐记录写入状态 | 只写 Included／用户点名人物；每条写后按 ID 回读验证 |
 | 终检 | 上述对应 Skills | 所有阶段标识 | 一致性快照与恢复清单 | 无重复人物；字段类型、单值类型、接触事实、来源和隐私均正确 |
 
-`research` mode 只执行范围锁定、人选发现和人物画像，跳过内部查重与写入。只有用户明确询问“人脉库里有没有／我们是否认识／有什么引荐路径”时，才可在 `research` 内只读查询当前人脉库；查询不会升级写入权限。
+`research` mode 只执行范围锁定、人选发现和人物画像，跳过内部查重与写入。飞书已连接且人物身份已有足够消歧信息时，可按知识外挂契约只读检索相关 Wiki、Docs、Base，引用高置信度命中并保留来源；歧义、无命中或失败直接继续，不得创建、编辑或把命中内容静默导入本地。只有用户明确询问“人脉库里有没有／我们是否认识／有什么引荐路径”时，才可在 `research` 内只读查询当前权威人脉库；两类查询都不会升级写入权限。
 
 若用户已经给出一个明确人物，跳过广泛 `discover`，直接执行身份核验与 `profile`。若用户要求人才池、若干候选或某赛道潜在创始人，必须先 `discover` 再为 Included 候选补齐最小可入库画像。
 

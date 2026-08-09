@@ -97,7 +97,7 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - `notes_non_project`：非项目纪要，流程结束。
 - `reviewed`：投资快评已完成，评分/评级及学历、履历、模型归因一致性声明已绑定到快评文件哈希，等待写入当前锁定资料库后端的结构化记录、主文档与材料目录。
 - `documented`：当前锁定后端的主文档、材料目录和结构化项目记录已写后验证，等待最终闭环标记；`storageReceipt.backend` 必须保持 `local` 或 `legacy_feishu_primary`，历史队列沿用原始后端恢复，不能顺带迁移。
-- `managed`：当前锁定资料库后端的结构化记录、主文档与材料目录闭环完成。本地主库的飞书副本只有用户明确要求且受控导出成功时才另行记录，不影响本阶段。
+- `managed`：当前锁定资料库后端的结构化记录、主文档与材料目录闭环完成。本地主库下，飞书已连接时可由 Router 围绕当前实体做非阻塞只读参考；飞书副本只有本轮用户明确要求且受控导出成功时才另行记录，不影响本阶段。没有本轮飞书写指令时不得调用导出交接，也不得把副本缺失列为待处理或未完成。
 - `discussion_notes_ready`：快速讨论的完整纪要已生成，并绑定文字稿、上下文和纪要哈希；等待讨论摘要。
 - `discussion_complete`：完整纪要与讨论摘要均已生成并绑定哈希，快速讨论流程结束。
 - `generation_failed` / `generation_timeout` / `failed`：需要报告并按具体错误恢复。

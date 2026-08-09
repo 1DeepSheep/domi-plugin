@@ -18,7 +18,7 @@
 | 行业/赛道 | `product-deep-research`、搜索 | `bigdata-com:sector-analysis`、`bigdata-com:sector-playbook`、`daloopa:industry` |
 | 风险/治理 | 单点依赖/合规（搜索+判断） | `bigdata-com:risk-assessment`、`bigdata-com:moat-governance-review`、`bigdata-com:earnings-quality-screen` |
 | 产业链/上下游 | 搜索 + 访谈 | `daloopa:supply-chain` |
-| 内部已有材料 | `investment-mgmt` 查本地 SQLite／Markdown；只有用户明确扩大范围时，才用 `lark-wiki`／`lark-doc` 搜索或读取飞书知识外挂 | 同左 |
+| 内部已有材料 | `investment-mgmt` 先查本地 SQLite／Markdown；飞书已连接且实体明确时，用 `lark-base`／`lark-wiki`／`lark-doc` 窄范围只读参考 | 同左 |
 
 > bigdata-com / daloopa 是带 OAuth 的付费数据源 plugin。若调用返回未认证错误，提示用户先在终端完成对应 plugin 的授权，再继续。
 
@@ -91,7 +91,7 @@
 
 ## 6. 调用要点
 
-- **先内部后外部**：开工先用 `investment-mgmt` 查本地 SQLite／Markdown，接续而非重复。只有用户明确把本轮范围扩展到飞书时，才按知识外挂契约使用 `lark-drive`／`lark-wiki`／`lark-doc` 只读取数；飞书连接缺失不等于本地没有记录，也不阻塞公开源研究。
+- **先内部后外部**：开工先用 `investment-mgmt` 查本地 SQLite／Markdown，接续而非重复。飞书已连接且当前实体明确时，按知识外挂契约使用 `lark-base`／`lark-drive`／`lark-wiki`／`lark-doc` 做窄范围只读参考；无命中、歧义、权限或网络失败直接继续，不阻塞公开源研究，也不列为未完成。只读命中不得触发创建、编辑或发布。
 - **网页正文抓取**：需要把某篇长文/网页转成可分析文本时，用 `baoyu-url-to-markdown`；本地 PDF/研报用 `pdf` skill 提取。
 - **SPA 站点用 CDP 渲染索引页**：标的官网/产品站多为 JS 渲染，静态抓取首页常只回一句 slogan、漏掉绝大部分内容；要枚举其产出，用 CDP 渲染 /blog、/news、/benchmarks、/changelog 等**索引页**（本次实测：UniPat 首页静态抓取几乎空，CDP 渲染 /blog+/benchmarks 才拿到全部 7 项工作）。这是「公众号必须 CDP」（§3）的通用化。
 - **深度编排**：depth=deep 时优先让 `deep-research` / `product-deep-research` 做 fan-out 检索与校验，本 skill 负责把结果套进框架并落库。子报告不是事实库：先抽取其 Claim Ledger、回溯最上游来源、折叠同源转载、解决跨模块冲突，再吸收进投资结论。
@@ -116,7 +116,7 @@
 
 ## 8. 资料库归档与可选飞书交付
 
-权威归档位置固定为本地资料库。用户明确要求的飞书搜索或交付走 **lark-cli / lark-* skill**（不要用 lark MCP 工具），但不改变本地源。
+权威归档位置固定为本地资料库。飞书窄范围只读参考，以及用户本轮明确要求的飞书交付，均走 **lark-cli / lark-* skill**（不要用 lark MCP 工具），但不改变本地源；没有本轮写指令时省略交付阶段。
 
 ### A. 权威长文归档
 
