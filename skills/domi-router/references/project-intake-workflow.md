@@ -8,7 +8,7 @@
 
 进入内部查重或任何归档／写入前先执行 `investment-mgmt/references/storage-backends.md`：
 
-- `repositoryBackend=local`：执行本文件的 SQLite／Markdown 项目链路；
+- `repositoryBackend=local`：执行本文件的 SQLite／Markdown 项目链路；飞书已连接时可围绕已锁定项目实体窄范围只读搜索 Wiki、Docs、Base 作为补充参考，失败不阻塞；
 - `repositoryBackend=legacy_feishu_primary`：同时完整读取
   `investment-mgmt/references/legacy-feishu-primary.md`，内部查重改查既有
   Watching List 与 Wiki，文档／材料／结构化写入严格执行该 reference 的“项目库
@@ -40,15 +40,16 @@
 | 结构化记录写入 | `domi:investment-mgmt` | 研究摘要、评级、文档 URI | `project_id`、完整字段 | 查重后 upsert；重要更新与最后更新时间同次写入 |
 | 终检 | 上述对应 Skills | 所有阶段标识 | 一致性快照 | 记录、文档、目录、链接互相一致 |
 
-`research` mode 只执行公开来源的标的锁定和桌面研究，然后交付成果并询问是否继续评级分析并入库。确认前跳过投资快评、内部资料库查重、文档归档和结构化写入。
+`research` mode 只执行公开来源、用户材料和可选飞书只读参考的标的锁定与桌面研究，然后交付成果并询问是否继续评级分析并入库。飞书只读参考必须按实体指纹窄范围检索，不能创建、编辑或把命中文档当作待更新目标；未连接、无命中或读取失败直接继续。确认前跳过投资快评、内部资料库查重、文档归档和结构化写入。
 
 ## 三、锁定标的并查重
 
 1. 从图片、链接、文章、BP 或文字中提取项目名、创始人、产品、官网、账号和地域线索。
 2. 生成标的指纹：`官网域名 + 一句话业务 + 法律／运营主体 + 创始人`。
 3. 并查别名、中英文名、产品名和主体名，显式列出需要排除的同名项目。
-4. 仅在 `intake/update` mode 进入内部查重：本地主库用 `domi-repo.cjs project search` 查 SQLite 与已有项目主页；旧飞书主库按 legacy reference 查 Watching List 与 Wiki。查重阶段始终只读，`research` mode 跳过本项。
-5. 名称模糊或多条命中时，先完成实体核验；仍无法唯一判断时再向用户确认，不得创建重复记录。
+4. 把公司主体名与材料／纪要标题分开：结构化 `name` 只保留规范主体名；日期、产品／技术主题、评级只进入文档标题和对应字段。遇到日期型旧目录时必须用用户确认、已有主页／Base 记录或独立材料核验，不能直接把目录名当公司名。
+5. 仅在 `intake/update` mode 进入内部查重：本地主库用 `domi-repo.cjs project search` 查 SQLite 与已有项目主页；旧飞书主库按 legacy reference 查 Watching List 与 Wiki。查重阶段始终只读，`research` mode 跳过本项。
+6. 名称模糊或多条命中时，先完成实体核验；仍无法唯一判断时再向用户确认，不得创建重复记录。
 
 实体无法唯一确认时停止后续研究，列出候选与所需确认信息；只有实体本身已经唯一、但部分履历或业务事实仍不确定时，才可继续研究并把这些事实标为缺口。
 
