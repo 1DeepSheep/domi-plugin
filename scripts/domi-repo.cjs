@@ -138,6 +138,32 @@ function normalizedName(value) {
     .replace(/[\s·•._\-—–（）()【】[\]{}，,。.!！?？/&／]+/g, "");
 }
 
+function archiveStyleProjectName(value) {
+  const raw = String(value || "").normalize("NFKC").trim();
+  const compact = raw.match(/^((?:19|20)\d{2})(\d{2})(\d{2})\s*[-_—–]\s*.+$/);
+  const separated = compact ? null : raw.match(
+    /^((?:19|20)\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\s*[-_—–]\s*.+$/
+  );
+  const match = compact || separated;
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+  return parsedDate.getUTCFullYear() === year
+    && parsedDate.getUTCMonth() + 1 === month
+    && parsedDate.getUTCDate() === day;
+}
+
+function assertCanonicalProjectName(value) {
+  if (!archiveStyleProjectName(value)) return;
+  const error = new Error(
+    "项目写入的 name/companyName 只能是公司或项目主体名，不能使用“日期-主体-主题-评级”格式的文档或目录标题。"
+  );
+  error.code = "DOMI_PROJECT_NAME_REVIEW_REQUIRED";
+  throw error;
+}
+
 function stableId(prefix, value) {
   return `${prefix}_${crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 16)}`;
 }
@@ -443,6 +469,7 @@ ${project.notes || "暂无摘要。"}
   upsertProject(input) {
     const name = String(input.name || input.companyName || "").trim();
     if (!name) throw new Error("项目写入缺少 name/companyName。");
+    assertCanonicalProjectName(name);
     const normalized = normalizedName(name);
     const existing = this.database.prepare(
       `SELECT id, created_at, investors_json, financing_history, latest_valuation_usd_100m

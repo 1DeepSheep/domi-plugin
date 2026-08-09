@@ -34,22 +34,23 @@ node "$DOMI_REPO" config get
 强制守卫：
 
 - 禁止因飞书已连接、用户给出飞书链接、飞书授权失败或本地未命中而切换 `repositoryBackend`。
-- 禁止**自动**创建、迁移或维护项目／人脉／行业 Base 作为 domi 管理后端，不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID。用户明确要求搜索／读取既有 Base，或明确指定外部 Base 的创建／编辑动作时，按 [feishu-knowledge-extension.md](feishu-knowledge-extension.md) 使用 `lark-base`；该外部动作不改变本地权威源。
+- 禁止**自动**创建、迁移或维护项目／人脉／行业 Base 作为 domi 管理后端，不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID。飞书已连接时，项目／人物／PLAUD／研究工作流可按当前实体窄范围搜索／读取 Wiki、Docs、Base 作为参考；只有本轮用户明确指定外部 Base 的创建／编辑动作时才允许写入。两类外部动作都不改变本地权威源。
 - 本地主库分支禁止把普通飞书文档或 Wiki 节点当作权威项目主页、人物主页、行业事件或待办事项账本；旧飞书主库兼容分支只使用本机既有固定映射，不把任意飞书资源提升为主库。
 - 旧配置含 `storageBackend=feishu` 且尚未完成经回读验证的本地导入时，必须设置 `legacyFeishuPrimary=true`；旧 Base／Wiki 继续读写，所有新管理写入仍进入旧飞书主库，绝不能同时写入尚未接管的本地库。
 - 本地配置缺失时只提示用户选择工作区目录；不得让用户通过连接飞书绕过本地初始化。
 
 ### 飞书外挂与交付不是资料库后端
 
-本节只适用于 `repositoryBackend=local`。用户明确要求飞书搜索、读取、创建或编辑时，读取 [feishu-knowledge-extension.md](feishu-knowledge-extension.md)。已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容：
+本节只适用于 `repositoryBackend=local`。飞书已连接且当前实体明确时，可按 [feishu-knowledge-extension.md](feishu-knowledge-extension.md) 做窄范围只读参考；创建、编辑或发布只在本轮用户明确要求时执行。已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容：
 
 - 飞书连接继续保留 Base、Wiki、Docs、Drive、IM、Contact 的完整授权能力；本地主库只改变数据权威与默认路由，不缩减飞书连接权限。
-- Base／Wiki／Docs／Drive 可以在用户明确指定时作为外部参考搜索读取；外部创建、编辑和发布同样按明确目标执行，但不进入本地管理事务，也不反向切换后端。
+- Base／Wiki／Docs 可在项目、人物、PLAUD 和研究工作流中围绕当前实体只读搜索；Drive 只读取检索命中的相关文件。该增强非必需，失败不阻塞本地工作流，也不列为未完成。外部创建、编辑和发布仍须本轮明确目标与指令，不进入本地管理事务，也不反向切换后端。
 
 - `delivery_only=feishu_doc` 等价于明确创建或编辑飞书文档；本地源仍为权威。
 - `delivery_only=feishu_dm` 只发送用户指定的摘要或文档链接。
 - 两者都不写回后端配置，不触发迁移，不要求任何 Base／Table／Wiki 映射。
 - 普通“研究”“归档”“入库”没有飞书外部动作授权。
+- 既往消息、旧队列字段、已有飞书链接、只读命中和连接状态都不是本轮写入授权；没有本轮写指令时不得运行导出交接或把飞书副本列为未完成。
 
 ### 旧飞书管理库 → 本地的显式导入
 
@@ -102,6 +103,8 @@ node "$DOMI_REPO" config get
 ```
 
 项目根目录不包含日期、评级或进展状态。多子领域只用主子领域定位目录，SQLite 保留全部子领域。领域和主子领域都未知时使用 `3.项目库/_未分类/<项目名称>/`，禁止重复 `_未分类/_未分类`。
+
+公司主体名、文档标题和物理归档目录是三个不同字段：`projects.name` 与 `项目主页.md` 的 `company_name` 只能是规范主体名；纪要／研究文档可以使用 `YYYYMMDD-主体-主题-评级` 标题。同步旧工作区时，日期型目录名只能进入名称审核，不能直接创建 canonical 项目或生成新的项目 ID。
 
 人物目录：
 

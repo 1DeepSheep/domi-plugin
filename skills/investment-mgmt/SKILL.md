@@ -12,7 +12,7 @@ description: |
 - `local`：所有“研究并入库”“更新项目／人脉／行业动态”“同步待办事项”都写本地资料库；本文件后续规则全部适用。
 - `legacy_feishu_primary`：必须完整读取并执行 [references/legacy-feishu-primary.md](references/legacy-feishu-primary.md)。既有 Base／Wiki 继续作为唯一管理主库，禁止调用本地网关写入；后续本地命令、目录和“飞书知识外挂”段仅在该 reference 没有覆盖的业务口径上适用。
 - 本地主库连接飞书不切换资料库、不自动迁移结构化表，也不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID；但连接授权仍完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力。
-- 仅在 `local` 且用户明确要求飞书搜索、读取、创建或编辑时，完整读取 [references/feishu-knowledge-extension.md](references/feishu-knowledge-extension.md)。已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容，完整读取 [references/delivery-channels.md](references/delivery-channels.md)。
+- `local` 下飞书已连接时，项目／人物／PLAUD／研究工作流可围绕当前实体窄范围只读搜索 Wiki、Docs、Base 作为参考；执行前完整读取 [references/feishu-knowledge-extension.md](references/feishu-knowledge-extension.md)。创建、编辑或发送仍须本轮用户明确指令；已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容，只有获得该指令时才完整读取 [references/delivery-channels.md](references/delivery-channels.md)。
 
 ## 本机配置
 
@@ -36,6 +36,7 @@ node "$DOMI_REPO" config get
 - 用户可明确命名新子领域。先做别名归一，确认不能由现有单个或多个子领域表达，再展示“新增子领域 + 所属领域 + 受影响记录”让用户确认。
 - 一级领域新增或移动子领域必须确认，不能由模型静默创建。
 - 无法分类的项目进入 `3.项目库/_未分类/<项目名称>/`，不得凭文件名猜测。
+- `项目名称`／`name` 只填写公司、品牌或项目主体的规范名。会议日期、产品／技术主题、评级和进展属于文档标题或结构化字段，禁止把 `YYYYMMDD-主体-主题-A` 一类归档标题写成公司名称。旧目录只可提供候选名；没有主页、Base 记录、独立材料或用户确认时必须进入名称审核，不得从目录名自动盖章。
 
 分类优先级：
 
@@ -135,16 +136,17 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 
 ## 本地主库的飞书知识外挂
 
-本节只适用于 `repositoryBackend=local`。飞书动作必须是显式的：
+本节只适用于 `repositoryBackend=local`。只读参考与外部写入分开处理：
 
-- “去飞书知识库／多维表格／云盘搜，或读取这个飞书链接” → `feishu_knowledge_action=search|read`；使用 `lark-base`／`lark-wiki`／`lark-doc`／`lark-drive` 只读，不改本地。
+- 已连接飞书时，项目／人物／PLAUD／研究工作流可按当前规范实体名、主体名、产品名及必要别名设置 `feishu_knowledge_action=search|read`；使用 `lark-base`／`lark-wiki`／`lark-doc`／`lark-drive` 做窄范围只读参考，不改飞书也不改本地。
+- 用户明确说“去飞书知识库／多维表格／云盘搜”或提供飞书链接时，同样进入只读分支；只读失败不阻塞本地流程，也不列为未完成。
 - “把这份飞书文档保存到项目” → 读取后通过本地 `document create` 导入；没有隐式双向同步。
-- “把本地 Markdown 搬到飞书” → `feishu_knowledge_action=create|edit` 或兼容 `delivery_only=feishu_doc`；执行完整 Markdown／图片保真校验。
-- “在这个 Base／Wiki／云盘目标中创建或编辑” → 使用对应 `lark-base`／`lark-wiki`／`lark-drive`，只处理用户唯一指定的外部目标，不把它登记为管理后端。
-- “发到飞书私聊／发给某人” → 先用 `lark-contact` 唯一解析收件人，再用 `lark-im` 发送用户指定内容。
+- 本轮用户明确说“把本地 Markdown 搬到飞书” → `feishu_knowledge_action=create|edit` 或兼容 `delivery_only=feishu_doc`；执行完整 Markdown／图片保真校验。
+- 本轮用户明确说“在这个 Base／Wiki／云盘目标中创建或编辑” → 使用对应 `lark-base`／`lark-wiki`／`lark-drive`，只处理用户唯一指定的外部目标，不把它登记为管理后端。
+- 本轮用户明确说“发到飞书私聊／发给某人” → 先用 `lark-contact` 唯一解析收件人，再用 `lark-im` 发送用户指定内容。
 - “入库／归档”本身只写本地，不创建飞书文档。
 
-任何飞书读写前完整采用 `lark-shared` 和实际使用的 `lark-base`、`lark-wiki`、`lark-doc`、`lark-drive`、`lark-im`、`lark-contact` Skill。连接权限完整不代表自动调用；飞书失败不影响已完成的本地归档，也不触发资料库切换。
+任何飞书读写前完整采用 `lark-shared` 和实际使用的 `lark-base`、`lark-wiki`、`lark-doc`、`lark-drive`、`lark-im`、`lark-contact` Skill。连接允许上述窄范围只读参考，但不授权任何写动作；既往消息、旧队列、已有链接、搜索命中或连接状态都不能代替本轮明确写指令。没有写指令时不得调用导出交接，也不得把飞书副本列为未完成。飞书只读失败不影响本地归档，也不触发资料库切换。
 
 ## 回执
 
