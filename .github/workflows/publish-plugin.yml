@@ -51,6 +51,7 @@ jobs:
           node scripts/investment-review-skill.test.cjs
           node scripts/schedule-skill.test.cjs
           node scripts/todo-ledger.test.cjs
+          node scripts/compact-workflows.test.cjs
           node scripts/podcast-workflow.test.cjs
           node scripts/delivery-channels.test.cjs
           node scripts/feishu-markdown-export.test.cjs

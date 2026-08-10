@@ -212,6 +212,15 @@ async function readStdin() {
 
 async function main() {
   const command = process.argv[2];
+  if (!new Set(["parse", "render", "local-read", "local-write"]).has(command)) {
+    throw new Error("Usage: todo-ledger.js <parse|render|local-read|local-write> [0.待办事项.md]");
+  }
+  // local-read is intentionally argument-only. Reading stdin first makes the
+  // command wait forever when a parent process keeps its stdin pipe open.
+  if (command === "local-read") {
+    process.stdout.write(`${JSON.stringify(readLocalLedger(process.argv[3]), null, 2)}\n`);
+    return;
+  }
   const input = await readStdin();
   if (command === "parse") {
     let value = input;
@@ -227,15 +236,10 @@ async function main() {
     process.stdout.write(`${renderLedger(JSON.parse(input))}\n`);
     return;
   }
-  if (command === "local-read") {
-    process.stdout.write(`${JSON.stringify(readLocalLedger(process.argv[3]), null, 2)}\n`);
-    return;
-  }
   if (command === "local-write") {
     process.stdout.write(`${JSON.stringify(writeLocalLedger(process.argv[3], JSON.parse(input)), null, 2)}\n`);
     return;
   }
-  throw new Error("Usage: todo-ledger.js <parse|render|local-read|local-write> [0.待办事项.md]");
 }
 
 if (require.main === module) {
