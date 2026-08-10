@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const test = require("node:test");
 const {
   normalizeLedger,
@@ -103,6 +104,64 @@ test("local todo ledger updates only the managed block and preserves user conten
   assert.match(fs.readFileSync(documentPath, "utf8"), /用户补充内容/);
 });
 
+test("local-read exits even when the spawning parent keeps stdin open", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-local-todo-spawn-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const documentPath = path.join(root, "0.待办事项.md");
+  fs.writeFileSync(documentPath, `# 待办事项\n\n${renderLedger({ schemaVersion: 1, tasks: [] })}\n`);
+
+  const child = spawn(
+    process.execPath,
+    [path.join(__dirname, "..", "skills", "todo", "scripts", "todo-ledger.js"), "local-read", documentPath],
+    { stdio: ["pipe", "pipe", "pipe"] }
+  );
+  t.after(() => {
+    if (child.exitCode === null) child.kill("SIGKILL");
+  });
+
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  let timeout;
+  const result = await Promise.race([
+    new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal }))),
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error("local-read waited for stdin")), 1500);
+    })
+  ]).finally(() => clearTimeout(timeout));
+
+  assert.deepEqual(result, { code: 0, signal: null });
+  assert.equal(stderr, "");
+  assert.equal(JSON.parse(stdout).found, true);
+  assert.equal(child.stdin.destroyed, true);
+});
+
+test("an unknown command fails before reading an open stdin pipe", async (t) => {
+  const child = spawn(
+    process.execPath,
+    [path.join(__dirname, "..", "skills", "todo", "scripts", "todo-ledger.js"), "unknown-command"],
+    { stdio: ["pipe", "pipe", "pipe"] }
+  );
+  t.after(() => {
+    if (child.exitCode === null) child.kill("SIGKILL");
+  });
+
+  let stderr = "";
+  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  let timeout;
+  const result = await Promise.race([
+    new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal }))),
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error("unknown command waited for stdin")), 1500);
+    })
+  ]).finally(() => clearTimeout(timeout));
+
+  assert.deepEqual(result, { code: 1, signal: null });
+  assert.match(stderr, /^Usage: todo-ledger\.js/);
+  assert.equal(child.stdin.destroyed, true);
+});
+
 test("todo skill keeps the new-entry window, action dedupe and category quotas explicit", () => {
   const skill = fs.readFileSync(
     path.join(__dirname, "..", "skills", "todo", "SKILL.md"),
@@ -121,4 +180,10 @@ test("todo skill keeps the new-entry window, action dedupe and category quotas e
   assert.match(rules, /### 近 28 天新入库/);
   assert.match(rules, /动作目的明显不同可以跨分类并存/);
   assert.match(rules, /单一分类不超过 5/);
+  assert.match(skill, /无日期必须为 `null`/);
+  assert.match(skill, /未来 7 天内且证据明确为 P1/);
+  assert.match(skill, /8–14 天默认 P2/);
+  assert.match(skill, /配额不足、未入选或本轮未扫描到，不得改成 `done\/ignored`/);
+  assert.match(rules, /不得用扫描时间、当前时间、模型推算或建议跟进时间替代/);
+  assert.match(rules, /新候选 `dueAt=null` 必须保留原事项已有的可核验日期/);
 });

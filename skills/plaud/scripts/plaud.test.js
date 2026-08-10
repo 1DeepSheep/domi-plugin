@@ -475,6 +475,43 @@ test('PLAUD compacts restored tabs before navigation and keeps only one page', a
   assert.deepEqual(calls[0][1], { runBeforeUnload: false });
 });
 
+test('PLAUD also closes tabs restored after the initial CDP page snapshot', async () => {
+  let clock = 0;
+  const pages = [];
+  const makePage = (name) => ({
+    name,
+    closed: false,
+    isClosed() { return this.closed; },
+    async close() { this.closed = true; },
+  });
+  pages.push(makePage('primary'));
+  const latePages = Array.from({ length: 21 }, (_, index) => makePage(`late-${index}`));
+  let restored = false;
+  const result = await compactManagedPages({
+    pages: () => pages,
+    newPage: async () => {
+      const created = makePage('new');
+      pages.push(created);
+      return created;
+    },
+  }, {
+    now: () => clock,
+    pollMs: 100,
+    timeoutMs: 1000,
+    quietPasses: 3,
+    pause: async (delay) => {
+      clock += delay;
+      if (!restored) {
+        restored = true;
+        pages.push(...latePages);
+      }
+    },
+  });
+  assert.equal(result.page.name, 'primary');
+  assert.equal(result.closedPageCount, 21);
+  assert.equal(pages.filter((page) => !page.closed).length, 1);
+});
+
 test('PLAUD removes only tab restore state while preserving the private login profile', () => {
   const profileDir = path.join(sandbox, 'session-restore-profile');
   const defaultDir = path.join(profileDir, 'Default');
@@ -490,7 +527,7 @@ test('PLAUD removes only tab restore state while preserving the private login pr
   assert.equal(fs.existsSync(path.join(defaultDir, 'Preferences')), true);
 });
 
-test('PLAUD clears tab restore state only after an unclean managed-browser exit', () => {
+test('PLAUD still detects unclean profile state for diagnostics', () => {
   const profileDir = path.join(sandbox, 'profile-exit-state');
   const defaultDir = path.join(profileDir, 'Default');
   fs.mkdirSync(defaultDir, { recursive: true });
@@ -943,7 +980,11 @@ test('PLAUD reads the private DevTools endpoint created by background Tabbit', a
 test('PLAUD ignores a stale DevTools endpoint and waits for the newly launched browser', async () => {
   const profileDir = path.join(sandbox, 'stale-devtools-profile');
   const portFile = path.join(profileDir, 'DevToolsActivePort');
-  fs.mkdirSync(profileDir, { recursive: true });
+  const defaultDir = path.join(profileDir, 'Default');
+  fs.mkdirSync(path.join(defaultDir, 'Sessions'), { recursive: true });
+  fs.writeFileSync(path.join(defaultDir, 'Sessions', 'Tabs_1'), 'restored tabs');
+  fs.writeFileSync(path.join(defaultDir, 'Preferences'), JSON.stringify({ profile: { exit_type: 'Normal' } }));
+  fs.writeFileSync(path.join(defaultDir, 'Cookies'), 'private login state');
   fs.writeFileSync(
     portFile,
     '64305\n/devtools/browser/4d90c55d-518b-428d-9491-e71270627503\n',
@@ -958,6 +999,8 @@ test('PLAUD ignores a stale DevTools endpoint and waits for the newly launched b
     browserExecutable: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     spawnProcess: () => {
       assert.equal(fs.existsSync(portFile), false);
+      assert.equal(fs.existsSync(path.join(defaultDir, 'Sessions')), false);
+      assert.equal(fs.readFileSync(path.join(defaultDir, 'Cookies'), 'utf8'), 'private login state');
       setTimeout(() => {
         fs.writeFileSync(
           portFile,
