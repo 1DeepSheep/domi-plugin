@@ -1,50 +1,42 @@
 ---
 name: todo
-description: 生成并维护 domi 的投资待办事项。扫描当前项目库、人脉库、行业动态和关键日期，将建议归入关键节点、新入库约见、人脉跟进、项目跟踪四类；本地主库维护 0.待办事项.md，尚未安全导入的旧飞书主库继续维护既有 1.待办事项。兼容用户沿用“任务建议”“1.Task”或“1.待办事项”的旧说法。
+description: 维护 domi 投资待办。扫描项目、人脉、行业动态和关键日期，按四类写本地 0.待办事项.md；旧飞书主库继续写既有 1.待办事项。兼容“任务建议”“1.Task”“1.待办事项”。
 ---
 
 # Todo
 
-把当前项目、人脉与行业信号转成少量、可解释、可执行的待办事项。先读取 `investment-mgmt/references/storage-backends.md`：
+把资料库信号变成少量可执行事项。客户端上下文同时含 `DOMI_TODO_CLIENT_SNAPSHOT_V1` 和已校验的 `后端：local`／`后端：legacy_feishu_primary` 时直接锁定，不再读取 `storage-backends.md`；普通调用先读 `../investment-mgmt/references/storage-backends.md`：
 
-- `repositoryBackend=local`：`<localRepositoryDir>/0.待办事项.md` 是客户端看板与本技能共享的唯一可写账本；普通飞书连接不会改变该位置。
-- `repositoryBackend=legacy_feishu_primary`：完整读取 `investment-mgmt/references/legacy-feishu-primary.md`，当前 Wiki 空间的既有 `1.待办事项` 是唯一可写账本；不得初始化或写 `0.待办事项.md`。
+- `repositoryBackend=local`：`<localRepositoryDir>/0.待办事项.md` 是唯一账本；资料只经 `scripts/domi-repo.cjs` 读取。
+- `repositoryBackend=legacy_feishu_primary`：完整读取 `../investment-mgmt/references/legacy-feishu-primary.md`；既有 Base／Wiki 与 `1.待办事项` 是唯一主库。禁止调用本地网关、不得初始化或写 `0.待办事项.md`。
 
-## 必须遵守
+失败即停；不得切换、双写或新建第二账本。配置、路径、邮箱、token、Base／Table／Wiki 标识不得外泄。
 
-1. 先读取 `DOMI_CONFIG_PATH` 指向的本机 JSON 配置和资料库后端，只解析当前分支必需字段。不得在回答、产物、日志或仓库中复述本机绝对路径、邮箱、访问令牌、Base／Table／Wiki 标识。
-2. 所有新写入固定进入当前已锁定主库：本地主库写 SQLite／Markdown；旧飞书主库写既有 Base／Wiki。一次同步不得跨后端双写。
-3. 本地主库的项目、人脉和行业事件只通过插件根目录 `scripts/domi-repo.cjs` 读取；旧飞书主库按 legacy reference 读取三个既有 Base。不得因为候选不足而自动扩张到无关飞书知识资源。
-4. 写入前读取并合并当前账本，绝不覆盖待办事项文档中的用户内容。已有 `ignored`、`done`、`in_progress` 状态必须保留；状态只用于生命周期管理，不作为看板分类。
-5. 只生成有证据、可说明原因、能给出下一动作的待办事项。不得把缺字段或模糊猜测包装成提醒。
+## 客户端紧凑同步
 
-## 客户端快速同步路径
+上下文含 `DOMI_TODO_CLIENT_SNAPSHOT_V1` 时，客户端已刷新主库并传入最近 4 周新入库候选索引与 A/S 长期候选。它是三类跟进候选的本轮权威集合：
 
-调用上下文包含 `DOMI_TODO_CLIENT_SNAPSHOT_V1` 时，客户端已按当前主库完成项目表和人脉表刷新，并按本技能规则传入近 28 天新入库候选与 A/S 长期跟进候选：
+1. 本轮只读取本文件、配置必需字段和当前账本各一次；无需再读两个 reference 或其他通用 Skill。
+2. 不要为了发现同一批新入库对象再次全量读取项目表或人脉表。仅为关键节点、已核验动态、字段／账本歧义按 `recordId` 点读。
+3. 索引中有符合规则且不受冷却约束的候选时，`new-entry` 不得留空；全部排除时汇总低质量、已约见、冷却期和重复的数量。
+4. 内存合并后只写、回读各一次；不得重复 init、刷新、搜索账本或逐项回读源记录。
 
-1. 完整读取本文件、`references/suggestion-rules.md` 与 `references/todo-ledger-schema.md`；不要加载与本轮无关的通用技能。
-2. 配置和账本各读取一次；客户端候选是 `new-entry`、`relationship-follow-up`、`project-follow-up` 的本轮权威候选集，不得再次全量读取项目表或人脉表。
-3. 只有关键节点日期、已核验关联动态、字段歧义或账本消歧可以补充读取；能按 `recordId` 点读时不得退化为全表扫描。
-4. 合并后单次写入、单次回读验证。不得重复刷新相同表或逐项回读所有源记录。
+普通调用读 `references/suggestion-rules.md` 与 `references/todo-ledger-schema.md`。
 
-## 工作流
+## 执行契约
 
-### 1. 初始化并读取当前账本
+### 1. 读取账本与候选
 
-1. 把本文件所在插件目录解析为 `<plugin-root>`，把本技能目录解析为 `<todo-skill-dir>`。
-2. 本地主库运行 `node <plugin-root>/scripts/domi-repo.cjs init`，幂等确保本地数据库、资料目录和 `0.待办事项.md` 已初始化；旧飞书主库禁止执行该命令，按 legacy reference 唯一定位或按明确同步请求创建 `1.待办事项`。
-3. 本地主库从配置拼接精确路径 `<localRepositoryDir>/0.待办事项.md`，运行：
+从 `DOMI_CONFIG_PATH` 只解析必需字段。本地主库幂等运行：
 
 ```bash
-node <todo-skill-dir>/scripts/todo-ledger.js local-read "<document-path>"
+node <plugin-root>/scripts/domi-repo.cjs init
+node <todo-skill-dir>/scripts/todo-ledger.js local-read "<localRepositoryDir>/0.待办事项.md"
 ```
 
-4. 本地文件不存在、不是普通文件或缺少 `domi-task-board-v1` 数据块时停止并报告本地初始化失败；不得另建同名飞书文档或用全文覆盖修复。
-5. 旧飞书主库按 legacy reference 读取 docx 中 caption 为 `domi-task-board-v1` 的唯一 ledger，保留 `open`、`in_progress`、`done`、`ignored` 及时间戳；多个非空候选或 marker 无法核验时停止，不得猜测或改写本地账本。
+文件须为普通文件且含唯一 `domi-task-board-v1` 块；否则停止。旧飞书按 legacy reference 唯一定位；多个非空候选或 marker 无法核验时停止。
 
-### 2. 读取实时数据
-
-本地主库普通调用只使用本地网关：
+普通本地调用一次读取：
 
 ```bash
 node <plugin-root>/scripts/domi-repo.cjs project list
@@ -52,71 +44,52 @@ node <plugin-root>/scripts/domi-repo.cjs person list
 node <plugin-root>/scripts/domi-repo.cjs news list --from <ISO时间> --to <ISO时间>
 ```
 
-旧飞书主库改为一次读取既有项目／人脉／行业 Base 的实时 schema 与候选集合，执行系统 `入库时间` 幂等检查，并按 stable ID 建立内存索引；不得调用本地网关。两个分支都不得直接修改底层数据库或通过文件夹名猜测结构化状态。
+只用系统 `intake_time/created_at` 判断近 28 天入库；更新时间、研究日和扫描时间不能冒充创建时间。行业事件须有原始来源、已核验且直接关联 A/S 对象。
 
-- 项目库：近 28 天入库、评级、阶段／状态、最后跟进、最后更新时间、关键节点或下次动作日期。
-- 人脉库：近 28 天入库、评级、关系进展、所属组织与身份、最后联系、关键事件或下次联系日期。
-- 行业动态：只读取与 S/A 重点项目或重点人物直接相关的近期已核验事件。
+### 2. 生成与配额
 
-创建时间优先使用当前后端系统型 `intake_time`／`created_at`；不得用最后更新时间、研究日期或本轮扫描日期伪装为“新入库”。
+事项须回答“为什么现在、做什么、来源能否唯一定位、是否重复”；否则跳过或作 P3 补全。四类为：
 
-客户端同步可能附带一份最近 4 周新入库候选索引，并以 `DOMI_TODO_CLIENT_SNAPSHOT_V1` 标记。该索引来自本轮已完成的项目／人脉刷新，是三类候选的权威集合；不要为了发现同一批新入库对象再次全量读取项目表或人脉表，也不要为长期跟进候选重复扫描全表。只在字段歧义、价值证据不足或账本消歧时按 `recordId` 点读。索引中存在符合规则且没有冷却约束的候选时，本轮不得把 `new-entry` 留空；若全部排除，说明因低质量、已约见、冷却期或重复而排除的数量。
+- `key-milestone`：真实关键日期、过期未完成节点或有明确时效的承诺；
+- `new-entry`：近 28 天入库且值得约见的对象；
+- `relationship-follow-up`：A/S 人物已核验新动态或超过 60 天未联系；
+- `project-follow-up`：A/S 项目已核验新动态或超过 45 天未跟进。
 
-### 3. 生成建议
+最多 12 个开放事项、P1 最多 4 个；每个有合格候选的分类保留最多 2 个席位，再按优先级、日期、证据填充；其他类仍有候选时单类最多 5 个。
 
-完整采用 [references/suggestion-rules.md](references/suggestion-rules.md)。默认最多保留 12 个开放事项，P1 不超过 4 个。选择时先为每个有合格候选的分类保留最多 2 个席位，再按优先级、时效和证据强度填充剩余席位；其他分类仍有合格候选时，任何单一分类不得超过 5 个。
+`dueAt` 只用来源可核验的真实截止／节点日：无日期必须为 `null`；禁止用当前／扫描时间、模型推算或建议时间填充、覆盖已有真实日期。未来 7 天内且证据明确为 P1；8–14 天默认 P2，另有已核验重大事件／承诺才升级；无日期不能只因评级高给 P1。
 
-每项必须包含简明标题、事实理由、`category`、`priority`、`source`、可核验的 `dueAt`，以及一个可直接执行的 `suggestedAction`。`category` 只能是：
+每项须符合 ledger schema。会面用 `suggestedAction.kind="schedule"` 并调用 `$domi:schedule`；不得预填未核实时间或私人邮箱。
 
-- `key-milestone`：临近关键日期、已过期节点或有明确时效的承诺；
-- `new-entry`：近 28 天新入库、值得优先约见的项目或人物；
-- `relationship-follow-up`：重要人物新动态、很久未联系或需要维护关系；
-- `project-follow-up`：重点项目新动态、很久未跟进或需要补充判断。
+### 3. 合并与生命周期
 
-会面或联系安排使用 `suggestedAction.kind="schedule"`，prompt 要求采用 `$domi:schedule`，但不得预填未核实的时间或私人邮箱。
+稳定键：`category + source.kind + source.recordId + signalKey`。
 
-### 4. 合并与去重
+- 同一信号更新原事项；同一对象多个信号最终要求同一种联系动作（`schedule/contact`）时合并，只留一项。
+- 动作目的确实不同可跨分类并存；14 天内真实截止日优先 `key-milestone`，否则近 28 天对象优先 `new-entry`。
+- 保留 `in_progress`；`done` 仅在出现可证明的新事件时重开；`ignored` 30 天内不重开。
+- `open` 仅在证据明确失效时设 `done`。配额不足、未入选或本轮未扫描到，不得改成 `done/ignored`。
+- 合并输入为 `dueAt=null` 时保留已有可核验日期；只有来源证明日期改变或节点取消时才能更新／清空。
 
-按 [references/todo-ledger-schema.md](references/todo-ledger-schema.md) 生成 ledger。稳定键为 `category + source.kind + source.recordId + signalKey`：
+时间用 ISO-8601；ID 不含私人信息。不得直接改 SQLite 或以目录名猜状态。
 
-- 同一信号已有开放事项时更新，不新建重复事项。
-- 同一对象的多个信号最终要求同一种联系动作（`schedule`／`contact`）时，只保留一个开放事项并合并理由。
-- 同一对象动作目的明显不同可以跨分类并存；14 天内有真实截止日时优先 `key-milestone`，否则近 28 天新入库对象优先 `new-entry`。
-- `in_progress` 不自动退回 `open`；`done` 只在出现可证明的新事件时重开；`ignored` 在 30 天内不重开。
-- 本轮未命中的开放事项只在证据明确失效时设为 `done`，否则保留并更新理由或优先级。
+### 4. 单次写入、单次验证
 
-所有时间使用 ISO-8601；ID 使用不含私人信息的随机值。
-
-### 5. 写入与验证
-
-本地主库将完整 ledger JSON 写入权限为 `0600` 的临时文件后运行：
+本地主库把 ledger 写入 `0600` 临时 JSON，然后：
 
 ```bash
 node <todo-skill-dir>/scripts/todo-ledger.js local-write "<localRepositoryDir>/0.待办事项.md" < <ledger-json-file>
+node <todo-skill-dir>/scripts/todo-ledger.js local-read "<localRepositoryDir>/0.待办事项.md"
 ```
 
-该命令只替换 `domi-task-board-v1` 数据块，并保留标题、分类标题与用户补充内容。成功后运行 `local-read`，逐项核对 schema、事项、状态与时间戳，随后删除临时文件。禁止用整文件重写、正则脚本或 shell 拼接绕过该命令。
+核对 schema、事项、状态、`dueAt`、时间戳后删临时文件。只替换 marker；禁止整文件重写或脚本绕过。
 
-旧飞书主库将完整 ledger 传给：
+旧飞书用 `render` 生成同一 marker，只 replace 唯一 block，首次才 append；写后 fetch + `parse` 核对并确认其他 block 仍在。禁止全文覆盖或重复建文档。
 
-```bash
-node <todo-skill-dir>/scripts/todo-ledger.js render < <ledger-json-file>
-```
+## 客户端动作与输出
 
-输出是 caption 为 `domi-task-board-v1` 的 XML 代码块。通过 `lark-doc` 对已唯一
-定位的 `1.待办事项` 执行 block replace；只有第一次初始化才 append。写后重新
-fetch 对应 block，把结果传给 `todo-ledger.js parse`，逐项核对 schema、事项、
-状态与时间戳，并确认其他文档 block 仍存在。不得全文覆盖、重复创建文档或写入
-`0.待办事项.md`。
+- `同步待办事项`：执行上述扫描、合并、写入和验证。
+- `taskId=... 执行下一动作`：按 prompt 执行；客户端管理 `in_progress/done`，本 Skill 不重复写状态。
+- `taskId=... 忽略`：客户端写 `ignored`，后续扫描遵守冷却期。
 
-## 客户端动作
-
-- `同步待办事项`：扫描、合并、写入并验证。
-- `taskId=... 执行下一动作`：按 prompt 执行对应技能；客户端负责 `in_progress`／`done` 状态切换，技能不重复写状态。
-- `taskId=... 忽略`：客户端写为 `ignored`，后续扫描尊重冷却期。
-
-涉及 Outlook 写入时采用 `$domi:schedule`。缺少日期、时间、时区或标题时先询问，不得自行排入日历。
-
-## 输出
-
-只返回扫描范围、生成／更新／保留／忽略数量、四类开放事项摘要、当前后端写入与回读结果，以及被跳过规则及原因。不要返回配置值、文档链接、本机路径、私人邮箱、飞书标识或完整原始记录。
+只返回范围、各状态数量、四类摘要、写入／回读结果和跳过原因。不得返回配置、链接、路径、私人邮箱、内部标识或完整原始记录。

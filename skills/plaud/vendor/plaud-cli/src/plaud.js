@@ -488,18 +488,45 @@ async function settleWithin(promise, timeoutMs) {
   }
 }
 
-async function compactManagedPages(context) {
-  const pages = context.pages().filter((page) => !page.isClosed());
-  const page = pages.at(-1) || (await context.newPage());
-  const extras = pages.filter((candidate) => candidate !== page);
-  await Promise.allSettled(
-    extras.map((candidate) =>
-      settleWithin(candidate.close({ runBeforeUnload: false }), 2000)),
-  );
-  return {
-    page,
-    closedPageCount: extras.length,
-  };
+async function compactManagedPages(context, options = {}) {
+  const pauseImpl = options.pause || pause;
+  const now = options.now || (() => Date.now());
+  const quietPassesRequired = Math.max(2, Number(options.quietPasses) || 3);
+  const pollMs = Math.max(1, Number(options.pollMs) || 100);
+  const deadline = now() + Math.max(250, Number(options.timeoutMs) || 3000);
+  let page = null;
+  let closedPageCount = 0;
+  let quietPasses = 0;
+
+  // Chromium restores tabs asynchronously after the CDP connection becomes
+  // available. A one-shot pages() snapshot can therefore miss dozens of late
+  // restored tabs and leave the managed PLAUD profile consuming every core.
+  while (true) {
+    const pages = context.pages().filter((candidate) => !candidate.isClosed());
+    if (!page || page.isClosed() || !pages.includes(page)) {
+      page = pages.at(-1) || (await context.newPage());
+    }
+    const extras = pages.filter((candidate) => candidate !== page);
+    if (extras.length > 0) {
+      quietPasses = 0;
+      await Promise.allSettled(
+        extras.map((candidate) =>
+          settleWithin(candidate.close({ runBeforeUnload: false }), 2000)),
+      );
+      closedPageCount += extras.length;
+    }
+
+    const remaining = context.pages().filter((candidate) => !candidate.isClosed());
+    if (remaining.length <= 1) quietPasses += 1;
+    else quietPasses = 0;
+    if (quietPasses >= quietPassesRequired) {
+      return { page, closedPageCount };
+    }
+    if (now() >= deadline) {
+      throw new Error(`PLAUD browser restored ${remaining.length} tabs and could not be compacted safely.`);
+    }
+    await pauseImpl(pollMs);
+  }
 }
 
 function clearDevToolsActivePort(profileDir) {
@@ -761,9 +788,10 @@ async function launchManagedBrowser(profileDir, options = {}) {
     });
     await terminate(profileDir, null);
     clearManagedShutdownMarker(profileDir);
-    if (managedProfileNeedsSessionRecovery(profileDir)) {
-      clearManagedSessionRestoreState(profileDir);
-    }
+    // This is a dedicated managed profile. Tab restoration is never useful,
+    // even after a normal exit, and can race with CDP initialization. Remove
+    // only the session/tab restore files; cookies and site storage stay intact.
+    clearManagedSessionRestoreState(profileDir);
     clearDevToolsActivePort(profileDir);
     const headless = options.headless !== false;
     const browserArgs = managedBrowserArgs(profileDir, {
