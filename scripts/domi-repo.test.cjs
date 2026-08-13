@@ -227,6 +227,33 @@ test("project upsert rejects archive titles before writing and accepts canonical
   assert.equal(repository.listProjects().length, 3);
 });
 
+test("new consumer projects use 消费 while existing 消费科技 projects remain compatible", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+
+  const created = repository.upsertProject({
+    name: "新消费项目",
+    domain: "消费科技",
+    subdomains: ["可穿戴"]
+  });
+  assert.equal(created.project.domain, "消费");
+
+  const legacy = repository.upsertProject({
+    name: "历史消费项目",
+    domain: "消费",
+    subdomains: ["可穿戴"]
+  });
+  repository.database.prepare("UPDATE projects SET domain = '消费科技' WHERE id = ?")
+    .run(legacy.project.id);
+  const compatible = repository.upsertProject({
+    name: "历史消费项目",
+    domain: "消费科技",
+    subdomains: ["可穿戴"],
+    notes: "只更新摘要"
+  });
+  assert.equal(compatible.project.domain, "消费科技");
+});
+
 test("unclassified projects avoid and migrate the redundant _未分类/_未分类 layer", (t) => {
   const repository = createRepository(t);
   t.after(() => repository.close());
@@ -339,4 +366,13 @@ test("local news upsert deduplicates by event ID and writes a readable Markdown 
   assert.equal(second.action, "updated");
   assert.equal(repository.listNews({ to: Date.parse("2026-07-25T00:00:00+08:00") }).length, 1);
   assert.match(fs.readFileSync(second.event.documentPath, "utf8"), /补充了客户信息/);
+
+  const consumer = repository.upsertNews({
+    eventId: "evt_consumer",
+    title: "示例消费品牌发布新品",
+    domains: ["消费科技"],
+    subdomains: ["消费品牌"],
+    publishedAt: "2026-07-24T10:00:00+08:00"
+  });
+  assert.deepEqual(consumer.event.domains, ["消费"]);
 });
