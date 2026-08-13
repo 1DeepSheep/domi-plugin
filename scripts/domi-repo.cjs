@@ -506,14 +506,17 @@ ${project.financingHistory || "暂无历史融资信息。"}
     assertCanonicalProjectName(name);
     const normalized = normalizedName(name);
     const existing = this.database.prepare(
-      `SELECT id, created_at, investors_json, financing_history, latest_valuation_usd_100m
+      `SELECT id, domain, created_at, investors_json, financing_history, latest_valuation_usd_100m
        FROM projects WHERE normalized_name = ?`
     ).get(normalized);
     const id = String(input.id || input.projectId || existing?.id || stableId("prj", normalized));
     const now = Date.now();
     const project = {
       name,
-      domain: String(input.domain || "").trim(),
+      domain: String(input.domain || "").trim() === "消费科技"
+        && String(existing?.domain || "").trim() !== "消费科技"
+        ? "消费"
+        : String(input.domain || "").trim(),
       subdomains: stringList(input.subdomains),
       status: String(input.status || "待交流").trim(),
       rating: String(input.rating || "").trim(),
@@ -837,7 +840,9 @@ ${event.action || "继续关注。"}
     const event = {
       eventId,
       title,
-      domains: stringList(input.domains || input.domain),
+      domains: stringList(input.domains || input.domain).map((domain) =>
+        domain === "消费科技" ? "消费" : domain
+      ),
       subdomains: stringList(input.subdomains),
       types: stringList(input.types || input.type),
       publishedAt,

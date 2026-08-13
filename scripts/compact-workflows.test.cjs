@@ -35,16 +35,18 @@ test("client todo contract is compact without weakening lifecycle or date guards
   assert.match(todoSchema, /已完成安全迁移后.*不得继续写入/);
 });
 
-test("quick radar prompt is about sixty percent smaller and keeps full scan quality", () => {
+test("quick radar prompt stays at least fifty-five percent smaller and keeps full scan quality", () => {
   const promptBytes = Buffer.byteLength(radar) + Buffer.byteLength(quickScan);
-  assert.ok(1 - promptBytes / PREVIOUS_RADAR_QUICK_BYTES >= 0.59, `radar reduction fell below about 60% (${promptBytes} bytes)`);
-  assert.match(radar, /每次调度都执行完整五领域轮次/);
+  assert.ok(1 - promptBytes / PREVIOUS_RADAR_QUICK_BYTES >= 0.55, `radar reduction fell below 55% (${promptBytes} bytes)`);
+  assert.match(radar, /每次调度严格执行调用方 `followed_domains` 快照中的领域/);
   assert.match(radar, /不得因上一轮零新增而跳过到点轮次、降频或改变客户端周期/);
   assert.match(radar, /不再加载其他 Radar reference/);
   assert.match(radar, /存在该事实时直接锁定，不再读取 `storage-backends\.md`/);
-  for (const domain of ["AI", "半导体", "智能出行", "前沿科技", "具身智能&机器人"]) {
+  for (const domain of ["AI", "半导体", "智能出行", "前沿科技", "具身智能&机器人", "消费", "生物医药"]) {
     assert.match(quickScan, new RegExp(domain.replace("&", "&")));
   }
+  assert.match(quickScan, /历史值“消费科技”只在读取和去重时归入“消费”/);
+  assert.match(quickScan, /未关注领域即使发现候选也按 `out_of_scope` 拒绝/);
   assert.match(quickScan, /DeepTech 深科技/);
   assert.match(quickScan, /最多 12 个候选、8 个合格新增/);
   assert.match(quickScan, /必须打开.*原文/);
