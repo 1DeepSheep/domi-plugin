@@ -16,7 +16,7 @@ description: 按需追踪并整理最新行业新闻、项目融资、行业趋�
 
 后端不可用只阻塞归档；不得静默切换、双写、创建第二事件库或修改项目／人脉库。
 
-- `quick_scan`：客户端增量刷新。每次调度都执行完整五领域轮次；不得因上一轮零新增而跳过到点轮次、降频或改变客户端周期。完整读取 [references/quick-scan.md](references/quick-scan.md)，不再加载其他 Radar reference、taxonomy-sync、sourcing、全量项目或人脉库。
+- `quick_scan`：客户端增量刷新。每次调度严格执行调用方 `followed_domains` 快照中的领域；不得自行增删领域，也不得因上一轮零新增而跳过到点轮次、降频或改变客户端周期。完整读取 [references/quick-scan.md](references/quick-scan.md)，不再加载其他 Radar reference、taxonomy-sync、sourcing、全量项目或人脉库。
 - `scan`：标准 7 天扫描；完整读取 [references/base-schema.md](references/base-schema.md)、[references/priority-watchlist.md](references/priority-watchlist.md)、[references/research-and-scoring.md](references/research-and-scoring.md)、[references/output-contract.md](references/output-contract.md)、`../sourcing/SKILL.md`、taxonomy 与 taxonomy-sync。
 - `brief/explain`：只读既有事件生成摘要或解释评分／去重，明确是否重新联网。
 - `sources`：完整读取 [references/source-registry.md](references/source-registry.md) 后管理本机私有信源。
