@@ -207,6 +207,17 @@ function yamlValue(value) {
   return JSON.stringify(value === undefined ? "" : value);
 }
 
+function readableDate(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || !Number.isFinite(date.getTime())) return "未填写";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  }).format(date);
+}
+
 function replaceManagedBlock(existing, block) {
   const start = "<!-- domi:managed:start -->";
   const end = "<!-- domi:managed:end -->";
@@ -431,6 +442,13 @@ class DomiRepository {
   projectPage(project, id) {
     const directory = this.projectDirectory(project);
     const filePath = path.join(directory, "项目主页.md");
+    const latestValuation = project.latestValuationUsd100m === null
+      ? "未填写"
+      : `${project.latestValuationUsd100m} 亿美元`;
+    const subdomains = stringList(project.subdomains);
+    const domainLabel = [project.domain, ...subdomains].filter(Boolean).join(" · ") || "未分类";
+    const statusLabel = project.status || "待交流";
+    const ratingLabel = project.rating ? `${project.rating} 级` : "未评级";
     const block = `---
 domi_schema: ${SCHEMA_VERSION}
 entity_type: "project"
@@ -446,21 +464,37 @@ last_updated_at: ${yamlValue(new Date(project.lastUpdatedAt).toISOString())}
 
 # ${project.name}
 
-## 项目状态
+> ${domainLabel} · ${statusLabel} · ${ratingLabel} · 更新于 ${readableDate(project.lastUpdatedAt)}
 
-- 领域：${project.domain || "未分类"}
-- 子领域：${stringList(project.subdomains).join("、") || "未分类"}
-- 进展：${project.status || "待交流"}
-- 评级：${project.rating || "未评级"}
-- 最新估值：${project.latestValuationUsd100m === null ? "未填写" : `${project.latestValuationUsd100m} 亿美元`}
+[打开项目目录](domi-folder:current)
 
-## 历史融资
+## 投资摘要
+
+${project.notes || "暂无投资摘要。建议补充项目定位、核心产品、团队、商业进展、投资亮点、主要风险与下一步核实事项。"}
+
+## 项目概览
+
+| 项目字段 | 当前信息 |
+| --- | --- |
+| 领域 | ${project.domain || "未分类"} |
+| 子领域 | ${subdomains.join("、") || "未分类"} |
+| 进展状态 | ${statusLabel} |
+| 项目评级 | ${project.rating || "未评级"} |
+| 城市 | ${stringList(project.cities).join("、") || "未填写"} |
+| 关注机构 | ${stringList(project.investors).join("、") || "未填写"} |
+| 入库时间 | ${readableDate(project.createdAt)} |
+| 最后更新 | ${readableDate(project.lastUpdatedAt)} |
+
+## 融资与估值
+
+- 最新已完成轮次投后估值：${latestValuation}
 
 ${project.financingHistory || "暂无历史融资信息。"}
 
-## 结构化摘要
+## 相关材料
 
-${project.notes || "暂无摘要。"}
+- [在 Finder 中查看项目全部材料](domi-folder:current)
+- 会议纪要、投资快评、深度研究、BP / Datapack 与 IC 材料均保留在项目目录中。
 `;
     writeManagedMarkdown(filePath, block);
     return filePath;
@@ -498,6 +532,7 @@ ${project.notes || "暂无摘要。"}
           ? null
           : Number(input.latestValuationUsd100m)
         : existing?.latest_valuation_usd_100m ?? null,
+      createdAt: existing?.created_at || now,
       lastUpdatedAt: toEpochMs(input.lastUpdatedAt || input.lastFollowup, now)
     };
     if (project.latestValuationUsd100m !== null
