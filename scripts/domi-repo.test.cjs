@@ -152,6 +152,11 @@ test("local project upsert creates SQLite record and lazily creates document fol
   assert.match(created.project.financingHistory, /2026年3月/);
 
   const pagePath = created.project.documentPath;
+  const initialPage = fs.readFileSync(pagePath, "utf8");
+  assert.match(initialPage, /\[打开项目目录\]\(domi-folder:current\)/);
+  assert.match(initialPage, /## 投资摘要[\s\S]*?## 项目概览[\s\S]*?\| 项目字段 \| 当前信息 \|/);
+  assert.match(initialPage, /## 融资与估值[\s\S]*?## 相关材料/);
+  assert.doesNotMatch(initialPage, /PLAUD文字稿/);
   fs.appendFileSync(pagePath, "\n## 用户补充\n\n这段内容必须保留。\n");
   const updated = repository.upsertProject({
     name: "示例科技",
