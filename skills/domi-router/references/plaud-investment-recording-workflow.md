@@ -36,8 +36,9 @@ mark <fileId> context_pending - {"contextPromptedAt":"<ISO-8601>","recallSummary
 
 - 用户提供具体背景：写入必要摘要并标为 `context_ready`、`contextStatus=provided`；
 - 用户表示不知道、跳过或直接处理：标为 `context_ready`、`contextStatus=skipped`；
-- 尚未回复：保持 `context_pending`，不得后台继续；
+- 尚未回复：保持 `context_pending`，不得后台继续；同一任务中的下一条用户消息默认是对本录音问题的回复，除非用户明确取消或选择其他工作流；
 - 部分信息也算 `provided`，不为补齐字段反复追问。
+- 收到回复时必须续接原 `fileId`、`transcriptPath` 和此前执行会话；不得把访谈类型、项目名或参会人补充重新解释为“开始录音”，不得创建新录音或调用本机麦克风。
 
 ## 四、生成纪要与审计
 

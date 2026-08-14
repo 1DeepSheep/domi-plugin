@@ -34,7 +34,7 @@ Transcribe & structure → research & judge → archive locally → track over t
 
 ### 1. Complete end-to-end work instead of stopping at content generation
 
-- A project conversation can move through Mac recording, a PLAUD transcript, structured notes, key takeaways, an investment review, follow-up actions, and repository archival.
+- An existing PLAUD project recording can move through transcription, structured notes, key takeaways, an investment review, follow-up actions, and repository archival.
 - A company name, URL, pitch deck, screenshot, or project file can move through desk research, fact verification, investment rating, project documentation, and structured records.
 - An industry scan can move through multi-source discovery, primary-source verification, entity normalization, event deduplication, importance and confidence scoring, priority-entity matching, and event archival.
 - For multistage workflows managed by the Router and backed by stage receipts, domi preserves completed artifacts and state and can resume from a verified safe point, reducing the risk of regenerated content, duplicate records, or repeated external actions.
@@ -55,7 +55,7 @@ domi can map sectors, companies, and potential founders through systematic cover
 
 | Capability | What domi can do |
 | --- | --- |
-| Recordings and meeting notes | Mac recording, PLAUD transcription, ASR refinement, speaker structure, complete notes, key conclusions, and follow-up actions |
+| Recordings and meeting notes | Sync existing PLAUD recordings, transcribe them, refine ASR, structure speakers, and produce complete notes, key conclusions, and follow-up actions |
 | Project research and intake | Start with a company name, URL, deck, screenshot, or files; complete desk research, deduplication, rating, project documentation, structured records, and attachment archival |
 | Investment judgment | High-density 3–5 point reviews, 1–10 scores, B/A/S ratings, risks, and critical validation questions |
 | Deep analysis | Analyze prospectuses, annual and quarterly reports, financial statements, datapacks, pitch decks, business models, operations, and financial quality; produce slides or HTML/PDF research decks |
@@ -71,7 +71,7 @@ domi can map sectors, companies, and potential founders through systematic cover
 Describe the outcome in natural language inside the domi app:
 
 ```text
-Start recording, then turn the conversation into notes, an investment view, and follow-up actions.
+Sync an existing PLAUD recording, then turn it into notes, an investment view, and follow-up actions.
 Research and archive this company, create the project document, and give it an initial rating.
 Turn these founder-meeting notes into a concise investment review.
 Analyze the business quality, financial quality, and key risks in this prospectus.

@@ -125,9 +125,9 @@ python3 "<本 Skill 目录>/scripts/transcribe_diarized.py" \
 - `provided`：把用户补充的对话类型、目的、参会人姓名、机构和职位作为高优先级上下文，与文字稿交叉核对；有冲突时保留并标记待确认，不要静默覆盖原文。
 - `skipped`：直接执行后续阶段，从文字稿尽力识别说话人；无法确认时在参会人行标注`[说话人信息待补充]`。
 
-**快速讨论交接例外**：若上游同时传入 `workflowKind=quick-discussion` 与 `outputProfile=quick_discussion`：
+**旧版快速讨论恢复例外**：若上游恢复既有任务，并同时传入 `workflowKind=quick-discussion` 与 `outputProfile=quick_discussion`：
 
-- 输入必须使用 PLAUD 下载的 `transcriptPath`，跳过本地 Qwen 音频转写；完整沿用上游的 `discussionTopic`、`contextStatus` 与已知类型、目的和参会人。
+- 输入必须使用 PLAUD 下载的既有 `transcriptPath`，跳过本地 Qwen 音频转写；完整沿用上游的 `discussionTopic`、`contextStatus` 与已知类型、目的和参会人。该例外只用于恢复旧状态，不授权启动新的本机录音。
 - 内部讨论默认使用模式 B；只有用户明确说明这是项目拜访／创始人交流时才使用模式 A。即使内容属于创业项目，本工作流也只生成纪要，不自动触发投资评级、归档或项目库写入。
 - 默认纪要文件名使用 `[YYYYMMDD]-[主题]-快速讨论.md`；主题从用户输入与文字稿提炼，不强行填入公司名。仍须执行适用的实体、数字、联网核验和完整性审计，不得因“快速”降低事实质量。
 - 本阶段只交付完整结构化纪要并返回 `notesPath`。跟进事项不塞回纪要正文；由上游基于最终纪要和原始文字稿生成独立的讨论摘要文件，避免与本 Skill 对会议元信息／Next Steps 的过滤规则冲突。
