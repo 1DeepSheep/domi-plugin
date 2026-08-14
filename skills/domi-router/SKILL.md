@@ -1,6 +1,6 @@
 ---
 name: domi-router
-description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音处理为文字稿和结构化纪要；把无修饰的“开始录音”默认串联为 Mac 录音、PLAUD 文字稿、ASR Notes 纪要、核心要点与跟进事项；仅在用户明确要求本地录音且不上传时执行单阶段录音；识别创业项目交流后继续投资评分，并按已锁定的资料库后端归档；也路由飞书知识外挂、行业雷达、项目研究、intake、人物、待办事项和 Outlook 约日程工作流。
+description: domi 的总控路由与工作流编排器。用于把 PLAUD 已有录音处理为文字稿和结构化纪要，识别创业项目交流后继续投资评分，并按已锁定的资料库后端归档；也路由飞书知识外挂、行业雷达、项目研究、intake、人物、待办事项和 Outlook 约日程工作流。domi 不启动本机麦克风录音。
 ---
 
 # domi Router
@@ -34,7 +34,7 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 - `enabled`：按本 Router 与 `plaud` Skill 的授权规则继续。
 - 字段缺失：按旧版本兼容处理，但不构成上传或生成授权。
 
-当 PLAUD 已关闭而用户只说无修饰的“开始录音”时，降级为 `mac-recording` 本地单阶段录音，并明确说明停止后只保存音频、不上传、不转写；不得静默切换到其他云端转写。用户另行明确提供本地音频并要求整理文字稿／纪要时，可以采用 `asr-notes` 的本地转写路径，该请求不等于重新开启 PLAUD。
+domi 不提供启动本机麦克风录音的工作流。用户另行明确提供本地音频并要求整理文字稿／纪要时，可以采用 `asr-notes` 的本地转写路径；该请求不等于重新开启 PLAUD，也不得调用 `mac-recording start`。
 
 播客是例外：播客处理明确固定使用用户自己的 PLAUD。PLAUD 已关闭、登录失效或不可用时，把单集暂停为 `waiting_for_plaud`，不得降级为 `asr-notes` 本地音频转写，也不得改用其他云端 ASR。
 
@@ -43,8 +43,6 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 | 工作流 | 触发 | 顺序 |
 |---|---|---|
 | PLAUD 投资录音处理 | “运行 domi”“处理 PLAUD 未生成录音”“同步录音并入库” | `plaud` → 文字稿回忆提示与对话上下文确认 → `asr-notes` → 条件判断 → `investment-review` → `investment-mgmt` 按已锁定后端归档 |
-| Mac 本机录音即时控制 | “开始本地录音”“仅本地录音”“只录音，不上传／不整理”“停止后只保存文件”“录音状态” | `mac-recording` 单阶段即时控制；不进入 PLAUD 工作流 |
-| 快速讨论 | 无修饰的“开始录音”“现在开始录音”“启动 Mac 录音”，以及“开始快速讨论”“录下这段讨论”“停止快速讨论并整理” | `mac-recording` → `plaud` 本地音频上传与文字稿 → 上下文确认 → `asr-notes` → 完整纪要 → 核心要点与跟进事项 |
 | 行业新闻雷达 | “看一下／搜一下／更新一下 XX 领域最新的新闻／动态／融资信息” | `investment-radar` 联网检索、分类归一、原文核验、事件去重与评分 → 必要时 taxonomy 更新 → 写入当前后端行业事件库 → 只返回值得关注项 |
 | 行业信源管理 | “添加新闻源／RSS／重点公众号／播客”“管理行业动态信源” | `investment-radar sources` → 只读测试公开 URL → 保存本机私有信源配置；没有自动处理授权时到此结束 |
 | 播客纪要 | “下载这期播客并转纪要”“处理小宇宙单集”，或已授权播客自动命中 | `investment-radar podcast` 公开发现与授权 → 临时下载 → `plaud transcribe-local` → `asr-notes` 读取 PLAUD 文字稿 → `investment-mgmt` 唯一主归档与多处关联 → Radar 写入有增量的行业事件 |
@@ -59,7 +57,6 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 | 单次自定义串联 | 用户明确指定“X 完成后使用 Y” | 按用户顺序执行，并定义完成标准与交接产物 |
 
 执行 PLAUD 投资录音处理时，必须先完整读取 [references/plaud-investment-recording-workflow.md](references/plaud-investment-recording-workflow.md)。
-执行快速讨论时，必须先完整读取 [references/quick-discussion-workflow.md](references/quick-discussion-workflow.md)。
 执行行业新闻雷达时，必须先完整读取 [references/industry-news-radar-workflow.md](references/industry-news-radar-workflow.md)，再采用插件内 `investment-radar` Skill；Router 只负责触发、交接和回传，不复制其检索、评分或写入逻辑。
 执行行业信源管理或播客纪要时，必须先完整读取 [references/podcast-ingestion-workflow.md](references/podcast-ingestion-workflow.md)；信源配置遵循 `investment-radar/references/source-registry.md`，播客下载、PLAUD 转写和归档遵循 `investment-radar/references/podcast-ingestion.md`。
 执行投资项目只读研究或研究入库时，必须先完整读取 [references/project-intake-workflow.md](references/project-intake-workflow.md)，再按该文件的模式与阶段契约逐一采用对应 Skill；仅说“查一下”时不得推断入库授权，研究交付后的主动询问也不等于用户已授权写入。
@@ -71,18 +68,6 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 
 优先根据用户的交付目标路由：目标是公司／项目投资判断、项目文档或本地项目库时走项目工作流；目标是候选名单、人物画像、公开背调、引荐路径、关系维护或本地人脉库时走人物工作流。人物只是识别某个项目的零散线索时仍走项目工作流；公司只是解释人物履历的背景时仍走人物工作流。若用户只要按姓名／邮箱解析飞书身份，不做人物研究或关系管理，则使用 `lark-contact`，不要扩张成人物 intake。
 
-### Mac 录音快速路由
-
-用户当前消息明确要求立即用 Mac 默认麦克风开始录音时，固定采用当前已解析的插件内 `mac-recording` Skill，并以该 `SKILL.md` 所在目录的 `scripts/mac-recording.js` 为唯一入口。支持串行工具编排时，把读取该 Skill 与随后执行 `start` 放在同一次工具往返中；直接执行且只执行一次 `node <resolved-script-path> start ...`。不得预先运行 `doctor`、`status`、`last` 或 `start --dry-run`，不得搜索、枚举或比较其他插件目录及缓存版本。入口缺失时立即报告，不转而查找其他副本。
-
-无修饰的“开始录音”“现在开始录音”“启动 Mac 录音”“录下这段讨论”，以及明确的“开始快速讨论”，都默认匹配快速讨论完整工作流。本次唯一的 `start` 必须带 `--workflow-kind quick-discussion`；主题可同时传入 `--name`。启动后立即回复，不提前打开 PLAUD。带该标签的录音停止后按快速讨论 reference 继续；用户在停止时明确说“只停止，不上传／不整理”时，到音频就绪后暂停。
-
-只有用户在启动消息中明确限定“开始本地录音”“仅本地录音”“只录音，不上传 PLAUD／不生成纪要”“停止后只保存文件”时，才省略工作流标签并停留在 `mac-recording` 单阶段。不要把“开始录音”本身解释为本地限定，也不要为了确认默认分流而延迟启动。
-
-只根据本次 `start` 返回的 JSON 判断结果；出现 `recording: true` 后立即报告输出路径、开始时间、自动停止时长和 `timings.totalMs`，不做启动后复查，不在回复前执行测试或插件维护。若返回已有活动录音，直接报告本次响应中的路径和时长，不启动第二个。
-
-停止、状态查询及错误恢复仍完整遵循 `mac-recording` Skill；“一次调用”只约束正常启动热路径，不削弱 `stop` 的终止回执、文件校验及 `status`/`last` 恢复检查。停止时根据活动录音保存的 `workflowKind/workflowId` 判断是否继续 PLAUD，不能只凭停止消息措辞重新分流。系统音频或屏幕录制不路由到 `mac-recording`。
-
 ## 通用编排规则
 
 1. 开始前确定完整工作流、每一步的完成标准、交接产物和失败处理。
@@ -93,7 +78,7 @@ description: domi 的总控路由与工作流编排器。用于把 PLAUD 录音�
 6. 外部写入前执行去重和字段校验；遇到多个可能匹配项时先让用户确认。
 7. 某一步失败时保留已完成产物和阶段标识，从失败点恢复；PLAUD 不重复触发生成，项目 intake 不重复创建文档或记录，people intake 不重发已成功的人物写入。
 8. 对 `project` 类型的新项目，当前锁定后端的结构化记录、主文档和材料目录都是强制阶段；任一层失败时不得跳过并直接标为 `managed`。本地主库是 SQLite／Markdown／本地材料，旧飞书主库是既有 Base／Wiki／本地材料。
-9. 最终报告所选工作流实际产生的关键产物：快速讨论展示核心要点与跟进事项，并提供音频、PLAUD 文字稿、完整纪要和讨论摘要；PLAUD 投资工作流报告文字稿、纪要、项目判断、评分／评级和当前后端归档结果；行业新闻雷达报告扫描范围、值得关注项、taxonomy 复用／新增／延期／部分完成／分类修正状态、覆盖缺口，以及当前后端事件库新增／更新／无变化／跳过／失败数量；播客工作流报告节目与单集、PLAUD 文字稿状态、唯一主纪要、主归档类型和关联项目／行业；项目 `research` mode 先完整交付只读研究，并以“是否继续投资评级分析并归档到项目库？”收尾，确认前不得评级或写入；确认后复用研究产物进入 `intake`，不得重复研究；项目与人物 intake 报告当前后端新增、更新、无变化、跳过、歧义和失败。实际采用飞书只读参考时列出必要标题／链接；只有本轮用户明确要求飞书写入时才报告交付链接或交付失败。未获写入授权时省略外部副本阶段，不把它写成入库结果或未完成项。默认不展示本机绝对路径、内部记录 ID、Base／Wiki 标识或逐字段审计明细。
+9. 最终报告所选工作流实际产生的关键产物：PLAUD 投资工作流报告文字稿、纪要、项目判断、评分／评级和当前后端归档结果；行业新闻雷达报告扫描范围、值得关注项、taxonomy 复用／新增／延期／部分完成／分类修正状态、覆盖缺口，以及当前后端事件库新增／更新／无变化／跳过／失败数量；播客工作流报告节目与单集、PLAUD 文字稿状态、唯一主纪要、主归档类型和关联项目／行业；项目 `research` mode 先完整交付只读研究，并以“是否继续投资评级分析并归档到项目库？”收尾，确认前不得评级或写入；确认后复用研究产物进入 `intake`，不得重复研究；项目与人物 intake 报告当前后端新增、更新、无变化、跳过、歧义和失败。实际采用飞书只读参考时列出必要标题／链接；只有本轮用户明确要求飞书写入时才报告交付链接或交付失败。未获写入授权时省略外部副本阶段，不把它写成入库结果或未完成项。默认不展示本机绝对路径、内部记录 ID、Base／Wiki 标识或逐字段审计明细。
 
 ## 新增多阶段工作流的写法
 

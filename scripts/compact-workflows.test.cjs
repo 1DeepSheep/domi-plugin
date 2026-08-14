@@ -47,7 +47,12 @@ test("quick radar prompt stays at least fifty-five percent smaller and keeps ful
   }
   assert.match(quickScan, /历史值“消费科技”只在读取和去重时归入“消费”/);
   assert.match(quickScan, /未关注领域即使发现候选也按 `out_of_scope` 拒绝/);
+  assert.match(quickScan, /每个领域至少执行一组明确包含该领域或其 canonical 子领域的查询/);
+  assert.match(quickScan, /不得直接复制 `followed_domains`/);
+  assert.match(quickScan, /queries_by_domain/);
+  assert.match(quickScan, /缺少覆盖字段时所有领域都不推进/);
   assert.match(quickScan, /DeepTech 深科技/);
+  assert.match(quickScan, /每个已启用重点信源都必须逐个尝试/);
   assert.match(quickScan, /最多 12 个候选、8 个合格新增/);
   assert.match(quickScan, /必须打开.*原文/);
   assert.match(quickScan, /证据状态只能是/);
