@@ -123,6 +123,13 @@ test("PLAUD local completion never depends on an unrequested Feishu copy", () =>
   assert.match(asrNotes, /只生成纪要，不自动触发投资评级、归档或项目库写入/);
 });
 
+test("PLAUD explicit sync processes the full pending set without a quantity confirmation threshold", () => {
+  assert.match(plaud, /点击“同步 PLAUD 并生成文字稿”即明确授权处理当前读取到的全部待生成录音/);
+  assert.match(plaudWorkflow, /不因数量增加二次确认/);
+  assert.doesNotMatch(plaud, /待生成数量超过 10/);
+  assert.doesNotMatch(plaudWorkflow, /超过 10 条先报告数量并确认/);
+});
+
 test("single Markdown export has an executable preflight and explicit App-host handoff", () => {
   assert.match(extension, /feishu-markdown-export\.cjs prepare/);
   assert.match(extension, /feishu-markdown-export\.cjs export/);
