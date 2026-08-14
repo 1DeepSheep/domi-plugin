@@ -1,4 +1,4 @@
 interface:
-  display_name: "Mac 录音"
-  short_description: "安全录制 Mac 麦克风；默认绑定快速讨论，可明确仅本地。"
-  default_prompt: "Use $mac-recording to start a Mac microphone recording tagged for quick discussion by default, unless I explicitly request local-only recording."
+  display_name: "旧录音恢复"
+  short_description: "停止或查看旧版 domi 已启动的 Mac 录音。"
+  default_prompt: "Use $mac-recording only to inspect or safely stop a legacy Mac recording that is already active. Never start a new recording."

@@ -1,6 +1,6 @@
 ---
 name: plaud
-description: 安全访问本机 PLAUD 录音，上传 Mac 本地录音或已获授权的公开播客音频，查询文件状态，触发生成，等待并下载 transcript，并维护 domi 的可恢复处理队列。当用户提到 PLAUD、上传录音到 PLAUD、未生成录音、生成文字稿、下载 transcript、同步 PLAUD、播客纪要、快速讨论或运行 domi 录音工作流时使用。使用插件内置的安全 CLI，不输出鉴权头，也不调用旧版自动写飞书 pipeline。
+description: 安全访问本机 PLAUD 录音，上传用户明确提供的本地音频或已获授权的公开播客音频，查询文件状态，触发生成，等待并下载 transcript，并维护 domi 的可恢复处理队列。当用户提到 PLAUD、上传已有录音、未生成录音、生成文字稿、下载 transcript、同步 PLAUD、播客纪要或运行 domi 录音整理工作流时使用。使用插件内置的安全 CLI，不输出鉴权头，也不调用旧版自动写飞书 pipeline。
 ---
 
 # PLAUD
@@ -30,7 +30,7 @@ scripts/plaud.js
 
 ## 账户内已有录音的标准流程
 
-以下 1–5 步只适用于 PLAUD 账户里已经存在、但尚未生成或整理的录音。若上游已经给出精确本地 `audioPath`，尤其是 `workflowKind=quick-discussion`，直接走“本地录音上传与转写”分支；不得先运行 `queue`、`pending` 或 `sync-pending`，也不得让其他队列项阻塞当前讨论。
+以下 1–5 步只适用于 PLAUD 账户里已经存在、但尚未生成或整理的录音。若用户明确提供精确本地 `audioPath` 并要求上传／生成，直接走“本地录音上传与转写”分支；不得先运行 `queue`、`pending` 或 `sync-pending`。旧版遗留的 `workflowKind=quick-discussion` 只用于恢复同一既有录音，不得启动新录音。
 
 1. 先运行 `doctor` 检查 Node、用户所选 Chrome／Tabbit 和内置依赖，再运行 `connection` 发起一次只读远端验证；未验证登录时停止并让用户回到 domi 设置完成登录。
 2. 运行 `queue`，优先恢复之前已生成但尚未完成纪要、评分、文档归档或入库的项目；对 `notes_project`、`reviewed`、`documented` 项先运行 `verify <fileId>` 只读核验审计与文件哈希。
@@ -40,14 +40,14 @@ scripts/plaud.js
 
 ## 本地录音上传与转写
 
-`mac-recording` 已正常停止并返回经过音频校验的 `audioPath` 后，运行：
+用户明确提供已经存在、经过音频校验的 `audioPath` 并要求上传／生成后，运行：
 
 ```text
 transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow-id ID] [--adopt-file-id ID] [--retry-upload] [--retry-generation]
 ```
 
 - 该命令按源音频 SHA-256 去重，使用稳定远端标题上传，只对返回的精确 `fileId` 触发一次生成，再等待并下载 transcript；不得改用 `pending` 或 `sync-pending` 猜测刚上传的文件。
-- `--workflow-id` 只用于 `quick-discussion`，必须传入 `mac-recording` 返回的 16 位 ID；不带该参数的普通本地转写标记为 `local_transcription`，不得进入快速讨论终态。
+- `--workflow-id` 仅用于恢复旧版已经存在的 `quick-discussion` 状态，必须复用原 16 位 ID；新请求不得创建该 ID。不带该参数的普通本地转写标记为 `local_transcription`，不得进入快速讨论终态。
 - `transcript_ready`、`generating`、`generation_submitting`、`generation_unknown`、`generation_timeout` 或 `download_failed` 重试时复用既有 `fileId`，优先下载，不得重新上传或盲目重新生成。
 - `upload_unknown` 表示 PLAUD 可能已确认上传但响应丢失。命令会先多次按稳定标题恢复；远端仍不可见时必须保留该阶段并稍后重试。只有用户明确同意可能重复上传时才追加 `--retry-upload`。
 - `upload_recovery_ambiguous` 会在队列中列出候选 `uploadCandidateFileIds`。用户明确选定其中一条后，用 `--adopt-file-id <fileId>` 恢复；CLI 仍会验证该 ID 的远端标题与本地音频的稳定标题完全一致，不接受任意 ID。
@@ -73,7 +73,7 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - `login` 只打开 domi 专用浏览器 Profile 并等待用户亲自登录；不得代填账号密码。`logout` 只删除所选 domi 专用 Profile。
 - 除用户明确触发 `login` 外，CLI 必须通过 macOS 的隐藏后台启动模式运行专用浏览器，不得激活 Chrome／Tabbit 的日常窗口；同一专用 Profile 的命令必须串行执行，禁止通过重复启动生成多个 `Plaud Web` 标签页。
 - `sync-pending` 会在 PLAUD 中触发生成。只有用户明确要求生成、同步或运行 domi 主工作流时才能执行。
-- `transcribe-local` 会把本地音频上传到 PLAUD 并触发生成。只有用户明确要求上传／生成，或明确启动了说明“停止后上传 PLAUD 并整理”的快速讨论工作流时才能执行；普通 Mac 录音停止不构成上传授权。
+- `transcribe-local` 会把本地音频上传到 PLAUD 并触发生成。只有用户本轮明确提供已有音频并要求上传／生成，或恢复旧版已经取得授权且绑定精确工作流 ID 的遗留项时才能执行；历史消息、录音停止或文件存在本身不构成上传授权。
 - 对公开播客，用户为单集点击“生成纪要”或为信源明确开启“自动处理”视为对应范围的上传／生成授权；默认关闭，停用后不再处理新单集。
 - `--retry-upload` 与 `--retry-generation` 都是结果不确定后的显式风险恢复选项；必须分别取得用户对“可能重复上传”或“可能重复提交生成”的明确同意，不得自动追加。
 - 用户在 domi 中点击“同步 PLAUD 并生成文字稿”即明确授权处理当前读取到的全部待生成录音；不得再按数量追加二次确认。登录、网络、旧缓存和结果不确定时仍须按本节其他边界停止或恢复。
@@ -102,7 +102,7 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - `discussion_complete`：完整纪要与讨论摘要均已生成并绑定哈希，快速讨论流程结束。
 - `generation_failed` / `generation_timeout` / `failed`：需要报告并按具体错误恢复。
 
-禁止把失败项目直接标为完成。账户内已有录音的批处理在重新运行时先处理 `queue`；快速讨论按其精确 `workflowId` 和音频继续，不先处理无关队列项。
+禁止把失败项目直接标为完成。账户内已有录音的批处理在重新运行时先处理 `queue`；旧版快速讨论恢复时按其精确 `workflowId` 和音频继续，不先处理无关队列项，也不得启动新录音。
 
 ## 依赖
 
