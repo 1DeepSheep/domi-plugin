@@ -20,7 +20,7 @@
 ## 二、发现、生成并下载文字稿
 
 1. 运行 `pending 100`。没有 pending 时处理完恢复项后结束。
-2. 数量 1–10 时运行 `sync-pending`；超过 10 条先报告数量并确认本批范围。
+2. 用户明确触发“同步 PLAUD 并生成文字稿”后，按当前待生成数量直接运行一次 `sync-pending`；不因数量增加二次确认。
 3. 输出到当前工作区 `work/domi/plaud/<run-id>/`。
 4. 每条必须取得 `transcriptPath` 且队列为 `transcript_ready`；失败项不得进入下一步。
 
