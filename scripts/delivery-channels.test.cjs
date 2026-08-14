@@ -29,6 +29,8 @@ const plaudWorkflow = read("skills", "domi-router", "references", "plaud-investm
 const plaud = read("skills", "plaud", "SKILL.md");
 const plaudCommands = read("skills", "plaud", "references", "commands.md");
 const asrNotes = read("skills", "asr-notes", "SKILL.md");
+const macRecording = read("skills", "mac-recording", "SKILL.md");
+const pluginManifest = JSON.parse(read(".codex-plugin", "plugin.json"));
 
 test("local SQLite and Markdown remain authoritative for new and migrated users", () => {
   for (const contract of [investmentMgmt, storage, delivery]) {
@@ -128,6 +130,22 @@ test("PLAUD explicit sync processes the full pending set without a quantity conf
   assert.match(plaudWorkflow, /不因数量增加二次确认/);
   assert.doesNotMatch(plaud, /待生成数量超过 10/);
   assert.doesNotMatch(plaudWorkflow, /超过 10 条先报告数量并确认/);
+});
+
+test("domi no longer starts local microphone recordings while legacy sessions remain recoverable", () => {
+  assert.match(router, /domi 不提供启动本机麦克风录音的工作流/);
+  assert.match(router, /不得调用 `mac-recording start`/);
+  assert.match(macRecording, /只负责收尾旧版 domi 已经启动的 Mac 麦克风录音/);
+  assert.match(macRecording, /绝不得调用 `start`、`doctor` 或 `--dry-run`/);
+  assert.match(macRecording, /`status`/);
+  assert.match(macRecording, /`stop`/);
+  assert.match(macRecording, /`last`/);
+  assert.ok(!pluginManifest.keywords.includes("mac-recording"));
+  assert.ok(!pluginManifest.keywords.includes("quick-discussion"));
+  assert.equal(
+    fs.existsSync(path.join(root, "skills", "domi-router", "references", "quick-discussion-workflow.md")),
+    false
+  );
 });
 
 test("single Markdown export has an executable preflight and explicit App-host handoff", () => {

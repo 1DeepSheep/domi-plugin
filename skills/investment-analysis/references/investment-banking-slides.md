@@ -6,12 +6,12 @@
 
 ## 内容工作流
 
-1. 先生成完整研究底稿，通常为 Markdown。底稿应覆盖业务、收入结构、关键经营指标、关键财务报表与财务模型、UE、成本费用、财务质量、融资历史、股东结构、解禁压力、行业格局、客户/供应商/竞对披露、匿名实体备注、市场观点与外部争议、风险和后续 KPI。
+1. 先锁定报告 profile，再生成完整研究底稿，通常为 Markdown。公共股票 profile 覆盖投资结论、证券与 as-of、市场预期、差异化假设、经营驱动、预测修正、EBIT/EPS/FCF、资本结构、估值、催化剂与证伪；IPO/招股书 profile 才额外要求融资历史、股东回报、解禁、客户/供应商披露和匿名实体备注。不要把 IPO 模块强加到所有 deck。
 2. 再把底稿转换为 slides。每页只承载一个中心判断，但允许放较多文字、表格和数字，不要把研究报告压成过度简略的营销页。
 3. 制作前先建立 `slide_plan` 或页级 slide contract。每页必须写清：对应底稿章节/段落、thesis title、本页回答的投资/产品/业务问题、必须保留的关键事实和数字、主图/主表、右侧分析或结论条、投资/产品/业务含义、来源，以及 `必须出现` 的直接答案短句。slides 的内容必须从分析报告/研究底稿派生；除非明确标为新增补充分析，不要凭空加入底稿没有支撑的判断。`必须出现` 用 `短句1 || 短句2` 记录，交付前要在最终 HTML 中逐句命中。
-4. 同步建立“底稿覆盖矩阵”：把研究底稿中的核心结论、关键数据表、财务模型、经营 KPI、融资回报、客户/供应商/竞对、市场观点与外部争议、风险和后续验证项映射到具体页码。重要信息没有映射到 slides 时，必须补页、合并到已有页、放入附录或明确说明删减原因；不要让重要分析只停留在 Markdown 报告里。
+4. 同步建立“底稿覆盖矩阵”：按 profile 把研究底稿中的承重结论、关键数据表、财务模型、经营 KPI、估值、风险和验证项映射到具体页码。公共股票还要映射预期差、预测修正、经营到每股价值桥、催化剂与证伪；IPO 还要映射融资回报、客户/供应商/竞对和解禁。重要信息没有映射到 slides 时，必须补页、合并到已有页、放入附录或明确说明删减原因。
 5. 制作前建立 `layout rhythm plan`：逐页写清 layout family、是否使用 metric strip、主证据类型和预计页面密度。长 deck 不应连续多页使用同一版式；底部四卡片只能作为可选解释层。
-6. 初版 slides 完成后，反向对比“底稿 vs slides”，列出缺失信息并补页或补表。重点检查成本费用口径、现金流质量、融资回报、解禁条件、行业份额、客户/供应商历年金额占比和匿名实体备注是否遗漏。
+6. 初版 slides 完成后，反向对比“底稿 vs slides”，列出缺失信息并补页或补表。公共股票重点检查 dated consensus、Our Estimate、预测变化、现金与债务、每股价值、催化剂和证伪条件；IPO 重点检查融资回报、解禁条件、行业份额、客户/供应商历年金额占比和匿名实体备注。
 7. 用户要求更新版式时，优先调整表格、图片、图表、文字块、KPI strip 和 note box 的排版密度；不要用奇怪页面比例解决空白。
 8. 如果 deck 页数偏多或用户反馈信息密度不足，先做页级审计：删除方法论/过渡/重复解释页，把相邻主题合并为“观点 + 支撑数字/图表 + 投资/产品/业务含义”的高密度页。不要只是压缩字号；优先减少重复页数并提升每页结论含量。
 9. 业务模式页不能只讲概念。优先把“业务线 + 经营指标 + 收入/毛利/成本 + UE 含义”放在同页或相邻两页，尤其使用招股书披露的 KPI 表。
@@ -32,18 +32,28 @@
 制作或大改 slides 前，先建立三个轻量文件或等价结构；如果用户只要求小改，也要在脑中按同样顺序检查：
 
 1. `research.md`：完整研究底稿，是 slides 的唯一事实底座。新增外部观点、官网定价、匿名实体识别或手工计算时，先写入底稿或在 slide contract 中标注为“新增补充分析”。
-2. `slide_contract.md`：页级内容合同。每页必须包含页码、页面节奏、模板类型、观点标题、对应底稿章节、必须保留数字/事实、主图/主表、右侧分析、投资/产品/业务含义、来源、删减说明和可检索的 `必须出现` 直接答案。融资回报页至少锁定倍数最高、IRR 最高、整轮绝对增值最高、单一机构绝对增值最高和最大外部投资人；首页若有投资建议，锁定评级、目标价、对应市值和估值方法。
+2. `slide_contract.md`：页级内容合同。每页必须包含页码、页面节奏、模板类型、观点标题、对应底稿章节、必须保留数字/事实、主图/主表、右侧分析、投资/产品/业务含义、来源、删减说明和可检索的 `必须出现` 直接答案。公共股票首页锁定证券、现价及时间戳、投资判断、合理价值/区间、估值方法和最大证伪条件；预期/估值页锁定 consensus 日期、Our Estimate、差异、EV→Equity→Per Share 桥。只有 IPO 融资回报页才锁定倍数最高、IRR 最高、整轮/机构绝对增值最高和最大外部投资人。
 3. `style_lock.yml` 或等价设计锁。默认使用 `assets/slides/style-packs/morgan-stanley/style-lock.yml`。固定页面尺寸、品牌、页眉/页脚、字体、主色、表格样式、图表样式、KPI strip 规则、数字格式、来源格式和导出设置。后续迭代不得临时改页面比例、字体、颜色或表格体系，除非用户明确要求。
 
 ### Full Workflow Gate
 
-生成 IPO/招股书 deck 时，必须把下面四项视为导出 PDF 前的硬门槛，而不是建议：
+任何 deck 都必须满足以下公共门槛：
 
-1. `research.md` 至少覆盖业务、经营 KPI、财务模型、成本费用/UE、working capital、客户/供应商、融资与股东回报、股东结构/解禁、竞对、外部市场观点、风险和来源；若底稿只有几十行或只是摘要，必须继续读招股书。
-   - 若已有旧 deck/旧报告审计失败或被用户指出“深度、信息密度、视觉设计明显不足”，不要只改 CSS 或移动元素。先重建底稿和页级合同，再决定每页是否保留、合并、重画或删除。
-2. `slide_contract.md` 不是目录。每页至少写清：页面节奏、layout family、观点标题、对应底稿章节、必须保留数字/事实、主图/主表、分析区、来源、删减说明和 `必须出现` 直接答案；contract 的答案必须原样或等义出现在成稿，而不是只把支撑数据放进表格。
-3. coverage matrix 必须能回答“研究底稿每个重要结论在哪一页出现”；找不到页码的信息，要么补到 slides，要么放入附录，要么明确写删减原因。
-4. 执行 `scripts/audit_research_deck.js --research <research.md> --contract <slide_contract.md> --html <deck.html> --mode prospectus --strict --evidence <evidence_ledger.md> --entities <entity_map.md> --policy <calculation_policy.md> --checklist <disclosure_checklist.md>` 或手动等价审计。失败时不要导出 PDF；警告项必须人工判断并记录处理结果。
+1. `research.md` 不是页名目录或材料摘要，必须完成所选内容 profile 的投资/业务问题、证据、计算和风险。若已有旧 deck/旧报告审计失败或被用户指出深度不足，先重建底稿和页级合同，再决定每页是否保留、合并、重画或删除。
+2. `slide_contract.md` 不是目录。每页至少写清页面节奏、layout family、观点标题、底稿映射、必须保留数字/事实、主图/主表、分析区、来源、删减说明和 `必须出现` 直接答案；答案必须原样或等义出现在成稿。
+3. coverage matrix 必须能回答“研究底稿每个承重结论在哪一页出现”；找不到页码的信息，要么补到 slides，要么放入附录，要么明确写删减原因。
+4. 失败时不要导出 PDF；警告项必须人工判断并记录处理结果。
+
+公共股票 profile 另有硬门槛：
+
+- 底稿至少覆盖证券与 as-of、投资结论、市场预期/Our Estimate、分部驱动、经营→EBIT/EPS/FCF、净现金/债务、估值→每股价值、情景、催化剂、反证和来源。
+- 先执行 `python3 scripts/audit_public_equity.py --profile <deep-dive|earnings-preview|earnings-review|abnormal-move> --research <research.md>`，并按项目已有控制件补充可选参数；再执行 `scripts/audit_research_deck.js --research <research.md> --contract <slide_contract.md> --html <deck.html> --mode public-equity` 检查内容映射与 deck 合同。
+- 公共股票 deck 不得仅因使用本模板而强制融资历史、股东 IRR、解禁或匿名客户/供应商模块。
+
+IPO/招股书 profile 另有硬门槛：
+
+- 底稿至少覆盖业务、经营 KPI、财务模型、成本费用/UE、working capital、客户/供应商、融资与股东回报、股东结构/解禁、竞对、外部市场观点、风险和来源。
+- 执行 `scripts/audit_research_deck.js --research <research.md> --contract <slide_contract.md> --html <deck.html> --mode prospectus --strict --evidence <evidence_ledger.md> --entities <entity_map.md> --policy <calculation_policy.md> --checklist <disclosure_checklist.md>` 或手动等价审计。
 
 典型失败信号：研究底稿少于完整模块、contract 只有页名、没有 coverage matrix、HTML 里出现旧品牌占位词、连续多页同一模板、图表缩小到轴和标签不可读、页底机械四卡片。出现这些信号时，回到研究或 contract，而不是只微调 CSS。
 
@@ -69,7 +79,7 @@
 
 交付前必须形成最小 QA gate：
 
-- 内容 gate：研究底稿核心结论、关键经营指标、财务模型、融资回报、客户/供应商、市场观点和风险均映射到页码。
+- 内容 gate：研究底稿中所选 profile 的承重结论、关键经营指标、财务模型、估值、风险和证伪均映射到页码；融资回报和客户/供应商只在 IPO profile 强制。
 - 视觉 gate：无巨大空白、无文字重叠、无表格挤压、左右栏高度大体平衡、页底元素不贴边。
 - 数据 gate：轴、刻度、单位、来源、千分位、负号、货币空格、品牌和页码一致。
 - 导出 gate：HTML 无 overflow；PDF 尺寸正确；最终 PDF 所有页面均已渲染并逐页检查，关键页另做单页放大复核。只抽样检查不算完成。
@@ -98,6 +108,10 @@
 node ~/.codex/skills/investment-analysis/scripts/init_deck.js outputs <deck> --style morgan-stanley
 # 先查看 layout-recipes.md / layout-index.json 做 layout rhythm plan
 # 再在 outputs/<deck>.html 中替换占位符，并从 style-packs/morgan-stanley/templates.html 复制页面片段
+# 公共股票：先做内容审计，再做 deck 映射审计
+python3 ~/.codex/skills/investment-analysis/scripts/audit_public_equity.py --profile deep-dive --research outputs/<deck>_research.md
+node ~/.codex/skills/investment-analysis/scripts/audit_research_deck.js --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode public-equity
+# IPO/招股书：使用完整披露与控制件审计
 node ~/.codex/skills/investment-analysis/scripts/audit_research_deck.js --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode prospectus --strict --evidence outputs/<deck>_evidence_ledger.md --entities outputs/<deck>_entity_map.md --policy outputs/<deck>_calculation_policy.md --checklist outputs/<deck>_disclosure_checklist.md
 node ~/.codex/skills/investment-analysis/scripts/qa_deck.js outputs/<deck>.html
 # 字体敏感交付可强制检查英文/数字 family
@@ -139,6 +153,18 @@ node ~/.codex/skills/investment-analysis/scripts/export_pdf.js outputs/<deck>.ht
 - `ibd-cap-table-contribution`：贡献/股权/换股/解禁表。用于 cap table、最大外部投资人、H 股全流通、员工平台和退出压力。
 
 ## 内容结构
+
+公共股票 slides 默认围绕投资决策链组织，可按事件和行业增删：
+
+- 投资首页：证券、交易所、现价/时点、合理价值区间、预期回报、投资期限和最大证伪条件；若公司未上市，明确可投资证券和限制。
+- 今日/本次事件：价格、量能、相对行业/指数表现、事件时间线、候选原因、归因置信度及一次性冲击与长期价值变化的分离。
+- 市场预期与差异化观点：dated consensus、公司指引、Our Estimate、分歧来源及是否已经反映在价格中。
+- 业务与分部 driver tree：量、价、mix、留存/利用、单位成本、固定成本、资本需求和关键约束。
+- 预测修正与财务桥：经营驱动→Revenue/EBIT→EPS/FCF/FCFE，解释 Prior→Current 变化；不要只展示模型终值。
+- 资本周期与资产负债表：cash capex、租赁、融资、净现金/债务、稀释和资本回报；资本密集型业务展示 cohort 状态桥。
+- 估值与价格隐含预期：reverse valuation、主估值、EV→Equity→Per Share、Bear/Base/Bull 和关键敏感性。
+- 催化剂、反证与动作：公开指标、阈值、日期/窗口、对应模型字段和重新评估动作。
+- 来源与未知项：根来源簇、数字身份、as-of、冲突、限制和 decision-critical unresolved。
 
 可按项目材料增删，但 IPO/招股书 slides 默认包含：
 
@@ -252,12 +278,12 @@ node ~/.codex/skills/investment-analysis/scripts/export_pdf.js outputs/<deck>.ht
 
 1. 用 `scripts/qa_deck.js`、浏览器或 Playwright 检查每页是否 `overflowX/overflowY`，并统计页面元素是否超出 slide 边界。
 2. 用 `pdfinfo` 检查 PDF 页数和页面尺寸。Morgan Stanley 风格应为 `792 x 612 pt (letter)`。
-3. 将最终 PDF 全部页面渲染为图片并生成 contact sheet，逐页检查。封面、业务/KPI、UE、working capital、融资/回报、客户、供应商、行业格局、外部观点、三张财务报表附录必须另做单页放大检查；任何未检查页面都不得视为通过。
+3. 将最终 PDF 全部页面渲染为图片并生成 contact sheet，逐页检查。公共股票至少放大检查投资首页、事件/预期差、经营桥、估值、催化剂/反证和财务附录；IPO 至少放大检查封面、业务/KPI、UE、working capital、融资/回报、客户、供应商、行业格局、外部观点和三张财务报表附录。任何未检查页面都不得视为通过。
 4. 检查是否存在低信息量页面、巨大空白、文字重叠、表格挤压、页脚遮挡、品牌名不一致。
 5. 对图表/表格组合页额外检查左右 exhibit 是否同顶线、同底线、来源位置一致、图表/表格是否填满所在栏宽；发现一侧过空时先调整图表类型、栏宽或补充任务相关注释。
 6. 做空白审计：检查主要内容区是否明显偏小、是否中间大块留白而底部只贴 KPI strip、左右栏高度是否严重不均、图表是否小到轴/标签不可读、表格是否只占栏宽一小块。发现问题时优先放大主图/主表、改变栏宽、合并相邻内容、加入底稿中被遗漏的分析或改成更高信息密度的图表。
 7. 做版式多样性审计：统计 `data-template`，长 deck 至少五类 layout family；同一模板不得连续超过两页；metric strip 不超过非附录页 30%，且不能连续多页作为固定页脚。
-8. 对照研究底稿、coverage matrix 和 slide contract 的 `必须出现` 短句确认 slides 未遗漏关键分析。重点逐字检查投资建议、目标价/对应市值、融资回报直接答案、历年五大客户/供应商、各业务行业格局和 working capital 质量；若遗漏，补表、补页或补指标条，不要只在最终回复里解释。
+8. 对照研究底稿、coverage matrix 和 slide contract 的 `必须出现` 短句确认 slides 未遗漏关键分析。公共股票重点逐字检查证券/现价时点、投资判断、合理价值/区间、预期差、预测修正、每股价值、催化剂和证伪；IPO 重点检查融资回报直接答案、历年五大客户/供应商、各业务行业格局和 working capital 质量。若遗漏，补表、补页或补指标条，不要只在最终回复里解释。
 9. 字体 gate：浏览器端确认关键英文、数字和中文元素实际使用目标字体；PDF 端确认嵌入字体表没有退回 Arial、PingFang 或其他非预期字体。蓝色页标题必须额外确认 PDF 字体表包含真实粗体中文字体；只看到普通 `KaiTi` / `DeckCJK` 不算通过。
 10. 参考视觉 gate：如果用户提供参考 PDF/截图，渲染对比参考页和当前页，确认首页、表格页和 KPI 区的视觉结构一致；不要只凭肉眼记忆调整。
 11. HTML-first/PDF-last gate：最终 PDF 的生成必须发生在 HTML QA 之后；如果在调试中提前产生过 PDF，应删除或重新导出，避免交付旧版文件。

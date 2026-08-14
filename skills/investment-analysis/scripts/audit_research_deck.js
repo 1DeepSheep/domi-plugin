@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 function usage() {
-  console.error("Usage: audit_research_deck.js --research <research.md> [--contract <slide_contract.md>] [--html <deck.html>] [--mode prospectus] [--strict --evidence <evidence_ledger.md> --entities <entity_map.md> --policy <calculation_policy.md> --checklist <disclosure_checklist.md>]");
+  console.error("Usage: audit_research_deck.js --research <research.md> [--contract <slide_contract.md>] [--html <deck.html>] [--mode public-equity|prospectus|generic] [--strict --evidence <evidence_ledger.md> --entities <entity_map.md> --policy <calculation_policy.md> --checklist <disclosure_checklist.md>]");
   process.exit(2);
 }
 
@@ -77,22 +77,44 @@ if (!research) {
   failures.push(`research file not readable: ${opts.research}`);
 } else {
   const lines = research.split(/\r?\n/).filter((l) => l.trim()).length;
-  const minLines = opts.mode === "prospectus" ? 180 : 100;
+  const minLines = opts.mode === "prospectus" ? 180 : opts.mode === "public-equity" ? 100 : 80;
   if (lines < minLines) failures.push(`research too short: ${lines} non-empty lines; expected >= ${minLines} for ${opts.mode}`);
 
-  const requiredSections = [
-    ["业务与商业模式", ["业务", "商业模式", "收入来源"]],
-    ["关键经营指标", ["经营指标", "KPI", "运营指标", "ARPU", "ARPC", "销量", "客户数"]],
-    ["核心财务画像/三张表", ["利润表", "资产负债表", "现金流", "财务模型"]],
-    ["成本费用与UE", ["成本", "费用", "UE", "单位经济", "毛利"]],
-    ["财务质量/working capital", ["财务质量", "working capital", "营运资金", "应收", "应付", "DSO", "DPO"]],
-    ["客户/供应商", ["客户", "供应商", "前五大", "五大客户", "五大供应商"]],
-    ["融资与股东回报", ["融资", "股东回报", "IRR", "老股", "投前", "投后"]],
-    ["股东结构与解禁", ["股东结构", "解禁", "禁售", "锁定"]],
-    ["竞争与行业格局", ["竞争", "竞对", "行业格局", "市场份额"]],
-    ["市场观点与外部争议", ["市场观点", "外部观点", "外部争议", "媒体", "估值争议"]],
-    ["风险/验证清单", ["风险", "验证清单", "跟踪指标", "后续验证"]],
-  ];
+  const requiredSectionsByMode = {
+    prospectus: [
+      ["业务与商业模式", ["业务", "商业模式", "收入来源"]],
+      ["关键经营指标", ["经营指标", "KPI", "运营指标", "ARPU", "ARPC", "销量", "客户数"]],
+      ["核心财务画像/三张表", ["利润表", "资产负债表", "现金流", "财务模型"]],
+      ["成本费用与UE", ["成本", "费用", "UE", "单位经济", "毛利"]],
+      ["财务质量/working capital", ["财务质量", "working capital", "营运资金", "应收", "应付", "DSO", "DPO"]],
+      ["客户/供应商", ["客户", "供应商", "前五大", "五大客户", "五大供应商"]],
+      ["融资与股东回报", ["融资", "股东回报", "IRR", "老股", "投前", "投后"]],
+      ["股东结构与解禁", ["股东结构", "解禁", "禁售", "锁定"]],
+      ["竞争与行业格局", ["竞争", "竞对", "行业格局", "市场份额"]],
+      ["市场观点与外部争议", ["市场观点", "外部观点", "外部争议", "媒体", "估值争议"]],
+      ["风险/验证清单", ["风险", "验证清单", "跟踪指标", "后续验证"]],
+    ],
+    "public-equity": [
+      ["证券与as-of", ["证券", "ticker", "交易所", "as_of", "as-of", "截止日", "股价时点"]],
+      ["投资结论与合理价值", ["投资结论", "投资判断", "合理价值", "目标价", "价值区间", "fair value"]],
+      ["市场预期与差异", ["一致预期", "consensus", "市场预期", "预期差", "公司指引", "our estimate", "我们预测"]],
+      ["业务与经营驱动", ["业务驱动", "driver", "经营指标", "KPI", "量价", "mix", "留存", "利用率"]],
+      ["财务传导", ["EBIT", "EPS", "FCF", "FCFE", "营业利润", "每股收益", "现金流"]],
+      ["资本与资产负债表", ["净现金", "净债务", "capex", "资本开支", "资本回报", "资产负债表"]],
+      ["估值与每股价值", ["估值", "企业价值", "股权价值", "每股价值", "per share", "reverse valuation", "反向估值"]],
+      ["联动情景", ["Bear", "Base", "Bull", "悲观", "基准", "乐观", "情景"]],
+      ["催化剂与证伪", ["催化剂", "证伪", "反证", "falsifier", "验证指标", "重新评估"]],
+      ["来源与未知项", ["来源", "source", "未披露", "unknown", "未知", "限制"]],
+    ],
+    generic: [
+      ["核心问题/结论", ["核心问题", "核心结论", "判断", "结论"]],
+      ["业务/产品证据", ["业务", "产品", "用户", "客户", "证据"]],
+      ["数据/财务", ["数据", "经营指标", "财务", "KPI"]],
+      ["风险/验证", ["风险", "验证", "限制", "未知"]],
+      ["来源", ["来源", "source"]],
+    ],
+  };
+  const requiredSections = requiredSectionsByMode[opts.mode] || requiredSectionsByMode.generic;
   for (const [label, needles] of requiredSections) {
     if (!hasAny(research, needles)) failures.push(`missing research section/signals: ${label}`);
   }
@@ -123,7 +145,7 @@ if (!research) {
   }
 }
 
-if (opts.strict) {
+if (opts.strict && opts.mode === "prospectus") {
   checkControlFile("evidence", opts.evidence, [
     ["claim/source", ["claim_id", "来源文件", "source"]],
     ["page/section", ["页码", "章节", "page"]],
@@ -144,6 +166,8 @@ if (opts.strict) {
     ["customer/supplier", ["客户", "供应商", "customer", "supplier"]],
     ["financing/competition/statements", ["融资", "竞对", "财务报表", "financing", "competition"]],
   ]);
+} else if (opts.strict) {
+  warnings.push("--strict IPO control-file checks apply only to prospectus mode; run audit_public_equity.py for public-equity content controls");
 }
 
 let contractText = null;
@@ -225,6 +249,7 @@ if (opts.html) {
 }
 
 const result = {
+  mode: opts.mode,
   research: opts.research ? path.resolve(opts.research) : null,
   contract: opts.contract ? path.resolve(opts.contract) : null,
   html: opts.html ? path.resolve(opts.html) : null,

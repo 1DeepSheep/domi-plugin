@@ -37,7 +37,9 @@
 ## 发现、核验与准入
 
 1. 已关注领域宽搜并发，优先一次查询覆盖多个事件词；同时轻量读取与已关注范围相关或尚未分类的 RSS／网站／重点公众号／播客，先按 GUID／canonical URL 去重后合池。
+   - 每个领域至少执行一组明确包含该领域或其 canonical 子领域的查询。成功或空结果算完成；错误、超时、跳过不算。跨领域查询只计其明确包含的领域，不得据此给其他领域记完成。
 2. 每轮固定执行中文专业科技媒体扫源，至少覆盖 `DeepTech 深科技`，并加入 `对话/访谈/专访/公开观点/趋势判断/roadmap/outlook/interview/prediction`。新闻稿不得提前挤掉预留的论点候选。
+   - `DeepTech 深科技` 只在确实发起定向检索／读取后记为 checked。调用方列出的每个已启用重点信源都必须逐个尝试；不可访问可以失败并继续，但不能伪装为已读取。
 3. 宽搜发现重点对象直接信号后，才允许追加一次该对象定向检索；不得逐项目／逐人物搜索。
 4. 必须打开最上游可访问原文，确认主体、事实／原始判断、发布时间、发布者和 URL。搜索／RSS／公众号摘要、数据库、播客标题只能发现，不能单独证明事实。无法访问正文记 `unavailable`，不得绕过登录、付费墙、robots 或读取浏览器 Cookie。
 5. 只有范围相关、主体可识别、事件或论点具体、时间可确认且原文可访问时才采纳。纯转载、泛泛愿景、标题党、无事实／论点增量或未解决身份歧义不采纳。
@@ -66,10 +68,14 @@
 
 ## 完成回执
 
-每个拒绝候选只记一个主原因：`duplicate/not_event/unverified/unavailable/out_of_scope`。没有合格增量是正常完成；不得为凑数降门槛、扩大时间窗或创建“暂无新闻”。最后一行必须是：
+每个拒绝候选只记一个主原因：`duplicate/not_event/unverified/unavailable/out_of_scope`。没有合格增量是正常完成；不得为凑数降门槛、扩大时间窗或创建“暂无新闻”。
+
+覆盖回执：`searched_domains` 不得直接复制 `followed_domains`；`queries_by_domain` 为成功查询组数；`deeptech_checked` 仅在尝试后为 `true`；`configured_sources_attempted/failed` 为重点信源尝试／失败数。缺少覆盖字段时所有领域都不推进。
+
+最后一行必须是单行 JSON：
 
 ```text
-RADAR_RESULT {"added":N,"updated":N,"unchanged":N,"failed":N,"checked_through":"ISO-8601","discovery_from":"ISO-8601","candidates":N,"rejected":{"duplicate":N,"not_event":N,"unverified":N,"unavailable":N,"out_of_scope":N}}
+RADAR_RESULT {"added":N,"updated":N,"unchanged":N,"failed":N,"checked_through":"ISO-8601","discovery_from":"ISO-8601","candidates":N,"rejected":{"duplicate":N,"not_event":N,"unverified":N,"unavailable":N,"out_of_scope":N},"coverage":{"searched_domains":["规范领域"],"queries_by_domain":{"规范领域":N},"deeptech_checked":true,"configured_sources_attempted":N,"configured_sources_failed":N}}
 ```
 
 依赖局部失败时记录对应领域／信源／归档缺口并继续其他项；事件库不可用时返回“搜索完成、归档未完成”。不得切换后端、无界重试或声称全网无遗漏。
