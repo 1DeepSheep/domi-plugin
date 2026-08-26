@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { DatabaseSync } = require("node:sqlite");
 const test = require("node:test");
 const {
   defaultConfigPath,
@@ -111,6 +112,49 @@ function createRepository(t) {
   });
 }
 
+test("existing repositories migrate project revision without losing records", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-repository-migration-"));
+  const databasePath = path.join(root, "domi-repository.sqlite3");
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL UNIQUE,
+      domain TEXT NOT NULL DEFAULT '',
+      subdomains_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT '待交流',
+      rating TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      cities_json TEXT NOT NULL DEFAULT '[]',
+      investors_json TEXT NOT NULL DEFAULT '[]',
+      financing_history TEXT NOT NULL DEFAULT '',
+      latest_valuation_usd_100m REAL,
+      last_updated_at INTEGER,
+      document_path TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO projects (
+      id, name, normalized_name, created_at, updated_at
+    ) VALUES ('prj_legacy', '历史项目', '历史项目', 1, 1);
+  `);
+  legacy.close();
+  const repository = new DomiRepository({
+    backend: "local",
+    databasePath,
+    libraryDir: path.join(root, "资料库")
+  });
+  t.after(() => {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const project = repository.getProject("prj_legacy");
+  assert.equal(project.recordRevision, 1);
+  assert.match(project.recordHash, /^[a-f0-9]{64}$/);
+});
+
 test("local repository initialization creates and preserves 0.待办事项.md", (t) => {
   const repository = createRepository(t);
   t.after(() => repository.close());
@@ -189,6 +233,200 @@ test("local project upsert creates SQLite record and lazily creates document fol
   for (const directory of ["纪要", "原始材料", "导出"]) {
     assert.equal(fs.existsSync(path.join(path.dirname(pagePath), directory)), false);
   }
+});
+
+test("project upsert enforces optional CAS while preserving idempotence and legacy callers", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const base = {
+    name: "并发示例科技",
+    domain: "AI",
+    subdomains: ["AI Infra"],
+    status: "待交流",
+    rating: "A",
+    notes: "审核通过的完整 payload",
+    investors: ["示例基金"]
+  };
+
+  const created = repository.upsertProject({
+    ...base,
+    expectedRevision: 0,
+    expectedRecordHash: null
+  });
+  assert.equal(created.project.recordRevision, 1);
+  assert.match(created.project.recordHash, /^[a-f0-9]{64}$/);
+  assert.equal(created.storageReceipt.recordRevision, 1);
+  assert.equal(created.storageReceipt.recordHash, created.project.recordHash);
+
+  const replay = repository.upsertProject({
+    ...base,
+    projectId: created.project.id,
+    expectedRevision: 0,
+    expectedRecordHash: null
+  });
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(replay.project.recordRevision, 1);
+  assert.equal(replay.project.recordHash, created.project.recordHash);
+
+  const provisional = repository.upsertProject({
+    ...base,
+    projectId: created.project.id,
+    notes: "provisional 完整 payload",
+    expectedRevision: created.project.recordRevision,
+    expectedRecordHash: created.project.recordHash
+  });
+  assert.equal(provisional.project.id, created.project.id);
+  assert.equal(provisional.project.recordRevision, 2);
+  assert.notEqual(provisional.project.recordHash, created.project.recordHash);
+
+  assert.throws(
+    () => repository.upsertProject({
+      ...base,
+      projectId: created.project.id,
+      notes: "基于陈旧快照的覆盖",
+      expectedRevision: created.project.recordRevision,
+      expectedRecordHash: created.project.recordHash
+    }),
+    (error) => error?.code === "DOMI_PROJECT_CAS_MISMATCH" && /重新读取/.test(error.message)
+  );
+  assert.equal(repository.getProject(created.project.id).notes, "provisional 完整 payload");
+
+  const final = repository.upsertProject({
+    ...base,
+    projectId: provisional.project.id,
+    notes: "最终审核通过的完整 payload",
+    status: "已交流",
+    expectedRevision: provisional.project.recordRevision,
+    expectedRecordHash: provisional.project.recordHash
+  });
+  assert.equal(final.project.id, created.project.id);
+  assert.equal(final.project.recordRevision, 3);
+  assert.equal(final.project.notes, "最终审核通过的完整 payload");
+
+  const legacyCompatible = repository.upsertProject({
+    ...base,
+    projectId: final.project.id,
+    notes: "旧调用仍可更新",
+    status: "深度跟踪"
+  });
+  assert.equal(legacyCompatible.project.id, created.project.id);
+  assert.equal(legacyCompatible.project.recordRevision, 4);
+  assert.equal(legacyCompatible.project.notes, "旧调用仍可更新");
+});
+
+test("project taxonomy updates keep the established root and all user materials", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const created = repository.upsertProject({
+    name: "路径稳定科技",
+    domain: "AI",
+    subdomains: ["AI Infra"],
+    notes: "初始摘要"
+  });
+  const originalPage = created.project.documentPath;
+  const originalRoot = path.dirname(originalPage);
+  const researchPath = path.join(originalRoot, "研究", "用户研究.md");
+  const materialPath = path.join(originalRoot, "原始材料", "BP.pdf");
+  fs.mkdirSync(path.dirname(researchPath), { recursive: true });
+  fs.mkdirSync(path.dirname(materialPath), { recursive: true });
+  fs.writeFileSync(researchPath, "用户研究正文\n");
+  fs.writeFileSync(materialPath, "binary-material");
+  fs.appendFileSync(originalPage, "\n## 用户编辑\n\n必须保留。\n");
+
+  const updated = repository.upsertProject({
+    name: "路径稳定科技",
+    projectId: created.project.id,
+    domain: "半导体",
+    subdomains: ["芯片设计"],
+    notes: "分类修正后的摘要",
+    expectedRevision: created.project.recordRevision,
+    expectedRecordHash: created.project.recordHash
+  });
+
+  assert.equal(updated.project.documentPath, originalPage);
+  assert.equal(fs.readFileSync(researchPath, "utf8"), "用户研究正文\n");
+  assert.equal(fs.readFileSync(materialPath, "utf8"), "binary-material");
+  assert.match(fs.readFileSync(originalPage, "utf8"), /必须保留/);
+  assert.match(fs.readFileSync(originalPage, "utf8"), /domain: "半导体"/);
+  assert.equal(
+    fs.existsSync(path.join(repository.libraryDir, "3.项目库", "半导体", "芯片设计", "路径稳定科技")),
+    false
+  );
+});
+
+test("commit failure rolls back without creating an orphan project page", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const expectedPage = repository.projectDocumentPath({
+    name: "提交失败科技",
+    domain: "AI",
+    subdomains: ["AI Infra"]
+  });
+  const originalExec = repository.database.exec.bind(repository.database);
+  repository.database.exec = (sql) => {
+    if (sql === "COMMIT") throw new Error("simulated commit failure");
+    return originalExec(sql);
+  };
+
+  assert.throws(
+    () => repository.upsertProject({
+      name: "提交失败科技",
+      domain: "AI",
+      subdomains: ["AI Infra"]
+    }),
+    /simulated commit failure/
+  );
+  assert.equal(repository.listProjects("提交失败科技").length, 0);
+  assert.equal(fs.existsSync(expectedPage), false);
+});
+
+test("post-commit project page failure is recoverable and never claims document verification", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const expectedPage = repository.projectDocumentPath({
+    name: "主页失败科技",
+    domain: "AI",
+    subdomains: ["AI Infra"]
+  });
+  const originalProjectPage = repository.projectPage.bind(repository);
+  repository.projectPage = () => {
+    throw new Error("simulated markdown failure");
+  };
+
+  let failure;
+  try {
+    repository.upsertProject({
+      name: "主页失败科技",
+      domain: "AI",
+      subdomains: ["AI Infra"],
+      expectedRevision: 0,
+      expectedRecordHash: null
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure?.code, "DOMI_PROJECT_DOCUMENT_WRITE_FAILED");
+  assert.equal(failure?.storageReceipt?.status, "provisional");
+  assert.equal(failure?.storageReceipt?.recordVerified, true);
+  assert.equal(failure?.storageReceipt?.documentVerified, false);
+  assert.equal(failure?.storageReceipt?.recoveryRequired, true);
+  assert.equal(fs.existsSync(expectedPage), false);
+  const persisted = repository.listProjects("主页失败科技");
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].documentPath, expectedPage);
+
+  repository.projectPage = originalProjectPage;
+  const recovered = repository.upsertProject({
+    name: "主页失败科技",
+    domain: "AI",
+    subdomains: ["AI Infra"],
+    expectedRevision: 0,
+    expectedRecordHash: null
+  });
+  assert.equal(recovered.idempotentReplay, true);
+  assert.equal(recovered.storageReceipt.documentVerified, true);
+  assert.equal(recovered.project.id, persisted[0].id);
+  assert.equal(fs.existsSync(expectedPage), true);
 });
 
 test("project upsert rejects archive titles before writing and accepts canonical company names", (t) => {
