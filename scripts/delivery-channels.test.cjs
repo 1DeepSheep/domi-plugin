@@ -26,6 +26,7 @@ const sectorScan = read("skills", "desk-research", "references", "sector-scan.md
 const projectAgent = read("skills", "domi-router", "agents", "openai.yaml");
 const sourcingAgent = read("skills", "sourcing", "agents", "openai.yaml");
 const plaudWorkflow = read("skills", "domi-router", "references", "plaud-investment-recording-workflow.md");
+const handoff = read("skills", "domi-router", "references", "lossless-handoff.md");
 const plaud = read("skills", "plaud", "SKILL.md");
 const plaudCommands = read("skills", "plaud", "references", "commands.md");
 const asrNotes = read("skills", "asr-notes", "SKILL.md");
@@ -127,9 +128,23 @@ test("PLAUD local completion never depends on an unrequested Feishu copy", () =>
 
 test("PLAUD explicit sync processes the full pending set without a quantity confirmation threshold", () => {
   assert.match(plaud, /点击“同步 PLAUD 并生成文字稿”即明确授权处理当前读取到的全部待生成录音/);
+  assert.match(plaudWorkflow, /targetScope=all_pending_sync/);
   assert.match(plaudWorkflow, /不因数量增加二次确认/);
   assert.doesNotMatch(plaud, /待生成数量超过 10/);
   assert.doesNotMatch(plaudWorkflow, /超过 10 条先报告数量并确认/);
+});
+
+test("PLAUD single-record requests never expand into queue recovery or full pending sync", () => {
+  assert.match(router, /同步这条／处理这条录音.*先锁定 single／all 范围/);
+  assert.match(plaudWorkflow, /“同步这条”“处理这条录音”“继续刚才这条”/);
+  assert.match(plaudWorkflow, /targetScope=single/);
+  assert.match(plaudWorkflow, /fileId \+ fileName \+ recordedAt/);
+  assert.match(plaudWorkflow, /其他 queue 项.*保持不变/s);
+  assert.match(plaudWorkflow, /不得在单条完成后继续发现或处理新录音/);
+  assert.match(plaudWorkflow, /不得用 `sync-pending 1` 猜测第一条/);
+  assert.match(plaudWorkflow, /waiting_for_targeted_sync/);
+  assert.match(plaudWorkflow, /context_pending.*暂停整个本轮/s);
+  assert.match(plaudWorkflow, /恢复 queue 不等于同步 pending/);
 });
 
 test("domi no longer starts local microphone recordings while legacy sessions remain recoverable", () => {
@@ -190,4 +205,45 @@ test("PLAUD project archival preserves the backend locked for the queue item", (
   assert.match(plaudWorkflow, /任务中途不得.*切换后端/);
   assert.match(plaudWorkflow, /不得暗中迁移或新建第二份项目/);
   assert.match(plaudWorkflow, /默认不展示本机绝对路径、文档 URI、项目／记录 ID/);
+});
+
+test("multi-stage routing uses lossless artifact handoffs without weakening quality", () => {
+  assert.match(router, /Router 只负责四件事/);
+  assert.match(router, /不得降低模型或推理强度/);
+  assert.match(router, /只读取命中工作流所列的 reference/);
+  assert.match(router, /命中不唯一时.*读取所有可能命中的工作流 reference/s);
+  assert.match(router, /domi\.handoff\.v1/);
+  assert.match(router, /聊天摘要不是交接产物/);
+  assert.match(handoff, /路径、哈希、类型、实体 ID 和证据索引/);
+  assert.match(handoff, /manifest 摘要不能作为证据/);
+  assert.match(handoff, /保守读取所有可能适用的完整规则/);
+  assert.match(handoff, /不能由旧消息、旧 manifest、只读命中或既有回执推导新的写入／外发权限/);
+  assert.match(handoff, /SHA-256/);
+  assert.match(projectWorkflow, /research_report/);
+  assert.match(projectWorkflow, /evidence_index/);
+  assert.match(projectWorkflow, /不得用历史聊天中的研究全文或摘要替代规范产物/);
+  assert.match(plaudWorkflow, /PLAUD queue 是可恢复阶段状态/);
+  assert.match(plaudWorkflow, /不得降低证据标准、跳过审计、重复生成文字稿或重跑已经通过的阶段/);
+});
+
+test("local project intake treats the first SQLite upsert as provisional until the full closure verifies", () => {
+  assert.match(projectWorkflow, /provisional upsert/);
+  assert.match(projectWorkflow, /命令会立即写 SQLite/);
+  assert.match(projectWorkflow, /即使命令返回 `storageReceipt\.status=managed`.*不得对外报告“已入库／managed”/s);
+  assert.match(projectWorkflow, /同一个 `project_id`.*幂等最终 upsert/s);
+  assert.match(projectWorkflow, /禁止稀疏 payload 把既有字段清空/);
+  assert.match(projectWorkflow, /写前快照.*`recordRevision`.*`recordHash`.*完整 payload hash/s);
+  assert.match(projectWorkflow, /`recordRevision`.*`recordHash`.*`expectedRevision`.*`expectedRecordHash`/s);
+  assert.match(projectWorkflow, /同一个 SQLite 写事务内 fail-closed 比对/);
+  assert.match(projectWorkflow, /同值重放可成功.*CAS 不匹配.*重新读取、合并并复核/s);
+  assert.match(projectWorkflow, /只用于内部并发控制.*不得出现在面向用户/s);
+  assert.match(projectWorkflow, /已有项目的目录是稳定实体身份/);
+  assert.match(projectWorkflow, /分类变化未生成第二目录/);
+  assert.match(projectWorkflow, /DOMI_PROJECT_DOCUMENT_WRITE_FAILED/);
+  assert.match(projectWorkflow, /status=provisional.*不得报告 `managed` 或 `documentVerified`/s);
+  assert.match(projectWorkflow, /recordVerified=true.*documentVerified=true.*filesVerified=true/s);
+  assert.match(projectWorkflow, /storagePhase=provisional/);
+  assert.match(projectWorkflow, /确认无并发漂移后复用目录补齐缺项/);
+  assert.match(projectWorkflow, /不得覆盖他人更新、删除记录或自动重建/);
+  assert.doesNotMatch(projectWorkflow, /两者都只在文档与材料成功归档后一次性写入/);
 });
