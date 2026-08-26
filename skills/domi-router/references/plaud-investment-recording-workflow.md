@@ -4,10 +4,26 @@
 
 把 PLAUD 录音处理为文字稿和结构化纪要；若内容属于创业项目或创始人交流，继续完成投资快评，并把纪要、快评、材料和结构化记录写入本轮已经锁定的资料库后端。`repositoryBackend=local` 写本地 SQLite＋Markdown；`repositoryBackend=legacy_feishu_primary` 按 `legacy-feishu-primary.md` 继续写既有 Base／Wiki／本地材料链路。任务中途不得因飞书登录状态或写入失败切换后端。
 
-## 一、恢复未完成任务
+## 无损交接
 
-1. 采用 `domi:plaud` 运行 `queue`。
-2. 按阶段恢复：
+本工作流完整遵循 [多阶段无损交接合同](lossless-handoff.md)。PLAUD queue 是可恢复阶段状态，`domi.handoff.v1` 是跨 Skill 产物索引；两者以稳定 `fileId`／`workflowRunId` 绑定，但均不能替代完整文字稿、纪要、证据账本、快评或 QA。
+
+- 下载后登记 `transcript` 的 `transcriptPath`、SHA-256、字节数和 PLAUD `fileId`；`asr-notes` 从该路径读取完整文字稿，不从聊天记录回放全文。
+- 用户补充的对话类型、目的、参会人、公司和职位原样保存为上下文 artifact，并保留来源 turn；不得只保留模型摘要。
+- 纪要完成后登记 `notes`、`evidence_index` 与 `qa_receipt`；`investment-review` 重新校验哈希并按其完整规则读取纪要和证据。
+- 快评完成后登记 `review` 与审核回执；`investment-mgmt` 读取经验证的纪要、快评和实际存在材料，不接收聊天摘要作为归档正文。
+- 任一路径缺失、哈希变化、`fileId` 不一致、证据／QA 回执不完整或后端锁冲突时停止推进，从最后可信 queue stage 定点恢复；不得降低证据标准、跳过审计、重复生成文字稿或重跑已经通过的阶段。
+
+## 一、锁定本轮录音范围并恢复
+
+在运行任何恢复或生成动作前先锁定 `targetScope`；`queue` 和 `pending` 都只是只读发现结果，不能把单条请求扩大成批处理授权：
+
+- 用户说“同步这条”“处理这条录音”“继续刚才这条”或从客户端选中一条录音时，`targetScope=single`。优先复用当前 session／manifest 已绑定的 `fileId`；否则用用户选择项与 `pending`／`queue` 的 `fileId + fileName + recordedAt` 唯一匹配。多个候选或没有唯一匹配时先让用户选择，禁止猜测。
+- 只有用户明确说“同步 PLAUD 并生成文字稿”“同步全部／所有待生成录音”时，才设置 `targetScope=all_pending_sync`。
+- 只有用户明确说“恢复全部未完成录音”时，才设置 `targetScope=all_queue_resume`；全量恢复仍一次只激活一个 `fileId`，该条进入需要用户输入的暂停点或终态后才可选择下一条。`context_pending` 会暂停整个本轮，不能在等待用户回复时抢跑其他录音。
+
+采用 `domi:plaud` 运行 `queue` 后，先把精确 `activeFileId` 写入 `domi.handoff.v1`。`targetScope=single` 时只检查、恢复和更新该条，其他 queue 项即使更早、失败或可恢复也保持不变；不得在单条完成后继续发现或处理新录音。按该条阶段恢复：
+
    - `transcript_ready`：生成回忆提示并询问上下文；
    - `context_pending`：处理用户补充或跳过，不重新生成文字稿；
    - `context_ready`：进入 ASR Notes；
@@ -15,14 +31,16 @@
    - `reviewed`：先 `verify <fileId>`，通过后按该队列锁定的资料库后端恢复归档；
    - `documented`：先 `verify <fileId>`，通过后按已保存的 `storageReceipt.backend` 回读结构化记录、主文档和材料目录，再标记完成；没有新式回执的历史队列沿用其原始 Wiki／本地材料链路，不得暗中迁移或新建第二份项目；
    - 失败或超时项先报告原因；`generation_timeout` 先尝试下载，不重复生成。
-3. 恢复项处理后再发现新录音。
+
+`all_queue_resume` 也只按上述规则串行恢复明确枚举的 queue 快照；本轮中后来出现的 queue 项不自动加入，除非用户再次授权。恢复 queue 不等于同步 pending，两个范围不得互相扩张。
 
 ## 二、发现、生成并下载文字稿
 
-1. 运行 `pending 100`。没有 pending 时处理完恢复项后结束。
-2. 用户明确触发“同步 PLAUD 并生成文字稿”后，按当前待生成数量直接运行一次 `sync-pending`；不因数量增加二次确认。
-3. 输出到当前工作区 `work/domi/plaud/<run-id>/`。
-4. 每条必须取得 `transcriptPath` 且队列为 `transcript_ready`；失败项不得进入下一步。
+1. 只有 `targetScope=single` 且已锁定 `activeFileId`，或 `targetScope=all_pending_sync` 时才运行 `pending 100`；没有命中时结束，不改动其他项目。
+2. `targetScope=single` 只能调用能接收精确 `fileId` 的单条生成／下载能力，并验证返回 `fileId === activeFileId`。当前可用工具若只能调用无目标的 `sync-pending`，则停止为 `waiting_for_targeted_sync` 并报告能力缺口；不得用 `sync-pending 1` 猜测第一条，更不得回退成全量同步。
+3. 用户明确触发“同步 PLAUD 并生成文字稿”或“同步全部／所有待生成录音”后，`targetScope=all_pending_sync`，按授权时的 pending 快照数量直接运行一次 `sync-pending`；不因数量增加二次确认。本轮后来新增的 pending 不自动加入。
+4. 输出到当前工作区 `work/domi/plaud/<run-id>/`。
+5. 每条必须取得与授权范围一致的 `fileId`、`transcriptPath` 且队列为 `transcript_ready`；范围外结果不得进入下游，出现不一致时停止并报告，不能继续处理其他录音。
 
 ## 三、回忆提示与上下文确认
 
@@ -39,6 +57,7 @@ mark <fileId> context_pending - {"contextPromptedAt":"<ISO-8601>","recallSummary
 - 尚未回复：保持 `context_pending`，不得后台继续；同一任务中的下一条用户消息默认是对本录音问题的回复，除非用户明确取消或选择其他工作流；
 - 部分信息也算 `provided`，不为补齐字段反复追问。
 - 收到回复时必须续接原 `fileId`、`transcriptPath` 和此前执行会话；不得把访谈类型、项目名或参会人补充重新解释为“开始录音”，不得创建新录音或调用本机麦克风。
+- 用户明确回复`管理层访谈`时，把该对话类型和项目方参会人的姓名／职位原样传给`domi:asr-notes`。纪要文件名与一级标题优先按`YYYYMMDD-公司规范名（英文名）-项目方核心受访者短角色 姓名`生成；不得再用模型提炼的技术主题覆盖。联合／共同创始人统一缩写为`联创`，例如`20260115-示例科技（ExampleTech）-联创 张某`。
 
 ## 四、生成纪要与审计
 

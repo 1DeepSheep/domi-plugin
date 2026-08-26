@@ -104,19 +104,22 @@ IPO/招股书 profile 另有硬门槛：
 
 推荐流程：
 
+先把 `DOMI_INVESTMENT_ANALYSIS_ROOT` 设为本轮实际选中的 `$domi:investment-analysis` Skill 目录（即包含当前 `SKILL.md` 的目录）。所有脚本和资产都必须从这个目录解析；不要调用 `~/.codex/skills/investment-analysis` 中可能存在的旧全局副本。
+
 ```bash
-node ~/.codex/skills/investment-analysis/scripts/init_deck.js outputs <deck> --style morgan-stanley
+DOMI_INVESTMENT_ANALYSIS_ROOT="<当前选中的 domi investment-analysis Skill 目录>"
+node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/init_deck.js" outputs <deck> --style morgan-stanley
 # 先查看 layout-recipes.md / layout-index.json 做 layout rhythm plan
 # 再在 outputs/<deck>.html 中替换占位符，并从 style-packs/morgan-stanley/templates.html 复制页面片段
 # 公共股票：先做内容审计，再做 deck 映射审计
-python3 ~/.codex/skills/investment-analysis/scripts/audit_public_equity.py --profile deep-dive --research outputs/<deck>_research.md
-node ~/.codex/skills/investment-analysis/scripts/audit_research_deck.js --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode public-equity
+python3 "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/audit_public_equity.py" --profile deep-dive --research outputs/<deck>_research.md
+node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/audit_research_deck.js" --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode public-equity
 # IPO/招股书：使用完整披露与控制件审计
-node ~/.codex/skills/investment-analysis/scripts/audit_research_deck.js --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode prospectus --strict --evidence outputs/<deck>_evidence_ledger.md --entities outputs/<deck>_entity_map.md --policy outputs/<deck>_calculation_policy.md --checklist outputs/<deck>_disclosure_checklist.md
-node ~/.codex/skills/investment-analysis/scripts/qa_deck.js outputs/<deck>.html
+node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/audit_research_deck.js" --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode prospectus --strict --evidence outputs/<deck>_evidence_ledger.md --entities outputs/<deck>_entity_map.md --policy outputs/<deck>_calculation_policy.md --checklist outputs/<deck>_disclosure_checklist.md
+node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/qa_deck.js" outputs/<deck>.html
 # 字体敏感交付可强制检查英文/数字 family
-node ~/.codex/skills/investment-analysis/scripts/qa_deck.js outputs/<deck>.html --require-latin-font Calibri
-node ~/.codex/skills/investment-analysis/scripts/export_pdf.js outputs/<deck>.html outputs/<deck>.pdf
+node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/qa_deck.js" outputs/<deck>.html --require-latin-font Calibri
+node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf
 ```
 
 如果项目已经有成熟 HTML deck，可不强制重写为模板，但必须把现有 CSS 与 Morgan Stanley style pack 的关键约束对齐：`11in x 8.5in` 页面、Calibre/Calibri 数字英文与楷体中文 fallback、蓝色观点标题、两类表格风格、稳定 footer/source、无 overflow 和无巨大留白。

@@ -7,7 +7,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const PERSON_INTERACTION_NAME_PATTERN = /(?:交流|纪要|会议|访谈|沟通|会面|电话|路演|聊天)/i;
 const PERSON_RESEARCH_NAME_PATTERN = /(?:研究|调研|人物画像|背景|背调|资料|分析|profile)/i;
 const LOCAL_TODO_DOCUMENT_NAME = "0.待办事项.md";
@@ -69,8 +69,8 @@ function defaultConfigPath(homeDir = os.homedir(), exists = fs.existsSync) {
   return !exists(current) && exists(legacy) ? legacy : current;
 }
 
-function fail(message, code = "repository_error") {
-  process.stdout.write(`${JSON.stringify({ ok: false, code, error: message })}\n`);
+function fail(message, code = "repository_error", details = {}) {
+  process.stdout.write(`${JSON.stringify({ ok: false, code, error: message, ...details })}\n`);
   process.exitCode = 1;
 }
 
@@ -203,6 +203,46 @@ function parseJsonArray(value) {
   }
 }
 
+function projectRecordHash(row) {
+  if (!row) return null;
+  const canonical = {
+    id: String(row.id || ""),
+    name: String(row.name || ""),
+    normalizedName: String(row.normalized_name || ""),
+    domain: String(row.domain || ""),
+    subdomains: parseJsonList(row.subdomains_json),
+    status: String(row.status || ""),
+    rating: String(row.rating || ""),
+    notes: String(row.notes || ""),
+    cities: parseJsonList(row.cities_json),
+    investors: parseJsonList(row.investors_json),
+    financingHistory: String(row.financing_history || ""),
+    latestValuationUsd100m: row.latest_valuation_usd_100m === null
+      || row.latest_valuation_usd_100m === undefined
+      ? null
+      : Number(row.latest_valuation_usd_100m),
+    lastUpdatedAt: row.last_updated_at === null || row.last_updated_at === undefined
+      ? null
+      : Number(row.last_updated_at),
+    documentPath: String(row.document_path || ""),
+    createdAt: Number(row.created_at) || 0
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+function casError(message) {
+  const error = new Error(message);
+  error.code = "DOMI_PROJECT_CAS_MISMATCH";
+  return error;
+}
+
+function documentWriteError(message, storageReceipt, cause) {
+  const error = new Error(message, cause ? { cause } : undefined);
+  error.code = "DOMI_PROJECT_DOCUMENT_WRITE_FAILED";
+  error.storageReceipt = storageReceipt;
+  return error;
+}
+
 function yamlValue(value) {
   return JSON.stringify(value === undefined ? "" : value);
 }
@@ -307,7 +347,8 @@ class DomiRepository {
         last_updated_at INTEGER,
         document_path TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1
       );
       CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC, id);
       CREATE TABLE IF NOT EXISTS people (
@@ -382,6 +423,14 @@ class DomiRepository {
     const projectColumns = new Set(
       this.database.prepare("PRAGMA table_info(projects)").all().map((column) => column.name)
     );
+    if (!projectColumns.has("revision")) {
+      try {
+        this.database.exec("ALTER TABLE projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
+      } catch (error) {
+        const migratedColumns = this.database.prepare("PRAGMA table_info(projects)").all();
+        if (!migratedColumns.some((column) => column.name === "revision")) throw error;
+      }
+    }
     if (!projectColumns.has("financing_history")) {
       this.database.exec("ALTER TABLE projects ADD COLUMN financing_history TEXT NOT NULL DEFAULT ''");
     }
@@ -439,9 +488,42 @@ class DomiRepository {
     return path.join(projectRoot, mainSubdomain, projectName);
   }
 
-  projectPage(project, id) {
-    const directory = this.projectDirectory(project);
-    const filePath = path.join(directory, "项目主页.md");
+  projectDocumentPath(project) {
+    const domain = safeSegment(project.domain);
+    const mainSubdomain = safeSegment(stringList(project.subdomains)[0]);
+    const projectName = safeSegment(project.name, "未命名项目");
+    const projectRoot = path.join(this.libraryDir, "3.项目库", domain);
+    const directory = domain === "_未分类" && mainSubdomain === "_未分类"
+      ? path.join(projectRoot, projectName)
+      : path.join(projectRoot, mainSubdomain, projectName);
+    return path.join(directory, "项目主页.md");
+  }
+
+  projectPage(project, id, filePath = this.projectDocumentPath(project)) {
+    const directory = path.dirname(filePath);
+    const desiredPath = this.projectDocumentPath(project);
+    if (filePath === desiredPath) {
+      const domain = safeSegment(project.domain);
+      const mainSubdomain = safeSegment(stringList(project.subdomains)[0]);
+      if (domain === "_未分类" && mainSubdomain === "_未分类") {
+        const legacyDirectory = path.join(
+          this.libraryDir,
+          "3.项目库",
+          "_未分类",
+          "_未分类",
+          safeSegment(project.name, "未命名项目")
+        );
+        if (!fs.existsSync(directory) && fs.existsSync(legacyDirectory)) {
+          fs.mkdirSync(path.dirname(directory), { recursive: true });
+          fs.renameSync(legacyDirectory, directory);
+          try {
+            fs.rmdirSync(path.dirname(legacyDirectory));
+          } catch {
+            // Other legacy projects may still be waiting for an idempotent update.
+          }
+        }
+      }
+    }
     const latestValuation = project.latestValuationUsd100m === null
       ? "未填写"
       : `${project.latestValuationUsd100m} 亿美元`;
@@ -505,90 +587,193 @@ ${project.financingHistory || "暂无历史融资信息。"}
     if (!name) throw new Error("项目写入缺少 name/companyName。");
     assertCanonicalProjectName(name);
     const normalized = normalizedName(name);
-    const existing = this.database.prepare(
-      `SELECT id, domain, created_at, investors_json, financing_history, latest_valuation_usd_100m
-       FROM projects WHERE normalized_name = ?`
-    ).get(normalized);
-    const id = String(input.id || input.projectId || existing?.id || stableId("prj", normalized));
-    const now = Date.now();
-    const project = {
-      name,
-      domain: String(input.domain || "").trim() === "消费科技"
-        && String(existing?.domain || "").trim() !== "消费科技"
-        ? "消费"
-        : String(input.domain || "").trim(),
-      subdomains: stringList(input.subdomains),
-      status: String(input.status || "待交流").trim(),
-      rating: String(input.rating || "").trim(),
-      notes: String(input.notes || "").trim(),
-      cities: stringList(input.cities),
-      investors: Object.prototype.hasOwnProperty.call(input, "investors")
-        ? stringList(input.investors)
-        : parseJsonList(existing?.investors_json),
-      financingHistory: Object.prototype.hasOwnProperty.call(input, "financingHistory")
-        ? String(input.financingHistory || "").trim()
-        : String(existing?.financing_history || ""),
-      latestValuationUsd100m: Object.prototype.hasOwnProperty.call(input, "latestValuationUsd100m")
-        ? input.latestValuationUsd100m === null
-          || input.latestValuationUsd100m === undefined
-          || input.latestValuationUsd100m === ""
-          ? null
-          : Number(input.latestValuationUsd100m)
-        : existing?.latest_valuation_usd_100m ?? null,
-      createdAt: existing?.created_at || now,
-      lastUpdatedAt: toEpochMs(input.lastUpdatedAt || input.lastFollowup, now)
-    };
-    if (project.latestValuationUsd100m !== null
-      && (!Number.isFinite(project.latestValuationUsd100m) || project.latestValuationUsd100m < 0)) {
-      throw new Error("latestValuationUsd100m 必须是非负数字，单位为亿美元。");
+    const hasExpectedRevision = Object.prototype.hasOwnProperty.call(input, "expectedRevision");
+    const hasExpectedHash = Object.prototype.hasOwnProperty.call(input, "expectedRecordHash");
+    const expectedRevision = hasExpectedRevision ? Number(input.expectedRevision) : null;
+    const expectedRecordHash = hasExpectedHash && input.expectedRecordHash !== null
+      ? String(input.expectedRecordHash).trim().toLowerCase()
+      : null;
+    if (hasExpectedRevision && (!Number.isInteger(expectedRevision) || expectedRevision < 0)) {
+      throw new Error("expectedRevision 必须是大于或等于 0 的整数。");
     }
-    const documentPath = this.projectPage(project, id);
-    this.database.prepare(`
-      INSERT INTO projects (
-        id, name, normalized_name, domain, subdomains_json, status, rating, notes,
-        cities_json, investors_json, financing_history, latest_valuation_usd_100m,
-        last_updated_at, document_path, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        name = excluded.name,
-        normalized_name = excluded.normalized_name,
-        domain = excluded.domain,
-        subdomains_json = excluded.subdomains_json,
-        status = excluded.status,
-        rating = excluded.rating,
-        notes = excluded.notes,
-        cities_json = excluded.cities_json,
-        investors_json = excluded.investors_json,
-        financing_history = excluded.financing_history,
-        latest_valuation_usd_100m = excluded.latest_valuation_usd_100m,
-        last_updated_at = excluded.last_updated_at,
-        document_path = excluded.document_path,
-        updated_at = excluded.updated_at
-    `).run(
-      id, name, normalized, project.domain, jsonList(project.subdomains), project.status,
-      project.rating, project.notes, jsonList(project.cities), jsonList(project.investors),
-      project.financingHistory, project.latestValuationUsd100m,
-      project.lastUpdatedAt, documentPath, existing?.created_at || now, now
-    );
-    this.database.prepare(
-      "DELETE FROM repository_tombstones WHERE entity_type = 'project' AND entity_key = ?"
-    ).run(normalized);
-    return {
-      ok: true,
-      action: existing ? "updated" : "created",
-      storageReceipt: {
-        backend: "local",
-        projectId: id,
-        projectUri: `domi://project/${id}`,
-        documentUri: pathToFileURL(documentPath).href,
-        libraryPath: path.dirname(documentPath),
-        recordVerified: Boolean(this.getProject(id)),
-        documentVerified: fs.existsSync(documentPath),
-        filesVerified: fs.existsSync(path.dirname(documentPath)),
-        status: "managed"
-      },
-      project: this.getProject(id)
-    };
+    if (hasExpectedHash && expectedRecordHash !== null && !/^[a-f0-9]{64}$/.test(expectedRecordHash)) {
+      throw new Error("expectedRecordHash 必须是 64 位 SHA-256，或使用 null 表示预期记录不存在。");
+    }
+
+    this.database.exec("BEGIN IMMEDIATE");
+    let transactionOpen = true;
+    try {
+      const requestedId = String(input.id || input.projectId || "").trim();
+      const existingByName = this.database.prepare(
+        "SELECT * FROM projects WHERE normalized_name = ?"
+      ).get(normalized);
+      const existingById = requestedId
+        ? this.database.prepare("SELECT * FROM projects WHERE id = ?").get(requestedId)
+        : null;
+      if (existingByName && existingById && existingByName.id !== existingById.id) {
+        throw casError("projectId 与项目名称指向不同记录；为避免覆盖并发数据，已拒绝写入。");
+      }
+      const existing = existingById || existingByName || null;
+      if (existing && requestedId && existing.id !== requestedId) {
+        throw casError("项目名称已绑定其他稳定 projectId；已拒绝创建重复记录。");
+      }
+      const id = requestedId || existing?.id || stableId("prj", normalized);
+      const now = Date.now();
+      const hasLastUpdated = Object.prototype.hasOwnProperty.call(input, "lastUpdatedAt")
+        || Object.prototype.hasOwnProperty.call(input, "lastFollowup");
+      const project = {
+        name,
+        domain: String(input.domain || "").trim() === "消费科技"
+          && String(existing?.domain || "").trim() !== "消费科技"
+          ? "消费"
+          : String(input.domain || "").trim(),
+        subdomains: stringList(input.subdomains),
+        status: String(input.status || "待交流").trim(),
+        rating: String(input.rating || "").trim(),
+        notes: String(input.notes || "").trim(),
+        cities: stringList(input.cities),
+        investors: Object.prototype.hasOwnProperty.call(input, "investors")
+          ? stringList(input.investors)
+          : parseJsonList(existing?.investors_json),
+        financingHistory: Object.prototype.hasOwnProperty.call(input, "financingHistory")
+          ? String(input.financingHistory || "").trim()
+          : String(existing?.financing_history || ""),
+        latestValuationUsd100m: Object.prototype.hasOwnProperty.call(input, "latestValuationUsd100m")
+          ? input.latestValuationUsd100m === null
+            || input.latestValuationUsd100m === undefined
+            || input.latestValuationUsd100m === ""
+            ? null
+            : Number(input.latestValuationUsd100m)
+          : existing?.latest_valuation_usd_100m ?? null,
+        createdAt: existing?.created_at || now,
+        lastUpdatedAt: hasLastUpdated
+          ? toEpochMs(input.lastUpdatedAt || input.lastFollowup, now)
+          : existing?.last_updated_at ?? now
+      };
+      if (project.latestValuationUsd100m !== null
+        && (!Number.isFinite(project.latestValuationUsd100m) || project.latestValuationUsd100m < 0)) {
+        throw new Error("latestValuationUsd100m 必须是非负数字，单位为亿美元。");
+      }
+      // Classification is mutable metadata; once established, the project root is identity-bearing.
+      // Reuse it so a taxonomy correction cannot strand user notes, research or source materials.
+      const documentPath = existing?.document_path || this.projectDocumentPath(project);
+      const candidateRow = {
+        id,
+        name,
+        normalized_name: normalized,
+        domain: project.domain,
+        subdomains_json: jsonList(project.subdomains),
+        status: project.status,
+        rating: project.rating,
+        notes: project.notes,
+        cities_json: jsonList(project.cities),
+        investors_json: jsonList(project.investors),
+        financing_history: project.financingHistory,
+        latest_valuation_usd_100m: project.latestValuationUsd100m,
+        last_updated_at: project.lastUpdatedAt,
+        document_path: documentPath,
+        created_at: project.createdAt
+      };
+      const currentRevision = existing ? Number(existing.revision) || 1 : 0;
+      const currentHash = projectRecordHash(existing);
+      const candidateHash = projectRecordHash(candidateRow);
+      const idempotentReplay = Boolean(existing) && currentHash === candidateHash;
+      const revisionMatches = !hasExpectedRevision || expectedRevision === currentRevision;
+      const hashMatches = !hasExpectedHash || expectedRecordHash === currentHash;
+      if ((!revisionMatches || !hashMatches) && !idempotentReplay) {
+        throw casError(
+          "项目记录已发生并发变化；请重新读取、合并并审核后再提交。"
+        );
+      }
+
+      if (!idempotentReplay) {
+        const nextRevision = existing ? currentRevision + 1 : 1;
+        this.database.prepare(`
+          INSERT INTO projects (
+            id, name, normalized_name, domain, subdomains_json, status, rating, notes,
+            cities_json, investors_json, financing_history, latest_valuation_usd_100m,
+            last_updated_at, document_path, created_at, updated_at, revision
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            normalized_name = excluded.normalized_name,
+            domain = excluded.domain,
+            subdomains_json = excluded.subdomains_json,
+            status = excluded.status,
+            rating = excluded.rating,
+            notes = excluded.notes,
+            cities_json = excluded.cities_json,
+            investors_json = excluded.investors_json,
+            financing_history = excluded.financing_history,
+            latest_valuation_usd_100m = excluded.latest_valuation_usd_100m,
+            last_updated_at = excluded.last_updated_at,
+            document_path = excluded.document_path,
+            updated_at = excluded.updated_at,
+            revision = excluded.revision
+        `).run(
+          id, name, normalized, project.domain, jsonList(project.subdomains), project.status,
+          project.rating, project.notes, jsonList(project.cities), jsonList(project.investors),
+          project.financingHistory, project.latestValuationUsd100m,
+          project.lastUpdatedAt, documentPath, project.createdAt, now, nextRevision
+        );
+        this.database.prepare(
+          "DELETE FROM repository_tombstones WHERE entity_type = 'project' AND entity_key = ?"
+        ).run(normalized);
+      }
+      this.database.exec("COMMIT");
+      transactionOpen = false;
+      const persisted = this.getProject(id);
+      try {
+        this.projectPage(project, id, documentPath);
+      } catch (cause) {
+        throw documentWriteError(
+          "项目记录已提交，但项目主页写入失败；当前状态可恢复但尚未完成归档，请按同一 projectId 重试。",
+          {
+            backend: "local",
+            projectId: id,
+            projectUri: `domi://project/${id}`,
+            documentUri: pathToFileURL(documentPath).href,
+            libraryPath: path.dirname(documentPath),
+            recordVerified: Boolean(persisted),
+            documentVerified: false,
+            filesVerified: fs.existsSync(path.dirname(documentPath)),
+            recordRevision: persisted?.recordRevision,
+            recordHash: persisted?.recordHash,
+            recoveryRequired: true,
+            status: "provisional"
+          },
+          cause
+        );
+      }
+      return {
+        ok: true,
+        action: existing ? "updated" : "created",
+        idempotentReplay,
+        storageReceipt: {
+          backend: "local",
+          projectId: id,
+          projectUri: `domi://project/${id}`,
+          documentUri: pathToFileURL(documentPath).href,
+          libraryPath: path.dirname(documentPath),
+          recordVerified: Boolean(persisted),
+          documentVerified: fs.existsSync(documentPath),
+          filesVerified: fs.existsSync(path.dirname(documentPath)),
+          recordRevision: persisted?.recordRevision,
+          recordHash: persisted?.recordHash,
+          status: "managed"
+        },
+        project: persisted
+      };
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          this.database.exec("ROLLBACK");
+        } catch {
+          // Preserve the original transaction/commit failure.
+        }
+      }
+      throw error;
+    }
   }
 
   getProject(id) {
@@ -613,6 +798,8 @@ ${project.financingHistory || "暂无历史融资信息。"}
         ? null
         : Number(row.latest_valuation_usd_100m),
       lastUpdatedAt: row.last_updated_at,
+      recordRevision: Number(row.revision) || 1,
+      recordHash: projectRecordHash(row),
       documentPath: row.document_path,
       documentUri: row.document_path ? pathToFileURL(row.document_path).href : ""
     };
@@ -1107,7 +1294,11 @@ if (require.main === module) {
   try {
     main();
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error), error?.code || "repository_error");
+    fail(
+      error instanceof Error ? error.message : String(error),
+      error?.code || "repository_error",
+      error?.storageReceipt ? { storageReceipt: error.storageReceipt } : {}
+    );
   }
 }
 
