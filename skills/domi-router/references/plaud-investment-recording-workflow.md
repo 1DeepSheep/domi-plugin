@@ -34,6 +34,17 @@
 
 `all_queue_resume` 也只按上述规则串行恢复明确枚举的 queue 快照；本轮中后来出现的 queue 项不自动加入，除非用户再次授权。恢复 queue 不等于同步 pending，两个范围不得互相扩张。
 
+### 完成态后的普通 follow-up
+
+`managed`、`notes_non_project`、`discussion_complete` 以及已经完成本轮所需交付和回读的等价状态都是终态。终态只说明既有录音工作流可供引用，不授权下一条用户消息重新进入录音流程。每条新消息必须先按本轮最新原始意图重新路由；任务标题、录音入口、历史 workflow 标签、`activeFileId`、旧 manifest 或上一轮主 Skill 都不能覆盖当前意图。
+
+- 用户追问公司、人物、结论、证据或已有纪要内容时，直接从已验证的纪要／快评／研究 artifact 回答；仅为回答问题而读取既有本地 transcript 也不构成 PLAUD 操作。
+- 用户补充背景、纠正履历或要求修改既有纪要时，只做最小增量修订，并重跑受影响的证据检查、QA 和归档回读。禁止调用 PLAUD `pending`、`sync-pending`、生成、上传或下载，也禁止重跑 `domi:asr-notes` 的完整纪要生成流程。
+- 用户要求查看或发送已有文件时，复用现有 artifact 并执行 [跨客户端真实附件交付](artifact-delivery.md)，不得以“重新处理录音”代替发送。
+- 只有用户本轮明确说“重新处理／重新转写／用新录音重做／重新同步”或选择另一条具体录音时，才可重新进入第一、二节；仍须重新锁定范围和授权，不得从旧 `activeFileId` 推断。
+
+若无法唯一找到本轮追问所对应的既有 artifact，应请求用户选择目标或补充最小定位信息；不能通过扫描并处理下一条 PLAUD 录音来猜测。
+
 ## 二、发现、生成并下载文字稿
 
 1. 只有 `targetScope=single` 且已锁定 `activeFileId`，或 `targetScope=all_pending_sync` 时才运行 `pending 100`；没有命中时结束，不改动其他项目。

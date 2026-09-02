@@ -1,4 +1,4 @@
 interface:
   display_name: "旧录音恢复"
   short_description: "停止或查看旧版 domi 已启动的 Mac 录音。"
-  default_prompt: "Use $mac-recording only to inspect or safely stop a legacy Mac recording that is already active. Never start a new recording."
+  default_prompt: "Use $domi:mac-recording only to inspect or safely stop a legacy Mac recording that is already active. Never start a new recording."

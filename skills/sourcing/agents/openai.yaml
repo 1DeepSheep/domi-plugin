@@ -1,4 +1,4 @@
 interface:
   display_name: "Sourcing"
   short_description: "发现和核验潜在创始人，并维护当前 domi 人脉库。"
-  default_prompt: "Use $sourcing to discover and verify potential founders, then update the currently configured domi people repository only when I explicitly authorize the write."
+  default_prompt: "Use $domi:sourcing to discover and verify potential founders, then update the currently configured domi people repository only when I explicitly authorize the write."
