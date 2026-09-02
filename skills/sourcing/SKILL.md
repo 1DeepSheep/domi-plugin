@@ -7,6 +7,8 @@ description: Investment sourcing workflow for discovering potential founders, ma
 
 Use this skill to turn ad hoc founder leads and relationship notes into a disciplined sourcing system: discover people, verify background signals, map relationship paths, and keep the current domi people repository current.
 
+When the user explicitly asks to send, download, or view an actual sourcing report or profile file, read and follow [cross-client artifact delivery](../domi-router/references/artifact-delivery.md) on demand; a plain path, source link, or serialized internal file directive is not a delivered attachment.
+
 When the task reads or writes internal people data, first read `../investment-mgmt/references/storage-backends.md` and lock the returned backend:
 
 - `repositoryBackend=local`: use the plugin-level `scripts/domi-repo.cjs person search/upsert` commands; Feishu remains an explicit external action only.

@@ -7,6 +7,8 @@ description: |
 
 # 投资管理
 
+用户明确要求发送、下载或查看资料库中的实际文档或附件时，完整读取并执行[跨客户端真实附件交付](../domi-router/references/artifact-delivery.md)；资料来源引用与 deliverable 附件必须区分，不得用普通路径、source link 或原始内部文件指令冒充已交付文件。
+
 每次运行先完整读取并执行 [references/storage-backends.md](references/storage-backends.md)，再锁定一次任务内的 `repositoryBackend`：
 
 - `local`：所有“研究并入库”“更新项目／人脉／行业动态”“同步待办事项”都写本地资料库；本文件后续规则全部适用。
