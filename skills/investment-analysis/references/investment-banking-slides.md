@@ -299,4 +299,4 @@ node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/export_pdf.js" outputs/<deck>.html 
 - 已生成 HTML 和 PDF。
 - 页面比例和页数。
 - 已完成的 QA：无溢出、页面尺寸、全页 contact sheet 逐页检查和关键页放大复核。
-- 给出输出文件链接。
+- 用户明确要求发送、下载或查看实际文件时，完整读取并执行 [跨客户端真实附件交付](../../domi-router/references/artifact-delivery.md)，以客户端可消费的真实 HTML／PDF（或明确要求的 PPTX）附件交付；不得把普通路径、source link 或原始内部文件指令当作输出文件链接。

@@ -7,6 +7,8 @@ description: 安全访问本机 PLAUD 录音，上传用户明确提供的本地
 
 使用插件自带的安全 CLI 访问 PLAUD。鉴权来自用户在 domi 专用 Chrome／Tabbit Profile 中亲自登录的 PLAUD 账号；不得读取或复制用户日常浏览器 Profile。任何授权头、Cookie 或浏览器 Profile 都不得写入插件、工作产物或消息。
 
+用户明确要求发送、下载或查看已取得的实际 transcript／音频文件时，完整读取并执行[跨客户端真实附件交付](../domi-router/references/artifact-delivery.md)；复用经验证的现有 artifact，不得以普通路径、source link、原始内部文件指令或重新运行 PLAUD 流程代替附件交付。
+
 ## 入口
 
 从本 `SKILL.md` 所在目录解析脚本绝对路径：
