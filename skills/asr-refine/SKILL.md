@@ -10,6 +10,8 @@ description: "Refine raw ASR transcripts into accurate, publication-ready record
 Transform noisy ASR text into accurate and readable transcript-style documents.
 Never summarize by default; keep complete content and dialogue flow.
 
+When the user explicitly asks to send, download, or view the finished transcript file, read and follow [cross-client artifact delivery](../domi-router/references/artifact-delivery.md). A plain local path, source link, or serialized internal file directive is not a delivered attachment.
+
 ## Workflow
 
 ### Stage 1: Context Analysis and Mandatory Verification

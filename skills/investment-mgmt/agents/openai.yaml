@@ -1,4 +1,4 @@
 interface:
   display_name: "投资管理"
   short_description: "维护项目归档、融资估值、投资机构及分类词表的一致性。"
-  default_prompt: "Use $investment-mgmt to maintain project records, financing history, latest valuation, tracked investors, archives, and canonical taxonomy."
+  default_prompt: "Use $domi:investment-mgmt to maintain project records, financing history, latest valuation, tracked investors, archives, and canonical taxonomy."

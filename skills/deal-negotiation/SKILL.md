@@ -7,6 +7,8 @@ description: 投资交易谈判指导。覆盖从天使轮到 Pre-IPO 全阶段�
 
 根据用户描述的谈判场景，提供针对性的沟通话术和条款策略建议。
 
+用户明确要求发送、下载或查看实际条款总结／Word 等文件时，按需读取并执行[跨客户端真实附件交付](../domi-router/references/artifact-delivery.md)；不得用普通路径、source link 或原始内部文件指令代替附件。
+
 ## Codex 运行说明
 
 本 skill 已按 Codex 原生目录组织。读取 reference 时使用当前 skill 目录下的相对路径；不要读取 `.claude` 目录或 `.skill` 压缩包。每次输出前确认已按场景读取 `references/philosophy.md` 和至少一个场景文件。

@@ -7,10 +7,12 @@ description: 维护 domi 投资待办。扫描项目、人脉、行业动态和�
 
 把资料库信号变成少量可执行事项。客户端上下文同时含 `DOMI_TODO_CLIENT_SNAPSHOT_V1` 和已校验的 `后端：local`／`后端：legacy_feishu_primary` 时直接锁定，不再读取 `storage-backends.md`；普通调用先读 `../investment-mgmt/references/storage-backends.md`：
 
+要附件时读[合同](../domi-router/references/artifact-delivery.md)。
+
 - `repositoryBackend=local`：`<localRepositoryDir>/0.待办事项.md` 是唯一账本；资料只经 `scripts/domi-repo.cjs` 读取。
 - `repositoryBackend=legacy_feishu_primary`：完整读取 `../investment-mgmt/references/legacy-feishu-primary.md`；既有 Base／Wiki 与 `1.待办事项` 是唯一主库。禁止调用本地网关、不得初始化或写 `0.待办事项.md`。
 
-失败即停；不得切换、双写或新建第二账本。配置、路径、邮箱、token、Base／Table／Wiki 标识不得外泄。
+失败即停；不得切换、双写或新建第二账本。
 
 ## 客户端紧凑同步
 
