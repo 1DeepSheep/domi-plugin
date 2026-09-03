@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slides"
+  short_description: "Morgan Stanley-style decks with fail-closed visual QA"
+  default_prompt: "Use $domi:slides to turn my research or materials into a high-density Morgan Stanley-style deck, run the complete layout/font/content QA, and deliver HTML plus PDF unless I explicitly request an editable PPTX."

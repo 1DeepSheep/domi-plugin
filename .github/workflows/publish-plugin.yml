@@ -48,7 +48,7 @@ jobs:
           node scripts/asr-notes-skill.test.cjs
           node scripts/financing-fields.test.cjs
           node scripts/intake-time-fields.test.cjs
-          node scripts/investment-analysis-slides.test.cjs
+          node scripts/slides-skill.test.cjs
           node scripts/plugin-routing-contracts.test.cjs
           node scripts/investment-review-skill.test.cjs
           node scripts/schedule-skill.test.cjs
@@ -86,7 +86,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --commit "$GITHUB_SHA" \
             --tag "${{ steps.metadata.outputs.tag }}" \
-            --min-client-version "0.6.22"
+            --min-client-version "0.6.49"
 
       - name: Publish immutable plugin release
         env:

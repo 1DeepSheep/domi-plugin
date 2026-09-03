@@ -1,6 +1,6 @@
 ---
 name: ic-memo
-description: 以投资总监视角，根据项目材料（datapack、创始人交流纪要、BP等）撰写一篇约5000字的IC投委会决策报告。当用户提到「IC memo」「IC报告」「投委会报告」「上会材料」「决策报告」「写memo」「IC决策」「帮我写个IC」「上会」时,主动使用本 skill。输入可以是访谈纪要、BP摘要、datapack内容、行业研究等任意材料组合。
+description: 以投资总监视角，根据项目材料（datapack、创始人交流纪要、BP等）撰写一篇约5000字的IC投委会决策报告。当用户提到「IC memo」「IC报告」「投委会报告」「上会材料」「决策报告」「写memo」「IC决策」「帮我写个IC」「上会」时主动使用本 skill。输入可以是访谈纪要、BP摘要、datapack内容、行业研究等任意材料组合；若同时要求 slides/PPT/deck，本 Skill 负责 IC 内容底稿并叠加 domi:slides 完成演示。
 ---
 
 # IC Memo — 投委会决策报告
@@ -425,3 +425,7 @@ description: 以投资总监视角，根据项目材料（datapack、创始人�
 | 五、交易方案 | 12-16% |
 
 如有补充板块，总字数相应增加，各板块占比自行调整。
+
+## Slides 交接
+
+用户同时要求 IC slides、上会 PPT 或把 memo 做成演示文稿时，先按本 Skill 完成并校验 IC memo、事实来源、关键问题、交易方案、风险与 unresolved 项，再把同一份底稿交给 `$domi:slides`。`$domi:slides` 统一负责故事线、页级合同、外资投行风格、字体、HTML/PDF/PPTX、渲染和 fail-closed QA；不得由本 Skill 或通用 presentations 自行选择模板并绕过它。
