@@ -1,6 +1,6 @@
 ---
 name: investment-analysis
-description: 公司基本面与投资研究工作流，覆盖二级市场公司深度研究、财报前瞻/复盘、盘中或当日异常涨跌归因、市场预期与预期差、盈利预测、FCF/FCFE、资本配置、估值与投资判断，也覆盖招股书/S-1/A1、年报季报、财务模型、BP和投行/咨询风格 slides。用户提到“分析公司基本面”“是否值得投资”“为什么大涨/大跌”“财报前瞻/复盘”“一致预期/目标价/催化剂/估值”“券商研报分析”“招股书/IPO分析”“做成 slides/PPT/deck/HTML/PDF”时使用。slides/PPT 默认表示报告形态，交付 Morgan Stanley 风格 HTML + PDF；只有用户明确要求 PPTX、可编辑 PowerPoint 或 PowerPoint 源文件时才制作 PPTX。不要用于只需 3-5 条快速判断、评级打分或组会快评的请求，那类使用 investment-review。
+description: 公司基本面与投资研究工作流，覆盖二级市场公司深度研究、财报前瞻/复盘、盘中或当日异常涨跌归因、市场预期与预期差、盈利预测、FCF/FCFE、资本配置、估值与投资判断，也覆盖招股书/S-1/A1、年报季报、财务模型和BP。用户提到“分析公司基本面”“是否值得投资”“为什么大涨/大跌”“财报前瞻/复盘”“一致预期/目标价/催化剂/估值”“券商研报分析”“招股书/IPO分析”时使用；若同时要求 slides/PPT/deck，本 Skill 负责研究底稿并叠加 domi:slides 完成演示。不要用于只需 3-5 条快速判断、评级打分或组会快评的请求，那类使用 investment-review。
 ---
 
 # Investment Analysis
@@ -25,7 +25,7 @@ description: 公司基本面与投资研究工作流，覆盖二级市场公司�
 
 ## 先锁定研究模式
 
-将任务归入一个主要内容模式；`deck-output` 只能是完成研究后的输出适配层，不能替代内容模式。
+将任务归入一个主要内容模式；若需要演示文稿，完成内容模式后把底稿交给独立的 `$domi:slides`，不能用排版替代研究。
 
 | 模式 | 触发场景 | 必读 reference |
 |---|---|---|
@@ -37,7 +37,6 @@ description: 公司基本面与投资研究工作流，覆盖二级市场公司�
 | `prospectus` | 招股书、S-1、A1、聆讯后资料集、IPO分析 | `references/prospectus-analysis.md`、`references/research-ledgers.md` |
 | `financial-statements` | 年报、季报、审计报告、三张表和附注 | `references/financial-statement-analysis.md` |
 | `financial-model-audit` | Excel模型、收入/成本 build、预算、估值模型 | `references/financial-model-analysis.md` |
-| `deck-output` | slides/PPT/deck/HTML/PDF | 完成主要研究后读取 `references/investment-banking-slides.md` |
 
 任务包含多类材料时，先确定投资问题，再加载必要 reference；不要把所有 reference 无差别塞入上下文。
 
@@ -107,7 +106,7 @@ description: 公司基本面与投资研究工作流，覆盖二级市场公司�
 - 低可信高增量线索不得进入 Base Case；高可信低材料信息不得挤占摘要。
 - 信息不足时输出 `decision-critical unresolved` 与下一项判别性证据，不用背景材料掩盖缺口。
 
-二级市场交付前运行 `scripts/audit_public_equity.py`；脚本不可运行时，手工输出所选 profile、每项 gate 的 `pass/fail`、对应证据及修复动作，不能只声称“等价检查已完成”。脚本或手工 gate 失败时先补底稿和控制件。招股书/slides继续运行 `scripts/audit_research_deck.js` 及视觉 QA。
+二级市场交付前运行 `scripts/audit_public_equity.py`；脚本不可运行时，手工输出所选 profile、每项 gate 的 `pass/fail`、对应证据及修复动作，不能只声称“等价检查已完成”。脚本或手工 gate 失败时先补底稿和控制件。若需要演示文稿，再由 `$domi:slides` 运行 deck 内容映射与视觉 QA。
 
 ## 默认二级市场输出
 
@@ -120,12 +119,12 @@ description: 公司基本面与投资研究工作流，覆盖二级市场公司�
 7. 反向估值、主估值、可比校准和联动情景。
 8. 催化剂、证伪条件、记分卡和下一项判别性信息。
 
-## Slides 输出守卫
+## Slides 交接
 
-- 先完成对应研究模式和控制件，再读取 `references/investment-banking-slides.md`；slides必须从研究底稿映射，不得先排版后补研究。
-- 用户仅说 slides/PPT/deck 时，默认交付 Morgan Stanley 风格 HTML 和由其导出的 PDF；HTML是唯一事实源。只有明确要求 `PPTX`、`.pptx`、可编辑 PowerPoint 或源文件时才制作PPTX。
-- 公共股票 deck 不得强制融资历史、股东IRR、解禁和匿名客户/供应商等IPO模块；改用预期差、预测修正、资本/现金桥、估值、催化剂和财报scorecard。
-- IPO deck继续遵循 `references/prospectus-analysis.md` 的完整披露要求。使用 `scripts/init_deck.js` 初始化，运行内容审计、`scripts/qa_deck.js`，再由 `scripts/export_pdf.js` 导出；最终PDF必须渲染contact sheet逐页检查。
+- 先完成对应研究模式、控制件与 `scripts/audit_public_equity.py`（如适用），再把同一份 `research.md`、Evidence Ledger、模型、来源索引和 unresolved 项交给 `$domi:slides`。
+- `$domi:slides` 是故事线、slide contract、coverage matrix、Morgan Stanley 视觉系统、字体、HTML/PDF/PPTX、渲染和 QA 的唯一责任方。
+- 公共股票底稿不得被演示模板强制加入融资历史、股东 IRR、解禁和匿名客户/供应商等 IPO 模块；IPO 底稿继续遵循 `references/prospectus-analysis.md` 的完整披露要求。
+- 不复制 Slides assets、scripts 或 reference 到本 Skill；避免两个规则源在软件更新后漂移。
 
 ## 与 investment-review 的边界
 

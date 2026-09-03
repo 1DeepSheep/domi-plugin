@@ -1,4 +1,4 @@
 interface:
   display_name: "Investment Analysis"
-  short_description: "Public-equity, earnings, valuation, IPO and research decks"
-  default_prompt: "Use $domi:investment-analysis to analyze this company through market expectations, operating drivers, financial transmission, valuation and falsifiable investment conclusions; create a deck only if I request one."
+  short_description: "Public-equity, earnings, valuation and IPO research"
+  default_prompt: "Use $domi:investment-analysis to analyze this company through market expectations, operating drivers, financial transmission, valuation and falsifiable investment conclusions; if I request a deck, hand the completed research to $domi:slides."
