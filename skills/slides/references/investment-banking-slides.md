@@ -1,4 +1,4 @@
-# 投行/咨询风格研究 Slides 指南
+# domi 投行/咨询风格 Slides 指南
 
 ## 使用场景
 
@@ -47,7 +47,7 @@
 公共股票 profile 另有硬门槛：
 
 - 底稿至少覆盖证券与 as-of、投资结论、市场预期/Our Estimate、分部驱动、经营→EBIT/EPS/FCF、净现金/债务、估值→每股价值、情景、催化剂、反证和来源。
-- 先执行 `python3 scripts/audit_public_equity.py --profile <deep-dive|earnings-preview|earnings-review|abnormal-move> --research <research.md>`，并按项目已有控制件补充可选参数；再执行 `scripts/audit_research_deck.js --research <research.md> --contract <slide_contract.md> --html <deck.html> --mode public-equity` 检查内容映射与 deck 合同。
+- 先执行上游 `$domi:investment-analysis` 的 `scripts/audit_public_equity.py --profile <deep-dive|earnings-preview|earnings-review|abnormal-move> --research <research.md>`，并按项目已有控制件补充可选参数；再执行本 Skill 的 `scripts/audit_research_deck.js --research <research.md> --contract <slide_contract.md> --html <deck.html> --mode public-equity` 检查内容映射与 deck 合同。
 - 公共股票 deck 不得仅因使用本模板而强制融资历史、股东 IRR、解禁或匿名客户/供应商模块。
 
 IPO/招股书 profile 另有硬门槛：
@@ -95,34 +95,42 @@ IPO/招股书 profile 另有硬门槛：
 - `assets/slides/style-packs/morgan-stanley/layout-index.json`：机器可读版式索引和 metric strip 使用限制，用于生成前规划和 QA。
 - `assets/slides/style-packs/morgan-stanley/templates.html`：Morgan Stanley 风格页面模板，包括封面、左数据右分析、宽表+侧栏、上图下表、双 exhibit、多图网格、timeline、bridge、估值、风险矩阵、财务报表、市场观点页。
 - `assets/slides/ms-research.css`：底层 CSS 实现，固定页面尺寸、页眉页脚、字体、标题、Morgan Stanley 式财务表、黑底文字表、note box、metric strip、左右栏、exhibit grid 和打印样式。保留为兼容入口。
-- `assets/slides/base-deck.html`：默认 HTML 骨架，已指向 Morgan Stanley style pack。新 deck 可复制到项目输出目录后替换占位符。
+- `assets/slides/base-deck.html`：默认 HTML 骨架。不要直接把它作为交付物；用 `scripts/init_deck.js` 初始化后，生成器会把共享 CSS 与 Morgan Stanley style pack 内联进正式 HTML。
 - `assets/slides/page-templates.html`：通用页面片段。制作页面时先选模板再填内容；Morgan Stanley 风格优先使用 style pack 内的 `templates.html`。
 - `references/morgan-stanley-ibd-template-notes.md`：Morgan Stanley IBD pitchbook 参考模板，沉淀 Douyu、Pivotal 两份 IBD deck 的 football field、valuation matrix、DCF/WACC、交易溢价、cap table、scenario benchmarking、event-callout chart 等版式和使用场景。
-- `scripts/init_deck.js`：初始化新 HTML deck，默认复制 Morgan Stanley style pack、CSS、模板和 style lock。
-- `scripts/qa_deck.js`：Playwright 视觉 QA 脚本，检查 `.slide` 溢出、元素越界和明显空白预警。
-- `scripts/export_pdf.js`：Playwright HTML -> PDF 导出脚本，默认 `11in x 8.5in`、print background、CSS page size。
+- `scripts/init_deck.js`：初始化新 HTML deck。默认把共享 CSS 与 Morgan Stanley style pack 合并并内联到正式 HTML，写入带内容哈希的 `DOMI_SLIDES_STYLE_LOCK_V1`；同时复制 CSS、模板和 style lock 供后续编辑，但最终 HTML 不依赖这些旁车文件。
+- `scripts/qa_deck.js`：Playwright 视觉 QA 脚本，检查结构、占位符、布局声明、`.slide` 溢出、元素越界、字体和明显空白；生成带 HTML 哈希 manifest 的 contact sheet，并要求检查后第二次运行才能签发通过 receipt。
+- `scripts/export_pdf.js`：Playwright HTML -> PDF 导出脚本，默认 `11in x 8.5in`、print background、CSS page size；导出前复核内容审计、contact sheet 与显式视觉复核均绑定同一最终 HTML。
 
 推荐流程：
 
-先把 `DOMI_INVESTMENT_ANALYSIS_ROOT` 设为本轮实际选中的 `$domi:investment-analysis` Skill 目录（即包含当前 `SKILL.md` 的目录）。所有脚本和资产都必须从这个目录解析；不要调用 `~/.codex/skills/investment-analysis` 中可能存在的旧全局副本。
+先把 `DOMI_SLIDES_ROOT` 设为本轮实际选中的 `$domi:slides` Skill 目录（即包含当前 `SKILL.md` 的目录）。所有 Slides 脚本和资产都必须从这个目录解析；不要调用 `~/.codex/skills/slides`、`~/.codex/skills/investment-analysis` 或其他旧全局副本。公共股票内容审计仍由实际选中的 `$domi:investment-analysis` 根目录执行。
 
 ```bash
-DOMI_INVESTMENT_ANALYSIS_ROOT="<当前选中的 domi investment-analysis Skill 目录>"
-node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/init_deck.js" outputs <deck> --style morgan-stanley
+DOMI_SLIDES_ROOT="<当前选中的 domi slides Skill 目录>"
+DOMI_INVESTMENT_ANALYSIS_ROOT="<当前选中的 domi investment-analysis Skill 目录，仅公共股票内容审计需要>"
+node "$DOMI_SLIDES_ROOT/scripts/init_deck.js" outputs <deck> --style morgan-stanley
 # 先查看 layout-recipes.md / layout-index.json 做 layout rhythm plan
 # 再在 outputs/<deck>.html 中替换占位符，并从 style-packs/morgan-stanley/templates.html 复制页面片段
 # 公共股票：先做内容审计，再做 deck 映射审计
 python3 "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/audit_public_equity.py" --profile deep-dive --research outputs/<deck>_research.md
-node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/audit_research_deck.js" --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode public-equity
+node "$DOMI_SLIDES_ROOT/scripts/audit_research_deck.js" --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode public-equity --output outputs/<deck>.content-audit.json
 # IPO/招股书：使用完整披露与控制件审计
-node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/audit_research_deck.js" --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode prospectus --strict --evidence outputs/<deck>_evidence_ledger.md --entities outputs/<deck>_entity_map.md --policy outputs/<deck>_calculation_policy.md --checklist outputs/<deck>_disclosure_checklist.md
-node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/qa_deck.js" outputs/<deck>.html
-# 字体敏感交付可强制检查英文/数字 family
-node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/qa_deck.js" outputs/<deck>.html --require-latin-font Calibri
-node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf
+node "$DOMI_SLIDES_ROOT/scripts/audit_research_deck.js" --research outputs/<deck>_research.md --contract outputs/<deck>_slide_contract.md --html outputs/<deck>.html --mode prospectus --strict --evidence outputs/<deck>_evidence_ledger.md --entities outputs/<deck>_entity_map.md --policy outputs/<deck>_calculation_policy.md --checklist outputs/<deck>_disclosure_checklist.md --output outputs/<deck>.content-audit.json
+# 第一次严格 QA 生成 contact sheet，并预期以“尚未视觉复核”失败；不得跳过这一步。
+node "$DOMI_SLIDES_ROOT/scripts/qa_deck.js" outputs/<deck>.html --strict --content-audit outputs/<deck>.content-audit.json --contact-sheet outputs/<deck>.contact-sheet.png --require-latin-font Calibri
+# 打开 contact sheet 逐页检查后，以完全相同的 HTML 再次运行；HTML 变化会使 contact sheet 失效并要求重新检查。
+node "$DOMI_SLIDES_ROOT/scripts/qa_deck.js" outputs/<deck>.html --strict --content-audit outputs/<deck>.content-audit.json --contact-sheet outputs/<deck>.contact-sheet.png --require-latin-font Calibri --visual-review-status passed --visual-reviewer "Codex" --visual-review-notes "已逐页检查全部页面，并放大复核封面、数据表、图表、来源与附录。"
+node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf
+# 用户明确要求 PPTX 时，在逐页渲染并视觉复核最终 PPTX 后，把三份文件绑定到同一 receipt：
+# 用户明确要求 PPTX：先把最终 PPTX 自身逐页渲染为 contact sheet；HTML contact sheet 不得复用。
+# 第一次运行只建立 PPTX/contact-sheet manifest，并预期失败：
+node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf --pptx outputs/<deck>.pptx --pptx-contact-sheet outputs/<deck>.pptx-contact-sheet.png
+# 打开 PPTX contact sheet 逐页检查后再次运行：
+node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf --pptx outputs/<deck>.pptx --pptx-contact-sheet outputs/<deck>.pptx-contact-sheet.png --pptx-visual-review-status passed --pptx-visual-reviewer "Codex" --pptx-visual-review-notes "已逐页检查最终 PPTX 的字体、换行、图表、表格、来源与页面完整性。"
 ```
 
-如果项目已经有成熟 HTML deck，可不强制重写为模板，但必须把现有 CSS 与 Morgan Stanley style pack 的关键约束对齐：`11in x 8.5in` 页面、Calibre/Calibri 数字英文与楷体中文 fallback、蓝色观点标题、两类表格风格、稳定 footer/source、无 overflow 和无巨大留白。
+如果项目已经有成熟 HTML deck，可不强制重写为模板，但必须把现有 CSS 与 Morgan Stanley style pack 的关键约束对齐：`11in x 8.5in` 页面、Calibre/Calibri 数字英文与楷体中文 fallback、蓝色观点标题、两类表格风格、稳定 footer/source、无 overflow 和无巨大留白。正式交付的 HTML 必须是单文件可用：默认 Morgan Stanley deck 要保留可校验的内联 style-lock，不能通过 `<link>`、`@import` 或资源 URL 依赖旁车 CSS、图片、字体和脚本。资源型属性与 CSS `url()` 只允许 `data:` URL 与页面内 `#fragment`；相对路径、绝对路径、`file:`、HTTP(S)、协议相对 URL 和 `blob:` 均禁止。
 
 ## 常用页面模板
 
@@ -259,15 +267,17 @@ node "$DOMI_INVESTMENT_ANALYSIS_ROOT/scripts/export_pdf.js" outputs/<deck>.html 
 - 蓝色页标题必须做“真实粗体”检查。不要只看 `.title { font-weight: 700; }`：很多中文楷体只有 Regular，浏览器会合成粗体，视觉上会明显弱于 `Calibri-Bold`。标题中文应使用单独的 title CJK font face，例如 `DeckCJKTitle`，优先绑定 `Kaiti SC Bold`、`STKaitiSC-Bold`、`楷体-简 粗体` 等真实粗楷体；标题字体栈建议为 `Calibri, DeckCJKTitle, DeckCJK, sans-serif`。正文可继续使用普通楷体。
 - 导出前等待 `document.fonts.ready`，抽查关键元素的 computed `font-family`、`font-weight` 和 canvas 测宽。若用户质疑字体，必须用代表性英文/数字与显式 Calibri、Arial 的 canvas 宽度对比，确认当前文本匹配 Calibri。
 - 可用 `scripts/qa_deck.js <deck.html> --require-latin-font Calibri` 把英文/数字 computed font-family 不含 Calibri 的页面标为失败；若中文字体 family 使用字面量命名，也可加 `--require-cjk-font STKaiti` 或对应名称。
+- 严格 QA 默认要求 Calibri，并通过 Chromium 的实际渲染字体记录验证目标文字确实使用该字体。CSS 声明正确但实际回退到楷体、Arial 等其他字体也会失败；先内联有权使用的真实字体，或在用户允许时用 `--require-latin-font` 明确指定 style lock 认可的替代字体，不得通过省略检查参数绕过。
 - PDF 导出后检查字体表，确认包含 `Calibri` / `Calibri-Bold`、普通楷体，以及标题用的真实粗中文字体（如 `STKaitiSC-Bold` / `KaitiSC-Bold`）。若 PDF 字体表只有 `KaiTi` 或普通楷体而没有粗体中文字体，蓝色标题不得视为通过；必须换用真实粗楷体或明确改用可加粗的中文字体。若 PDF 查看器缓存旧文件，重新打开或改名导出后再判断。
 - 全页 contact sheet 检查中文标题与英文/数字标题粗细是否协调，并至少放大检查封面、数据密集页和财务附录页。字体 QA 不是只检查 `font-family`，还要检查 PDF 实际嵌入字体和视觉效果。
 
 ## HTML/PDF 制作要求
 
-- 用户未明确要求 PPTX 时，HTML + PDF 是 slides 报告的默认且必须交付格式；不得把通用 PowerPoint 流程或 `.pptx` 作为替代。若输出目录只有 `.pptx` 而没有最终 HTML/PDF，格式 gate 失败，必须重新生成。
+- 用户未明确要求 PPTX 时，HTML + PDF 是 slides 报告的默认且必须交付格式；不得把通用 PowerPoint 流程或 `.pptx` 作为替代。用户明确要求 PPTX 时，仍必须交付同源 HTML + PDF，并额外交付经过逐页渲染和视觉复核的 PPTX；三份最终文件哈希必须绑定到同一 strict QA receipt。若输出目录只有 `.pptx` 而没有最终 HTML/PDF，格式 gate 失败，必须重新生成。
 - 优先做 HTML deck 再导出 PDF，便于快速调整表格、图表和字体。PPT 容易错位时，直接切换到 HTML。
 - HTML 是唯一事实源，PDF 是最后交付物。生成脚本应先产出 HTML 并完成内容、版式、字体和 overflow QA；PDF 只能在 HTML QA 通过后由 `scripts/export_pdf.js` 或等效 Playwright 流程导出。
-- 新建 deck 时优先运行 `scripts/init_deck.js` 初始化 Morgan Stanley style pack；若手工创建，则从 `assets/slides/base-deck.html`、`assets/slides/style-packs/morgan-stanley/templates.html` 和 `assets/slides/style-packs/morgan-stanley/style.css` 开始。已有 deck 也要尽量复用这些类名和结构，减少每页局部硬编码。
+- 新建 deck 时优先运行 `scripts/init_deck.js` 初始化 Morgan Stanley style pack；它产出的 HTML 已包含带哈希的内联 style-lock。若手工创建，则从 `assets/slides/base-deck.html`、`assets/slides/style-packs/morgan-stanley/templates.html` 和 `assets/slides/style-packs/morgan-stanley/style.css` 开始，但正式交付前必须把样式合并进 HTML，不得依赖这些本地文件。已有 deck 也要尽量复用这些类名和结构，减少每页局部硬编码。
+- 通过微信或其他只发送单个 HTML 附件的通道时，正式 HTML 必须脱离输出目录和网络仍可完整打开。禁止保留 `<link rel="stylesheet">`、CSS `@import`，以及相对路径、绝对本机路径、`file:`、HTTP(S)、协议相对 URL 或 `blob:` 形式的 `url(...)`、`img/script/source` 等资源。资源型属性与 CSS `url()` 只允许 `data:` URL 与页面内 `#fragment`。用户要求保留现有模板时也必须先把其 CSS 和必要资源内联；“保留模板”不等于允许发送依赖旁车文件或网络的残缺 HTML。
 - 使用稳定页面尺寸和 `overflow: hidden`，但不能靠隐藏内容掩盖溢出。表格、图表、标题、页脚必须在页面内。
 - HTML deck 可为图表/表格组合页建立可复用 exhibit 样式，例如 `exhibit-grid`、`exhibit-panel`、`compact-strip`：统一左右栏高度、标题位置、来源位置和底部 KPI strip 间距。
 - 对图表使用响应式尺寸或保证固定尺寸不超过栏宽。图表要有标题、单位和来源。

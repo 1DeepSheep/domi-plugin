@@ -35,7 +35,7 @@ jobs:
           node scripts/asr-notes-skill.test.cjs
           node scripts/financing-fields.test.cjs
           node scripts/intake-time-fields.test.cjs
-          node scripts/investment-analysis-slides.test.cjs
+          node scripts/slides-skill.test.cjs
           node scripts/plugin-routing-contracts.test.cjs
           node scripts/investment-review-skill.test.cjs
           node scripts/schedule-skill.test.cjs

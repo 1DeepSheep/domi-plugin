@@ -2,9 +2,10 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 function usage() {
-  console.error("Usage: audit_research_deck.js --research <research.md> [--contract <slide_contract.md>] [--html <deck.html>] [--mode public-equity|prospectus|generic] [--strict --evidence <evidence_ledger.md> --entities <entity_map.md> --policy <calculation_policy.md> --checklist <disclosure_checklist.md>]");
+  console.error("Usage: audit_research_deck.js --research <research.md> [--contract <slide_contract.md>] [--html <deck.html>] [--mode public-equity|prospectus|generic] [--strict --evidence <evidence_ledger.md> --entities <entity_map.md> --policy <calculation_policy.md> --checklist <disclosure_checklist.md>] [--output <content-audit.json>]");
   process.exit(2);
 }
 
@@ -21,6 +22,7 @@ for (let i = 0; i < args.length; i += 1) {
   else if (key === "--entities") opts.entities = val, i += 1;
   else if (key === "--policy") opts.policy = val, i += 1;
   else if (key === "--checklist") opts.checklist = val, i += 1;
+  else if (key === "--output") opts.output = val, i += 1;
   else if (key === "--strict") opts.strict = true;
   else usage();
 }
@@ -32,6 +34,30 @@ function read(file) {
   } catch (err) {
     return null;
   }
+}
+
+function sha256(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function artifact(file) {
+  if (!file) return null;
+  const resolved = path.resolve(file);
+  try {
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) return { path: resolved, sha256: null };
+    return { path: resolved, sha256: sha256(resolved) };
+  } catch {
+    return { path: resolved, sha256: null };
+  }
+}
+
+function writeJsonAtomic(file, value) {
+  const resolved = path.resolve(file);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  const temporary = `${resolved}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  fs.renameSync(temporary, resolved);
 }
 
 function hasAny(text, needles) {
@@ -237,7 +263,12 @@ if (opts.html) {
       ["SOP", "Start of Production", "量产"],
       ["ARR", "Annual Recurring Revenue", "年度经常性收入"],
     ];
-    const visibleText = html.replace(/<[^>]+>/g, " ");
+    // Embedded fonts/images and script source are not slide copy. Inlining fonts
+    // must not trigger acronym warnings from accidental base64 substrings.
+    const visibleText = html
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ")
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ")
+      .replace(/<[^>]+>/g, " ");
     for (const [abbr, english, chinese] of acronymRules) {
       const present = new RegExp(`(^|[^A-Za-z])${abbr.replace(/[&]/g, "\\&")}([^A-Za-z]|$)`, "i").test(visibleText);
       if (present && (!visibleText.includes(english) || !visibleText.includes(chinese))) {
@@ -249,6 +280,9 @@ if (opts.html) {
 }
 
 const result = {
+  contractVersion: "DOMI_SLIDES_CONTENT_AUDIT_V1",
+  status: failures.length ? "failed" : warnings.length ? "warning" : "passed",
+  generatedAt: new Date().toISOString(),
   mode: opts.mode,
   research: opts.research ? path.resolve(opts.research) : null,
   contract: opts.contract ? path.resolve(opts.contract) : null,
@@ -258,8 +292,18 @@ const result = {
   policy: opts.policy ? path.resolve(opts.policy) : null,
   checklist: opts.checklist ? path.resolve(opts.checklist) : null,
   strict: Boolean(opts.strict),
+  artifacts: {
+    research: artifact(opts.research),
+    slideContract: artifact(opts.contract),
+    html: artifact(opts.html),
+    evidence: artifact(opts.evidence),
+    entities: artifact(opts.entities),
+    calculationPolicy: artifact(opts.policy),
+    disclosureChecklist: artifact(opts.checklist),
+  },
   failures,
   warnings,
 };
+if (opts.output) writeJsonAtomic(opts.output, result);
 console.log(JSON.stringify(result, null, 2));
 if (failures.length) process.exit(1);
