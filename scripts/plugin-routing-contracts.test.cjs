@@ -50,11 +50,12 @@ test("domi-router agent is a general namespaced entrypoint", () => {
   assert.match(router, /每一条用户消息都先按\*\*本轮最新、明确的原始意图\*\*重新选择路由/);
 });
 
-test("Slides, PPT and deck requests route to the investment banking deck workflow", () => {
+test("Slides, PPT and deck requests route to the standalone Slides skill", () => {
   assert.match(router, /Slides／PPT／deck／演示文稿/);
-  assert.match(router, /`domi:investment-analysis` 的 `deck-output`/);
+  assert.match(router, /叠加 `domi:slides`/);
   assert.match(router, /默认生成 Morgan Stanley 投行风格 HTML \+ PDF/);
-  assert.match(router, /只有用户明确要求可编辑 PowerPoint／PPTX 时才制作 PPTX/);
+  assert.match(router, /只有用户明确要求可编辑 PowerPoint／PPTX 时才额外交付 PPTX/);
+  assert.match(router, /保留原模板时仍执行 Slides 内容、字体、密度和视觉 QA/);
 });
 
 test("ordinary follow-up after a completed recording cannot rerun PLAUD or ASR", () => {
@@ -98,6 +99,7 @@ test("artifact-producing Skills defer explicit file requests to the shared contr
     "investment-review",
     "mac-recording",
     "plaud",
+    "slides",
     "sourcing",
     "todo",
   ];
