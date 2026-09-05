@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
+const { execFileSync } = require("node:child_process");
 const { pathToFileURL } = require("url");
 
 function sha256(filePath) {
@@ -88,7 +89,9 @@ function validStrictReceipt(receipt, input) {
     && reviewedPages.every((pageNumber, index) => pageNumber === index + 1);
   if (
     receipt?.contract !== "DOMI_SLIDES_QA_RECEIPT_V1"
-    || receipt?.qaVersion !== 3
+    || receipt?.qaVersion !== 4
+    || !receipt?.fontSummary?.expectedCjkFont
+    || receipt?.fontSummary?.trueCjkBoldChecked !== true
     || !receipt?.fontSummary?.expectedLatinFont
     || !(receipt?.fontSummary?.actualRenderedFontsChecked > 0)
     || !Array.isArray(receipt?.fontSummary?.renderedMismatches)
@@ -285,6 +288,8 @@ async function main() {
     process.exit(1);
   }
 
+  const reusePdf = receipt.pdf?.path === output && matchesBoundFile(receipt.pdf);
+  if (!reusePdf) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1100, height: 850 }, deviceScaleFactor: 1 });
   await page.goto(pathToFileURL(input).href, { waitUntil: "networkidle" });
@@ -299,11 +304,40 @@ async function main() {
     margin: { top: "0", right: "0", bottom: "0", left: "0" },
   });
   await browser.close();
+  }
   if (!isPdf(output)) {
     console.error("PDF export did not produce a valid PDF signature; the QA receipt was not updated.");
     process.exit(1);
   }
   receipt.pdf = { path: output, sha256: sha256(output) };
+  const proofPath = `${output}.proof.json`;
+  const sheetPath = `${output}.contact-sheet.png`;
+  let proof = readJson(proofPath);
+  const freshProof = !proof || proof.pdfSha256 !== receipt.pdf.sha256
+    || proof.htmlSha256 !== receipt.html.sha256 || !matchesBoundFile(proof.contactSheet)
+    || proof.status !== "passed";
+  if (freshProof) {
+    delete receipt.pdfProof;
+    delete receipt.pdfVisualReview;
+    writeJsonAtomic(receiptPath, receipt);
+    const bundledPython = path.join(os.homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3");
+    const python = process.env.DOMI_PDF_PYTHON || (fs.existsSync(bundledPython) ? bundledPython : "python3");
+    try {
+      execFileSync(python, [path.join(__dirname, "pdf-proof.py"), output, receiptPath, sheetPath, proofPath], { timeout: 120000, maxBuffer: 4 * 1024 * 1024, stdio: "pipe" });
+    } catch (error) {
+      throw new Error(`Final PDF verification failed. Use a Python runtime with PyMuPDF (DOMI_PDF_PYTHON); do not bypass PDF QA. ${error.stderr?.toString() || error.message}`);
+    }
+    throw new Error(`Rendered the final PDF and checked its font table: ${sheetPath}. Open it and review every page; then rerun with --pdf-visual-review-status passed --pdf-visual-reviewer <name> --pdf-visual-review-notes <page-by-page notes>.`);
+  }
+  const option = (name) => args.includes(name) ? args[args.indexOf(name) + 1] || "" : "";
+  const reviewer = option("--pdf-visual-reviewer").trim();
+  const notes = option("--pdf-visual-review-notes").trim();
+  if (option("--pdf-visual-review-status") !== "passed" || reviewer.length < 2 || notes.length < 12) {
+    throw new Error("Final PDF requires explicit page-by-page visual review after opening its own rendered contact sheet.");
+  }
+  receipt.pdfProof = { path: proofPath, sha256: sha256(proofPath) };
+  receipt.pdfVisualReview = { status: "passed", reviewer, notes, pdfSha256: receipt.pdf.sha256,
+    contactSheetSha256: proof.contactSheet.sha256, reviewedPages: proof.pages.map((page) => page.page) };
   if (pptxEvidence.evidence) {
     receipt.pptx = pptxEvidence.evidence.pptx;
     receipt.pptxContactSheet = pptxEvidence.evidence.contactSheet;

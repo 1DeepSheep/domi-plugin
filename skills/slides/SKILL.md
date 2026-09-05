@@ -26,6 +26,8 @@ description: domi 的统一演示文稿制作与质量控制 Skill。凡用户�
 4. **既有模板**：用户要求保留原模板、母版或主题时，仍执行本 Skill 的内容、字体、密度、溢出和视觉 QA，只跳过 Morgan Stanley 主题覆盖。
 5. **既有文件编辑**：附件是 PPT/PPTX 且用户说“改第二页”“更新图表”“修复排版”等，也属于本 Skill。
 
+内容续改同样继承本 Skill：例如补充竞争优势、强调某个产品事实，不必再次出现“slides”或页码。只修改有证据支撑的内容，不把单个项目的表述要求推广为通用规则。输入的 BP.pptx 只是研究材料，不代表要求输出 PPTX；只有明确要求编辑原 PPTX 或输出可编辑文件才增加 PPTX。
+
 只有缺少无法合理推断的必要材料或目标时，明确说明缺口并请用户先补充，收到后再继续。此时仅提出必要问题，不生成占位文件，不声称已完成或 QA 已通过；等待补充不是成品交付。已有材料足够时直接推进，不为不影响结果的偏好反复询问。
 
 ## 必读规则
@@ -97,6 +99,16 @@ description: domi 的统一演示文稿制作与质量控制 Skill。凡用户�
 零张 `.slide`、仍有 `{{...}}` 占位符、任何页面缺少 `data-template`／`data-layout`、全 deck 使用 `unspecified` 布局、`overflow`、越界、字体不符、明显低密度、连续布局重复、长 deck 布局种类不足、coverage 缺失、内容审计有 warning、缺少 contact sheet／显式视觉复核，或 QA receipt 与最终文件不匹配，均视为失败。必须修正后重新运行；不能把 warning 当作可交付状态，不能在没有打开 contact sheet 的情况下预填 `passed`，也不能只在最终回复中声称“已检查”。
 
 发送前另做单文件检查：默认 Morgan Stanley HTML 必须保留可校验的内联 style-lock，所有正式 HTML 都不能依赖外部 CSS 或资源。资源型属性与 CSS `url()` 只允许 `data:` URL 和页面内 `#fragment`；相对路径、绝对本地路径、`file:`、HTTP(S)、协议相对 URL 和 `blob:` 均不得出现。用户要求保留原模板时不强制 Morgan Stanley 主题，但仍应把原模板需要的 CSS 和资源内联。
+
+### 最终 PDF 独立验收
+
+当前严格 receipt 使用 `qaVersion: 4`。中文默认检查实际 `Kaiti SC` 字体，样式锁指定其他楷体或用户明确要求的字体时用 `--require-cjk-font <实际字体>` 覆盖；不能省略中文检查，也不能用 CSS 合成粗体代替真实粗体字面。
+
+`export_pdf.js` 在 HTML QA 通过后才导出 PDF，并调用 `pdf-proof.py` 检查 PDF 页数、页面尺寸、实际嵌入字体和真实粗中文字体，逐页渲染最终 PDF，生成 `<deck>.pdf.contact-sheet.png` 与 `<deck>.pdf.proof.json`。第一次完成渲染后故意停止，不代表交付完成。打开这份 **PDF 自身渲染** 的 contact sheet，逐页检查；再用相同 HTML/PDF 重跑 export，增加 `--pdf-visual-review-status passed --pdf-visual-reviewer <检查者> --pdf-visual-review-notes <逐页记录>`，才能写入最终 PDF 复核绑定。文件变化会使绑定失效。
+
+PDF 检查需要 PyMuPDF。开工时先验证解释器确实能 `import fitz`；不要假定 Codex bundled workspace Python 已安装。通过 `DOMI_PDF_PYTHON` 指定可用解释器；若缺少依赖，在当前工作目录的隔离 venv 中准备 PyMuPDF，不修改系统 Python。不得绕过字体检查或拿 HTML contact sheet 替代 PDF。请求额外 PPTX 时，两套 PDF/PPTX 复核参数都需提供。
+
+部分 Office 字体包含位图 strikes，Chromium 导出时可能产生缺字或间距异常的 `Unnamed-T3`。遇到此情况，在隔离 Python 中准备 fontTools，运行 `scripts/prepare-font.py <已获授权字体> <新的嵌入副本.ttf>`；它只从副本移除 EBDT/EBLC/EBSC 位图表，保留同一字体的矢量轮廓、字宽和真实字重，不修改安装字体。将该副本内联进 HTML，重新执行全部 QA 与导出；禁止通过放宽字体校验来隐藏问题。TTC 必须明确 `--index` 选中所需字面。
 
 ## 交付
 
