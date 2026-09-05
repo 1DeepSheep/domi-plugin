@@ -122,12 +122,14 @@ node "$DOMI_SLIDES_ROOT/scripts/qa_deck.js" outputs/<deck>.html --strict --conte
 # 打开 contact sheet 逐页检查后，以完全相同的 HTML 再次运行；HTML 变化会使 contact sheet 失效并要求重新检查。
 node "$DOMI_SLIDES_ROOT/scripts/qa_deck.js" outputs/<deck>.html --strict --content-audit outputs/<deck>.content-audit.json --contact-sheet outputs/<deck>.contact-sheet.png --require-latin-font Calibri --visual-review-status passed --visual-reviewer "Codex" --visual-review-notes "已逐页检查全部页面，并放大复核封面、数据表、图表、来源与附录。"
 node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf
+# 上一步先生成并检查最终 PDF，但保持待视觉复核。打开 PDF 自身 contact sheet 后再运行：
+node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf --pdf-visual-review-status passed --pdf-visual-reviewer "Codex" --pdf-visual-review-notes "已逐页检查最终 PDF 字体、分页、尺寸、图表、来源和页边界。"
 # 用户明确要求 PPTX 时，在逐页渲染并视觉复核最终 PPTX 后，把三份文件绑定到同一 receipt：
 # 用户明确要求 PPTX：先把最终 PPTX 自身逐页渲染为 contact sheet；HTML contact sheet 不得复用。
 # 第一次运行只建立 PPTX/contact-sheet manifest，并预期失败：
 node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf --pptx outputs/<deck>.pptx --pptx-contact-sheet outputs/<deck>.pptx-contact-sheet.png
 # 打开 PPTX contact sheet 逐页检查后再次运行：
-node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf --pptx outputs/<deck>.pptx --pptx-contact-sheet outputs/<deck>.pptx-contact-sheet.png --pptx-visual-review-status passed --pptx-visual-reviewer "Codex" --pptx-visual-review-notes "已逐页检查最终 PPTX 的字体、换行、图表、表格、来源与页面完整性。"
+node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck>.pdf --pdf-visual-review-status passed --pdf-visual-reviewer "Codex" --pdf-visual-review-notes "已逐页检查最终 PDF 的字体、分页、尺寸、图表和页面边界。" --pptx outputs/<deck>.pptx --pptx-contact-sheet outputs/<deck>.pptx-contact-sheet.png --pptx-visual-review-status passed --pptx-visual-reviewer "Codex" --pptx-visual-review-notes "已逐页检查最终 PPTX 的字体、换行、图表、表格、来源与页面完整性。"
 ```
 
 如果项目已经有成熟 HTML deck，可不强制重写为模板，但必须把现有 CSS 与 Morgan Stanley style pack 的关键约束对齐：`11in x 8.5in` 页面、Calibre/Calibri 数字英文与楷体中文 fallback、蓝色观点标题、两类表格风格、稳定 footer/source、无 overflow 和无巨大留白。正式交付的 HTML 必须是单文件可用：默认 Morgan Stanley deck 要保留可校验的内联 style-lock，不能通过 `<link>`、`@import` 或资源 URL 依赖旁车 CSS、图片、字体和脚本。资源型属性与 CSS `url()` 只允许 `data:` URL 与页面内 `#fragment`；相对路径、绝对路径、`file:`、HTTP(S)、协议相对 URL 和 `blob:` 均禁止。
@@ -258,6 +260,8 @@ node "$DOMI_SLIDES_ROOT/scripts/export_pdf.js" outputs/<deck>.html outputs/<deck
 - 如果用户指定 `Noodling Lab | 摸鱼实验室` 或类似品牌，应在左上角和页脚统一体现；不要保留旧项目名作为品牌。
 
 ## 字体稳定协议
+
+严格 QA v4 默认同时验证 Calibri 与 Kaiti SC，并检查真实粗体中文字面。其他 style lock 字体须显式指定实际字体名称。最终 PDF 由 `pdf-proof.py`（PyMuPDF）独立审计与渲染，HTML 与 PDF 必须各自通过逐页视觉复核；详见 Slides SKILL.md 的“最终 PDF 独立验收”。只通过 HTML QA 的 receipt 不可交付。
 
 字体问题必须可证明，不只看 CSS 声明：
 
