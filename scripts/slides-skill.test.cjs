@@ -27,6 +27,8 @@ const requiredFiles = [
   "scripts/audit_research_deck.js",
   "scripts/qa_deck.js",
   "scripts/export_pdf.js",
+  "scripts/pdf-proof.py",
+  "scripts/prepare-font.py",
 ];
 
 for (const relativePath of requiredFiles) {
@@ -93,6 +95,10 @@ assert.match(exportPdf, /receipt\.pdf = \{ path: output, sha256: sha256\(output\
 assert.match(exportPdf, /receipt\.pptx = pptxEvidence\.evidence\.pptx/);
 assert.match(exportPdf, /DOMI_SLIDES_PPTX_CONTACT_SHEET_V1/);
 assert.match(exportPdf, /--pptx-contact-sheet/);
+assert.match(exportPdf, /--pdf-visual-review-status/);
+assert.match(qaDeck, /qaVersion: 4/);
+assert.match(qaDeck, /trueCjkBoldChecked/);
+assert.match(qaDeck, /syntheticCjkBold/);
 
 assert.deepEqual(
   structuralFailuresFor("<html></html>", []),
