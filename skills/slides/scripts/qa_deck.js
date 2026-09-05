@@ -123,10 +123,13 @@ async function inspectRenderedFonts(page, checks, expectedLatinFont, expectedCjk
           && !renderedFontMatches(fonts, expectedLatinFont);
         const cjkMismatch = expectedCjkFont && /[\u3400-\u9FFF]/.test(sample.text)
           && !renderedFontMatches(fonts, expectedCjkFont);
-        if (latinMismatch || cjkMismatch) failures.push({
+        const syntheticCjkBold = expectedCjkFont && /[\u3400-\u9FFF]/.test(sample.text)
+          && Number(sample.fontWeight) >= 600
+          && !fonts.some((font) => renderedFontMatches([font], expectedCjkFont) && /bold|demi|semibold|heavy|black/i.test(font.postScriptName));
+        if (latinMismatch || cjkMismatch || syntheticCjkBold) failures.push({
           ...sample,
           actualFonts: fonts.filter((font) => font.glyphCount > 0).map((font) => font.familyName),
-          error: `Rendered font does not match ${[latinMismatch && expectedLatinFont, cjkMismatch && expectedCjkFont].filter(Boolean).join(" / ")}; embed the actual font or choose an explicitly permitted fallback.`,
+          error: syntheticCjkBold ? "Chinese bold text uses a regular font face; embed a real bold CJK face instead of synthetic bold." : `Rendered font does not match ${[latinMismatch && expectedLatinFont, cjkMismatch && expectedCjkFont].filter(Boolean).join(" / ")}; embed the actual font or choose an explicitly permitted fallback.`,
         });
       }));
     }
@@ -213,7 +216,7 @@ async function main() {
 
   const strict = args.includes("--strict");
   const expectedLatinFont = optionValue("--require-latin-font") || process.env.DECK_REQUIRE_LATIN_FONT || (strict ? "Calibri" : "");
-  const expectedCjkFont = optionValue("--require-cjk-font") || process.env.DECK_REQUIRE_CJK_FONT || "";
+  const expectedCjkFont = optionValue("--require-cjk-font") || process.env.DECK_REQUIRE_CJK_FONT || (strict ? "Kaiti SC" : "");
 
   const playwright = loadPlaywright();
   if (!playwright) {
@@ -364,9 +367,8 @@ async function main() {
       if (expectedLatinFont && /[A-Za-z0-9]/.test(text) && !fontFamily.toLowerCase().includes(expectedLatinFont.toLowerCase())) {
         if (latinMismatches.length < 30) latinMismatches.push(sample);
       }
-      if (expectedCjkFont && /[\u3400-\u9FFF]/.test(text) && !fontFamily.toLowerCase().includes(expectedCjkFont.toLowerCase())) {
-        if (cjkMismatches.length < 30) cjkMismatches.push(sample);
-      }
+      // CJK faces may use DeckCJKTitle aliases. The actual CDP font record,
+      // not the alias in CSS, is authoritative for family and true bold.
     }
 
     return {
@@ -386,6 +388,9 @@ async function main() {
 
   qa.fontReport.renderedMismatches = await inspectRenderedFonts(page, qa.renderedChecks, expectedLatinFont, expectedCjkFont);
   qa.fontReport.actualRenderedFontsChecked = qa.renderedChecks.length;
+  qa.fontReport.cjkTargets = qa.renderedChecks.filter((sample) => /[\u3400-\u9FFF]/.test(sample.text)).length;
+  qa.fontReport.boldCjkTargets = qa.renderedChecks.filter((sample) => /[\u3400-\u9FFF]/.test(sample.text) && Number(sample.fontWeight) >= 600).length;
+  qa.fontReport.trueCjkBoldChecked = true;
 
   const report = qa.slideReport;
   const contactSheetPath = path.resolve(
@@ -497,7 +502,7 @@ async function main() {
 
   const summary = {
     contract: "DOMI_SLIDES_QA_RECEIPT_V1",
-    qaVersion: 3,
+    qaVersion: 4,
     strict,
     status: "pending",
     generatedAt: new Date().toISOString(),
@@ -568,6 +573,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  inspectRenderedFonts,
   renderedFontMatches,
   structuralFailuresFor,
   validateContentAudit,
