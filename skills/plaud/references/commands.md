@@ -28,11 +28,12 @@ node <plaud-cli> mark <fileId> <stage> [artifactPath|-] [metadataJson]
 - `status`：读取最近文件的聚合状态。
 - `pending`：只返回尚无文字稿且无摘要的录音，字段经过清理，不包含鉴权信息。
 - `queue`：读取 `~/.domi/plaud-workflow.json` 中尚未结束的 domi 处理项。
-- `verify`：只读校验指定队列项的 `notesAudit`、`reviewAudit`、评分/评级和已绑定文件 SHA-256；失败时输出 `ok:false` 并以非零状态退出。
+- `verify`：只读校验指定队列项的 `notesAudit`、`notesQuality`、`reviewAudit`、评分/评级和已绑定文件SHA-256；新纪要还检查全源分段覆盖与实际正文摘录。旧记录缺少覆盖凭据时显示`legacy-unverified`，不冒充新版内容验证通过；不改写旧记录。失败时输出`ok:false`并以非零状态退出。
 - `sync-pending`：触发最多 `count` 条未生成录音，轮询等待 transcript，下载 JSON 和 Markdown，并写出 manifest。
 - `transcribe-local`：对一条已校验的本地音频计算 SHA-256；MP3/ASR/Opus 直接上传，其余受支持格式用 domi 内置的离线 FFmpeg 转为单声道 Opus，再按稳定标题去重上传。只针对上传返回的精确 `fileId` 触发生成并下载 transcript。`--workflow-id` 把该音频绑定到快速讨论；不带时为普通 `local_transcription`，也用于上游已校验、已取得单集／信源授权的公开播客临时音频。播客成功后必须把 `transcriptPath` 与 `transcriptProvider=plaud` 交给下游，禁止本地 ASR。`--adopt-file-id` 只用于用户从歧义候选中明确选择一条且远端稳定标题校验通过的恢复。`--retry-upload` 仅用于用户明确接受 `upload_unknown` 可能导致重复上传的情况；`--retry-generation` 仅用于用户明确接受 `generation_submitting/generation_unknown/generation_timeout` 可能导致重复提交生成请求的情况。
 - `download`：下载指定 fileId 的 transcript，不重新触发生成。
 - `mark`：更新 domi 工作流阶段。`metadataJson` 必须是 JSON 对象。
+  - 新标记／修订`notes_project`和`notes_non_project`都必须带`notesQuality:{evidenceIndexPath,qaReceiptPath}`；两条路径为绝对路径，索引中的transcript必须与当前队列文字稿一致，QA必须绑定本次纪要与索引。先执行[纪要全源覆盖检查](../../asr-notes/references/source-coverage.md)，完成模型完整性与编辑审查。程序拒绝未审源段、无真实正文落点、过期哈希或仅手写布尔通过的结果。
   - `notes_project` 只能从 `context_ready` 进入（已生成项目纪要的重试、纠正分类、旧队列回补审计，或显式重开已完成记录除外），必须提供实际存在的纪要文件和新的 `notesAudit`。除原有实体/数字/学历字段外，还必须包含：`careerLedgerComplete=true`、`modelWorkLedgerComplete=true`、`attributionConsistency=true`、非负整数 `careerClaimCount/modelWorkClaimCount`、`unresolvedDefinitiveCareerClaims=0`、`unresolvedDefinitiveModelWorkClaims=0`。CLI 自动计算并保存纪要 SHA-256，不接受继承旧审计来批准另一份文件。
   - `reviewed` 只能从 `notes_project` 进入或同阶段重试，必须提供实际存在的快评文件、新的 `score`/`rating` 和 `reviewAudit`：`status=passed`、`educationConsistency=true`、`careerModelConsistency=true`。`score` 必须为 1-10 的整数且禁用 5，`rating` 必须为 B/A/S。CLI 自动绑定快评 SHA-256，并在进入 `documented`、`managed` 前重新校验纪要与快评文件未变化。
   - `documented` 只能从 `reviewed` 进入或同阶段重试。新流程按本轮锁定后端要求经过回读的 `storageReceipt`：本地主库使用 `backend=local`、`projectId`、`documentUri/libraryPath`；旧飞书主库兼容分支使用 `backend=legacy_feishu_primary`、`recordId`、`documentUri/libraryPath`。两者都要求记录、文档、材料三项验证。旧队列无 `storageReceipt` 时仍识别原有 Wiki token，用于恢复原始后端；不得暗中迁移或另建第二套记录。
@@ -43,8 +44,8 @@ node <plaud-cli> mark <fileId> <stage> [artifactPath|-] [metadataJson]
 ## mark 示例
 
 ```bash
-node <plaud-cli> mark FILE_ID notes_project /absolute/path/to/notes.md '{"notesAudit":{"status":"passed","evidenceLedgerComplete":true,"degreeIsolation":true,"claimConsistency":true,"careerLedgerComplete":true,"modelWorkLedgerComplete":true,"attributionConsistency":true,"educationClaimCount":3,"careerClaimCount":8,"modelWorkClaimCount":6,"unresolvedDefinitiveEducationClaims":0,"unresolvedDefinitiveCareerClaims":0,"unresolvedDefinitiveModelWorkClaims":0}}'
-node <plaud-cli> mark FILE_ID notes_non_project /absolute/path/to/notes.md
+node <plaud-cli> mark FILE_ID notes_project /absolute/path/to/notes.md '{"notesQuality":{"evidenceIndexPath":"/absolute/path/to/evidence-index.json","qaReceiptPath":"/absolute/path/to/qa-receipt.json"},"notesAudit":{"status":"passed","evidenceLedgerComplete":true,"degreeIsolation":true,"claimConsistency":true,"careerLedgerComplete":true,"modelWorkLedgerComplete":true,"attributionConsistency":true,"educationClaimCount":3,"careerClaimCount":8,"modelWorkClaimCount":6,"unresolvedDefinitiveEducationClaims":0,"unresolvedDefinitiveCareerClaims":0,"unresolvedDefinitiveModelWorkClaims":0}}'
+node <plaud-cli> mark FILE_ID notes_non_project /absolute/path/to/notes.md '{"notesQuality":{"evidenceIndexPath":"/absolute/path/to/evidence-index.json","qaReceiptPath":"/absolute/path/to/qa-receipt.json"}}'
 node <plaud-cli> mark FILE_ID context_pending - '{"contextPromptedAt":"2026-07-12T12:00:00Z","recallSummary":"AI Agent项目交流，提到融资和客户试点"}'
 node <plaud-cli> mark FILE_ID context_ready - '{"discussionTopic":"产品路线讨论","contextStatus":"provided","conversationType":"创始人项目交流","participants":["某公司创始人张三","某基金李四"]}'
 node <plaud-cli> mark FILE_ID context_ready - '{"contextStatus":"skipped"}'

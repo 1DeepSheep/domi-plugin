@@ -77,14 +77,14 @@ mark <fileId> context_pending - {"contextPromptedAt":"<ISO-8601>","recallSummary
 3. 上述只读检索不得创建、编辑、更新、覆盖、移动或发布任何飞书资源，不得把命中文档当作待更新目标，也不得把全文静默导入本地。
 4. 默认每条只生成一个结构化纪要 Markdown；用户明确要求时才额外生成精修逐字稿。
 5. 项目访谈交付前完成学历原子证据表、履历／职级时间线和模型工作表。提出、主导、带队、参与、共同作者、团队完成必须分开。
-6. 对最终文件完成实体、数字、学历分层、履历、归因、句内冲突和完整性审计；确定语气但无证据的事实删除或标待确认。
+6. 按[全源覆盖检查](../../asr-notes/references/source-coverage.md)从完整原文建立信息清单，保留每个源区间的真实正文落点／合理排除；完成实体、数字、学历分层、履历、归因、句内冲突、完整性和编辑审查，再绑定格式化后最终文件的哈希。不得用空话或“未独立核验”备注替代会中明确事实。
 7. `project` 项运行：
 
 ```text
-mark <fileId> notes_project <notesPath> {"notesAudit":{"status":"passed","evidenceLedgerComplete":true,"degreeIsolation":true,"claimConsistency":true,"careerLedgerComplete":true,"modelWorkLedgerComplete":true,"attributionConsistency":true,"educationClaimCount":<非负整数>,"careerClaimCount":<非负整数>,"modelWorkClaimCount":<非负整数>,"unresolvedDefinitiveEducationClaims":0,"unresolvedDefinitiveCareerClaims":0,"unresolvedDefinitiveModelWorkClaims":0}}
+mark <fileId> notes_project <notesPath> {"notesQuality":{"evidenceIndexPath":"/absolute/path/to/evidence-index.json","qaReceiptPath":"/absolute/path/to/qa-receipt.json"},"notesAudit":{"status":"passed","evidenceLedgerComplete":true,"degreeIsolation":true,"claimConsistency":true,"careerLedgerComplete":true,"modelWorkLedgerComplete":true,"attributionConsistency":true,"educationClaimCount":<非负整数>,"careerClaimCount":<非负整数>,"modelWorkClaimCount":<非负整数>,"unresolvedDefinitiveEducationClaims":0,"unresolvedDefinitiveCareerClaims":0,"unresolvedDefinitiveModelWorkClaims":0}}
 ```
 
-非项目标记 `notes_non_project`。未通过审计不得进入评分或归档。
+非项目标记`notes_non_project`时也传同一`notesQuality`对象。`evidenceIndexPath`指向含`coverage`工件绑定的JSON索引，`qaReceiptPath`指向本次最终文件QA，必须包含`editorial:passed`。程序实际读取这些文件；旧的布尔审计声明不足以批准新纪要。未通过审计先修复具体缺段或落点，再进入评分或归档。
 
 ## 五、判断项目类型
 

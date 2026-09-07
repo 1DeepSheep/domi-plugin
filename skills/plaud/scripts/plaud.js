@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
+const { artifact, verifyArtifact, evidenceCheck } = require('../../../scripts/domi-workflow.cjs');
 
 const {
   BROWSER_SPECS,
@@ -465,7 +466,11 @@ function verify(fileId) {
   try {
     if (['notes_project', 'reviewed', 'documented', 'managed'].includes(record.stage)) {
       validateStoredNotesAudit(record);
-      checks.notesAudit = 'passed';
+      checks.notesAudit = record.notesQuality ? 'passed' : 'legacy-unverified';
+    }
+    if (record.stage === 'notes_non_project') {
+      if (record.notesQuality) validateStoredNotesQuality(record);
+      checks.notesAudit = record.notesQuality ? 'passed' : 'legacy-unverified';
     }
     if (['reviewed', 'documented', 'managed'].includes(record.stage)) {
       validateStoredReviewAudit(record);
@@ -980,6 +985,41 @@ function notesAuditAttestationPassed(audit) {
     && audit.modelWorkClaimCount >= 0;
 }
 
+function validateNotesQuality(input, notesPath, transcriptPath) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+      || !path.isAbsolute(input.evidenceIndexPath || '') || !path.isAbsolute(input.qaReceiptPath || '')) {
+    throw new Error('notes quality requires notesQuality.evidenceIndexPath and qaReceiptPath; complete source coverage and editorial review before marking notes');
+  }
+  const evidenceIndex = artifact({ role: 'evidence_index', path: input.evidenceIndexPath });
+  const qaReceipt = artifact({ role: 'qa_receipt', path: input.qaReceiptPath });
+  const index = JSON.parse(fs.readFileSync(evidenceIndex.path, 'utf8'));
+  const qa = JSON.parse(fs.readFileSync(qaReceipt.path, 'utf8'));
+  if (!transcriptPath || path.resolve(index.transcript?.path || '') !== path.resolve(transcriptPath)) {
+    throw new Error('notes quality transcript must match this PLAUD queue record');
+  }
+  if (path.resolve(qa.notes?.path || '') !== path.resolve(notesPath)
+      || path.resolve(qa.evidenceIndex?.path || '') !== evidenceIndex.path) {
+    throw new Error('notes quality receipt must bind the exact notes and evidence index being marked');
+  }
+  evidenceCheck(index, qa, { requireCoverage: true });
+  verifyArtifact(evidenceIndex);
+  verifyArtifact(qaReceipt);
+  const notesSha256 = sha256File(notesPath);
+  if (notesSha256 !== qa.notes.sha256) throw new Error('notes changed during source coverage review');
+  return { schema: 'domi.plaud-notes-quality.v1', evidenceIndex, qaReceipt,
+    notesSha256, checkedAt: new Date().toISOString(),
+    mechanicalChecksPassed: true, semanticReviewRequired: true };
+}
+
+function validateStoredNotesQuality(record) {
+  const quality = record.notesQuality;
+  if (!quality || quality.schema !== 'domi.plaud-notes-quality.v1') throw new Error('notes quality receipt missing or unsupported');
+  verifyArtifact(quality.evidenceIndex);
+  verifyArtifact(quality.qaReceipt);
+  if (quality.notesSha256 !== sha256File(record.notesPath)) throw new Error('notes changed after source coverage review');
+  return validateNotesQuality({ evidenceIndexPath: quality.evidenceIndex.path, qaReceiptPath: quality.qaReceipt.path }, record.notesPath, record.transcriptPath);
+}
+
 function validateStoredNotesAudit(record) {
   if (!notesAuditAttestationPassed(record.notesAudit) || !record.notesAudit.notesSha256) {
     throw new Error('project stage requires a passed notesAudit bound to the notes file');
@@ -991,6 +1031,7 @@ function validateStoredNotesAudit(record) {
   if (currentHash !== record.notesAudit.notesSha256) {
     throw new Error('audited notes file changed after notesAudit; re-run the fact audit and mark notes_project again');
   }
+  if (record.notesQuality) validateStoredNotesQuality(record);
 }
 
 function reviewAuditAttestationPassed(audit) {
@@ -1136,6 +1177,9 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
   if (stage !== 'notes_project' && (Object.hasOwn(metadata, 'notesAudit') || Object.hasOwn(metadata, 'notesPath'))) {
     throw new Error('notesAudit and notesPath may only be set by mark notes_project');
   }
+  if (!['notes_project', 'notes_non_project'].includes(stage) && Object.hasOwn(metadata, 'notesQuality')) {
+    throw new Error('notesQuality may only be set when marking freshly audited notes');
+  }
   if (stage !== 'reviewed' && (Object.hasOwn(metadata, 'reviewAudit') || Object.hasOwn(metadata, 'reviewPath'))) {
     throw new Error('reviewAudit and reviewPath may only be set by mark reviewed');
   }
@@ -1156,10 +1200,12 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
       throw new Error('notes_project requires passed notesAudit with complete education/career/model ledgers, degree and attribution consistency, non-negative claim counts, and zero unresolved definitive education/career/model claims');
     }
     resolvedArtifactPath = resolveArtifactFile(artifactPath, stage);
+    const notesQuality = validateNotesQuality(metadata.notesQuality, resolvedArtifactPath, previous.transcriptPath);
     metadata = {
       ...metadata,
       notesPath: resolvedArtifactPath,
       notesAudit: { ...audit, notesSha256: sha256File(resolvedArtifactPath) },
+      notesQuality,
       reviewPath: null,
       reviewAudit: null,
       score: null,
@@ -1179,10 +1225,12 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
       throw new Error(`notes_non_project requires previous stage context_ready, notes_project, or notes_non_project; current stage is ${previous.stage || 'unset'}`);
     }
     resolvedArtifactPath = resolveArtifactFile(artifactPath, stage);
+    const notesQuality = validateNotesQuality(metadata.notesQuality, resolvedArtifactPath, previous.transcriptPath);
     metadata = {
       ...metadata,
       notesPath: resolvedArtifactPath,
       notesAudit: null,
+      notesQuality,
       reviewPath: null,
       reviewAudit: null,
       score: null,

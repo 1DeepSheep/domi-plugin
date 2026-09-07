@@ -54,6 +54,7 @@ jobs:
           node scripts/domi-repo.test.cjs
           node scripts/domi-workflow.test.cjs
           node scripts/notes-format.test.cjs
+          node scripts/notes-coverage.test.cjs
           node scripts/process-lock.test.cjs
           node scripts/asr-notes-skill.test.cjs
           node scripts/financing-fields.test.cjs

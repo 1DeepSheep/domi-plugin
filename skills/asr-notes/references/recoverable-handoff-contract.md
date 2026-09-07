@@ -40,6 +40,13 @@ claims:
       - sourceId: src-001
         locator: timestamp-or-line-range
     notesLocation: heading-and-bullet-or-table-row
+    notesRefs:
+      - lines: [8, 9]
+        quote: corresponding-exact-final-notes-text
+coverage:
+  path: /absolute/private/work/coverage.json
+  sha256: lowercase-hex
+  bytes: 123
 unresolved:
   - claimId: claim-xxx
     materialToDecision: true
@@ -51,6 +58,7 @@ generatedAt: ISO-8601
 
 - `transcript`必须指向完整规范文字稿并带SHA-256和字节数；evidence index不能用摘要替代原文。
 - 每条进入最终纪要的高重要性实体、数字、学历、履历、模型工作、融资和决策事实都要能回到`sourceRefs`定位。
+- 新ASR完成或重写必须执行[全源覆盖合同](source-coverage.md)：复用claims记录原文有效信息，`coverage`绑定固定原文区间的审阅，`notesRefs`绑定实际正文摘录；`notesLocation`只作人类可读辅助，不能单独证明内容已写入。旧工件保留可读，不冒充新版审查通过。
 - `verification_only`只能校正已有claim，不能静默产生正文新claim；`historical_record`只有在`notesScope=longitudinal`且实体唯一时才能贡献正文。
 - 用户更正应作为独立source记录，不覆盖原始转写稿；冲突保留为`conflict`，不能删除反证。
 - 纪要重写或事实修正后同步更新`notesLocation`与状态，不允许交付过期索引。
@@ -63,6 +71,7 @@ generatedAt: ISO-8601
 schema: asr.qa-receipt.v1
 workflowRunId: stable-run-id
 mode: A | B
+reviewer: model
 notes:
   path: /absolute/path
   sha256: lowercase-hex
@@ -70,12 +79,14 @@ notes:
 evidenceIndex:
   path: /absolute/path
   sha256: lowercase-hex
+  bytes: 123
 checks:
   source_manifest: passed | blocked | not_applicable
   transcript_traceability: passed | blocked
   entity_verification: passed | blocked
   number_audit: passed | blocked
   completeness: passed | blocked
+  editorial: passed | blocked
   attribution: passed | blocked
   education: passed | blocked | not_applicable
   career_model_work: passed | blocked | not_applicable
