@@ -1,6 +1,6 @@
 {
   "name": "domi",
-  "version": "0.3.22+codex.20260905113324",
+  "version": "7.0.0",
   "description": "Personal investment and work assistant for todo planning, Outlook scheduling, industry news radar, founder sourcing, people relationship management, recordings, startup intake, structured research, investment reviews, documentation, and deal-flow management.",
   "author": {
     "name": "domi"
@@ -41,7 +41,7 @@
       "整理这个会面的主题、时间和地点，并向我指定的一个或多个参会人发送 Outlook 日程邀请。",
       "处理未生成的 PLAUD 录音，整理纪要、投资判断和后续行动。"
     ],
-    "brandColor": "#00DDE7",
+    "brandColor": "#C56848",
     "composerIcon": "./assets/domi-icon.png",
     "logo": "./assets/domi-icon.png",
     "logoDark": "./assets/domi-icon.png"

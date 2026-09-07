@@ -112,6 +112,50 @@ function createRepository(t) {
   });
 }
 
+test("query projection filters in SQL, preserves actual creation time, and paginates ties completely", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  for (let i = 0; i < 7; i++) repository.upsertProject({ id: `page-${i}`, name: `分页项目${i}`, rating: i < 5 ? "A" : "B" });
+  repository.database.exec("UPDATE projects SET updated_at=100, created_at=50");
+  const options = { query: "分 页 项目", rating: "A", createdFrom: 40, createdTo: 60, fields: ["name", "createdAt"], limit: 2 };
+  const first = repository.queryProjects(options);
+  assert.equal(first.total, 5);
+  assert.equal(first.hasMore, true);
+  assert.deepEqual(Object.keys(first.items[0]), ["id", "name", "createdAt"]);
+  assert.equal(first.items[0].createdAt, 50);
+  const ids = first.items.map(item => item.id);
+  let page = first;
+  while (page.hasMore) {
+    page = repository.queryProjects({ ...options, cursor: page.nextCursor });
+    ids.push(...page.items.map(item => item.id));
+  }
+  assert.equal(page.complete, true);
+  assert.equal(page.nextCursor, null);
+  assert.deepEqual(ids, ["page-0", "page-1", "page-2", "page-3", "page-4"]);
+  assert.throws(() => repository.queryProjects({ ...options, rating: "B", cursor: first.nextCursor }), /different query/);
+  repository.database.exec("UPDATE projects SET notes='concurrent edit' WHERE id='page-0'");
+  assert.throws(() => repository.queryProjects({ ...options, cursor: first.nextCursor }), error => error.code === "query_snapshot_changed");
+});
+
+test("person get/batch report missing IDs and compact projection avoids document queries", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const person = repository.upsertPerson({ name: "张三", organization: "A-B 公司" }).person;
+  repository.database.prepare("UPDATE people SET created_at=? WHERE id=?").run(123, person.id);
+  assert.equal(repository.getPerson(person.id).createdAt, 123);
+  const prepare = repository.database.prepare.bind(repository.database);
+  repository.database.prepare = (sql) => {
+    assert.doesNotMatch(sql, /FROM documents/);
+    return prepare(sql);
+  };
+  const result = repository.queryPeople({ query: "A B公司", ids: [person.id, "missing"], fields: ["name", "createdAt"] });
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.missingIds, ["missing"]);
+  assert.equal(result.items[0].createdAt, 123);
+  assert.throws(() => repository.queryPeople({ fields: ["id); DROP TABLE people"] }), /Unknown projection/);
+  assert.throws(() => repository.queryPeople({ limit: 0 }), /limit/);
+});
+
 test("existing repositories migrate project revision without losing records", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-repository-migration-"));
   const databasePath = path.join(root, "domi-repository.sqlite3");

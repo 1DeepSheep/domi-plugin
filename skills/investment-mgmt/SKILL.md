@@ -159,3 +159,12 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 ## 回执
 
 工作流完成时后台生成并验证 `storage_receipt`：本地主库为 `backend=local`，旧飞书主库兼容分支为 `backend=legacy_feishu_primary`。默认完成报告只展示成功／部分完成／失败、更新内容和必要下一步，不展示项目内部 ID、文档 URI、本机路径、Base／Wiki 标识或逐字段审计明细。出现冲突、部分完成或用户明确要求时才展开必要回执。
+
+
+## 定向查询与最终归档验证
+
+本地候选查询使用 `project/person list|search --fields id,name,rating,status,createdAt --limit 200`；可加 `--query`、`--rating A,S`、`--created-from <ISO>`、`--created-to <ISO>`（上界不含）。返回 total、hasMore、nextCursor、scope；必须在同一条件下传 `--cursor` 遍历全部页，不把索引投影当完整证据。数据变化导致 `query_snapshot_changed` 时重新取候选并去重，不能沿旧游标继续。
+
+选中对象以 `project get --id`／`person get --id` 读取完整对象；多个对象用 `project batch`／`person batch`，stdin `{ "ids": ["..."], "fields": ["..."] }`（省略 fields 取完整对象，一批最多 200）。核对 missingIds，判断、写作和 QA 仍完整读取必需原始文档。索引日期 createdAt 是真实系统入库时间；不能以 updatedAt 替代。
+
+多阶段入库必须执行 [程序化交接工具](../domi-router/references/programmatic-tools.md) 的 `finalize`；单次 upsert 的旧版 managed 字段仅是兼容局部回执。只有 `domi.storage-receipt.v1` 的真实记录、规范文档、归档材料回读和语义 QA 全部通过，才对客户端报告整体完成。旧飞书仍走既有真实回读，不得调用本地 finalize 冒充验证。

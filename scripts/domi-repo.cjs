@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
+const { installQueryVersion, queryRecords } = require("./repository-query.cjs");
 
 const SCHEMA_VERSION = 5;
 const PERSON_INTERACTION_NAME_PATTERN = /(?:交流|纪要|会议|访谈|沟通|会面|电话|路演|聊天)/i;
@@ -321,6 +322,7 @@ class DomiRepository {
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
     ensureLocalWorkspace(this.libraryDir);
     this.database = new DatabaseSync(this.databasePath);
+    this.database.function("domi_normalize", { deterministic: true }, normalizedName);
     this.database.exec("PRAGMA journal_mode = WAL");
     this.database.exec("PRAGMA synchronous = NORMAL");
     this.database.exec("PRAGMA foreign_keys = ON");
@@ -445,7 +447,16 @@ class DomiRepository {
         "ALTER TABLE people ADD COLUMN interaction_documents_json TEXT NOT NULL DEFAULT '[]'"
       );
     }
+    installQueryVersion(this.database);
   }
+
+  normalizeQuery(value) { return normalizedName(value); }
+
+  queryProjects(options = {}) { return queryRecords(this, "project", options); }
+
+  queryPeople(options = {}) { return queryRecords(this, "person", options); }
+
+  getPerson(id) { return this.queryPeople({ ids: [id] }).items[0] || null; }
 
   close() {
     this.database.close();
@@ -798,6 +809,8 @@ ${project.financingHistory || "暂无历史融资信息。"}
         ? null
         : Number(row.latest_valuation_usd_100m),
       lastUpdatedAt: row.last_updated_at,
+      createdAt: Number(row.created_at) || 0,
+      updatedAt: Number(row.updated_at) || 0,
       recordRevision: Number(row.revision) || 1,
       recordHash: projectRecordHash(row),
       documentPath: row.document_path,
@@ -806,10 +819,7 @@ ${project.financingHistory || "暂无历史融资信息。"}
   }
 
   listProjects(query = "") {
-    const normalizedQuery = normalizedName(query);
-    return this.database.prepare("SELECT * FROM projects ORDER BY updated_at DESC, name").all()
-      .map((row) => this.mapProject(row))
-      .filter((project) => !normalizedQuery || normalizedName(project.name).includes(normalizedQuery));
+    return this.queryProjects({ query }).items;
   }
 
   personPage(person, id) {
@@ -896,28 +906,37 @@ rating: ${yamlValue(person.rating || "")}
     return {
       ok: true,
       action: existing ? "updated" : "created",
-      person: this.listPeople(name).find((item) => item.id === id),
+      person: this.getPerson(id),
       researchDocument
     };
   }
 
   listPeople(query = "") {
-    const normalizedQuery = normalizedName(query);
+    return this.queryPeople({ query }).items;
+  }
+
+  mapPeopleRows(rows, includeDocuments = true) {
     const documentsByOwner = new Map();
-    for (const document of this.database.prepare(`
-      SELECT owner_id, kind, title, path, updated_at
-      FROM documents
-      WHERE owner_type = 'person'
-      ORDER BY updated_at DESC, path ASC
-    `).all()) {
-      const items = documentsByOwner.get(document.owner_id) || [];
-      items.push(document);
-      documentsByOwner.set(document.owner_id, items);
+    // Only fetch documents for the selected page; compact indexes do not load them.
+    if (includeDocuments && rows.length) {
+      for (let offset = 0; offset < rows.length; offset += 200) {
+        const ids = rows.slice(offset, offset + 200).map(row => row.id);
+        const documents = this.database.prepare(`
+          SELECT owner_id, kind, title, path, updated_at FROM documents
+          WHERE owner_type = 'person' AND owner_id IN (${ids.map(() => "?").join(",")})
+          ORDER BY updated_at DESC, path ASC
+        `).all(...ids);
+        for (const document of documents) {
+          const items = documentsByOwner.get(document.owner_id) || [];
+          items.push(document);
+          documentsByOwner.set(document.owner_id, items);
+        }
+      }
     }
-    return this.database.prepare("SELECT * FROM people ORDER BY updated_at DESC, name").all()
+    return rows
       .map((row) => {
         const root = row.document_path ? path.dirname(row.document_path) : "";
-        const indexedDocuments = parseJsonArray(row.interaction_documents_json).map((document) => {
+        const indexedDocuments = parseJsonArray(includeDocuments ? row.interaction_documents_json : "[]").map((document) => {
           if (!document || typeof document !== "object") return null;
           const relativePath = String(document.relativePath || "").trim();
           const targetPath = root && relativePath ? path.resolve(root, relativePath) : "";
@@ -950,8 +969,7 @@ rating: ${yamlValue(person.rating || "")}
             all.findIndex((candidate) => candidate.path === document.path) === index
           )
           .sort((left, right) => right.updatedAt - left.updatedAt
-            || left.path.localeCompare(right.path, "zh-CN"))
-          .slice(0, 50);
+            || left.path.localeCompare(right.path, "zh-CN"));
         return {
           id: row.id,
           name: row.name,
@@ -960,6 +978,8 @@ rating: ${yamlValue(person.rating || "")}
           status: row.status,
           rating: row.rating,
           lastContactAt: row.last_contact_at,
+          createdAt: Number(row.created_at) || 0,
+          updatedAt: Number(row.updated_at) || 0,
           cities: parseJsonList(row.cities_json),
           documentPath: row.document_path,
           documentUri: row.document_path ? pathToFileURL(row.document_path).href : "",
@@ -968,9 +988,7 @@ rating: ${yamlValue(person.rating || "")}
             PERSON_INTERACTION_NAME_PATTERN.test(`${document.kind} ${document.title} ${document.path}`)
           )
         };
-      })
-      .filter((person) => !normalizedQuery
-        || normalizedName(`${person.name}${person.organization}`).includes(normalizedQuery));
+      });
   }
 
   newsPage(event) {
@@ -1135,7 +1153,7 @@ ${event.action || "继续关注。"}
   }
 
   createDocument(input) {
-    const ownerType = ["project", "person", "news"].includes(input.ownerType)
+    const ownerType = ["project", "person", "news", "industry"].includes(input.ownerType)
       ? input.ownerType
       : "project";
     const ownerId = String(input.ownerId || "").trim();
@@ -1148,9 +1166,12 @@ ${event.action || "继续关注。"}
       if (!project) throw new Error(`没有找到项目 ${ownerId}。`);
       root = path.dirname(project.documentPath);
     } else if (ownerType === "person") {
-      const person = this.listPeople().find((item) => item.id === ownerId);
+      const person = this.getPerson(ownerId);
       if (!person) throw new Error(`没有找到人物 ${ownerId}。`);
       root = path.dirname(person.documentPath);
+    } else if (ownerType === "industry") {
+      if (!input.domain || !input.subdomain || !input.program) throw new Error("行业播客文档需要 domain、subdomain、program");
+      root = path.join(this.libraryDir, "1.行业研究", safeSegment(input.domain), safeSegment(input.subdomain), "播客", safeSegment(input.program));
     } else {
       const event = this.getNews(ownerId);
       if (!event) throw new Error(`没有找到行业事件 ${ownerId}。`);
@@ -1168,15 +1189,29 @@ ${event.action || "继续关注。"}
           ? path.join(root, "研究")
           : root;
     fs.mkdirSync(targetDirectory, { recursive: true });
-    const filePath = path.join(targetDirectory, `${safeSegment(title, kind)}.md`);
+    let filePath = path.join(targetDirectory, `${safeSegment(title, kind)}.md`);
+    const canonicalDocumentId = String(input.canonicalDocumentId || "").trim();
+    if (canonicalDocumentId && (canonicalDocumentId.length > 240 || !/^[A-Za-z0-9:_-]+$/.test(canonicalDocumentId))) throw new Error("Invalid canonicalDocumentId");
+    const existingDocument = canonicalDocumentId ? this.database.prepare("SELECT * FROM documents WHERE id=?").get(canonicalDocumentId) : null;
+    if (existingDocument) {
+      if (existingDocument.owner_type !== ownerType || existingDocument.owner_id !== ownerId) throw new Error("Canonical document belongs to a different entity");
+      filePath = existingDocument.path;
+      if (!path.resolve(filePath).startsWith(`${path.resolve(root)}${path.sep}`)) throw new Error("Canonical document directory changed; explicit migration required");
+    }
+    const pathOwner = this.database.prepare("SELECT id FROM documents WHERE path=?").get(filePath);
+    if (canonicalDocumentId && pathOwner && pathOwner.id !== canonicalDocumentId) throw new Error("Document path already belongs to a different canonical ID");
     const content = input.contentFile
       ? fs.readFileSync(resolveHomePath(input.contentFile), "utf8")
       : String(input.content || `# ${title}\n`);
     if (!fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") !== content) {
-      fs.writeFileSync(filePath, content.endsWith("\n") ? content : `${content}\n`, "utf8");
+      const temporary = `${filePath}.tmp-${crypto.randomUUID()}`;
+      try {
+        fs.writeFileSync(temporary, content.endsWith("\n") ? content : `${content}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, filePath);
+      } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
     }
     const now = Date.now();
-    const id = stableId("doc", `${ownerType}:${ownerId}:${filePath}`);
+    const id = canonicalDocumentId || stableId("doc", `${ownerType}:${ownerId}:${filePath}`);
     this.database.prepare(`
       INSERT INTO documents (id, owner_type, owner_id, kind, title, path, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1215,6 +1250,11 @@ ${event.action || "继续关注。"}
       }
     };
   }
+}
+
+function queryFlags(flags) {
+  return { query: flags.query, fields: flags.fields, limit: flags.limit, cursor: flags.cursor,
+    createdFrom: flags["created-from"], createdTo: flags["created-to"], rating: flags.rating, status: flags.status };
 }
 
 function main() {
@@ -1257,15 +1297,19 @@ function main() {
         ...repository.summary()
       };
     } else if (resource === "project" && ["list", "search"].includes(action)) {
-      const items = repository.listProjects(flags.query || "");
-      result = { ok: true, total: items.length, items };
+      result = { ok: true, ...repository.queryProjects(queryFlags(flags)) };
     } else if (resource === "project" && action === "get") {
       result = { ok: true, project: repository.getProject(flags.id || positional[2]) };
     } else if (resource === "project" && action === "upsert") {
       result = repository.upsertProject(readPayload(flags));
     } else if (resource === "person" && ["list", "search"].includes(action)) {
-      const items = repository.listPeople(flags.query || "");
-      result = { ok: true, total: items.length, items };
+      result = { ok: true, ...repository.queryPeople(queryFlags(flags)) };
+    } else if (resource === "person" && action === "get") {
+      result = { ok: true, person: repository.getPerson(flags.id || positional[2]) };
+    } else if (["project", "person"].includes(resource) && action === "batch") {
+      const input = readPayload(flags);
+      if (!Array.isArray(input.ids) || !input.ids.length) throw new Error("batch requires nonempty ids");
+      result = { ok: true, ...queryRecords(repository, resource, { ids: input.ids, fields: input.fields }) };
     } else if (resource === "person" && action === "upsert") {
       result = repository.upsertPerson(readPayload(flags));
     } else if (resource === "news" && action === "list") {
