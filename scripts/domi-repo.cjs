@@ -7,6 +7,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 const { installQueryVersion, queryRecords } = require("./repository-query.cjs");
+const { checkNotesFormat } = require("./notes-format.cjs");
 
 const SCHEMA_VERSION = 5;
 const PERSON_INTERACTION_NAME_PATTERN = /(?:交流|纪要|会议|访谈|沟通|会面|电话|路演|聊天)/i;
@@ -1160,6 +1161,18 @@ ${event.action || "继续关注。"}
     const kind = safeSegment(input.kind || "文档", "文档");
     const title = String(input.title || kind).trim();
     if (!ownerId) throw new Error("文档写入缺少 ownerId。");
+    const content = input.contentFile
+      ? fs.readFileSync(resolveHomePath(input.contentFile), "utf8")
+      : String(input.content || `# ${title}\n`);
+    const structuredNotes = /纪要/.test(kind) && !/文字稿|逐字稿|转写|精修稿/.test(`${kind} ${title}`);
+    if (structuredNotes || input.formatProfile === "structured-notes") {
+      const format = checkNotesFormat(content, { profile: "structured-notes", mode: input.notesMode || "auto" });
+      if (!format.ok) {
+        const error = new Error(`纪要格式未通过，尚未写入。请先运行 notes-format.cjs format --input <草稿> --output <格式化纪要> --profile structured-notes，再校验并归档。${format.error || JSON.stringify(format.issues || [])}`);
+        error.code = "DOMI_NOTES_FORMAT_INVALID";
+        throw error;
+      }
+    }
     let root;
     if (ownerType === "project") {
       const project = this.getProject(ownerId);
@@ -1200,9 +1213,6 @@ ${event.action || "继续关注。"}
     }
     const pathOwner = this.database.prepare("SELECT id FROM documents WHERE path=?").get(filePath);
     if (canonicalDocumentId && pathOwner && pathOwner.id !== canonicalDocumentId) throw new Error("Document path already belongs to a different canonical ID");
-    const content = input.contentFile
-      ? fs.readFileSync(resolveHomePath(input.contentFile), "utf8")
-      : String(input.content || `# ${title}\n`);
     if (!fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") !== content) {
       const temporary = `${filePath}.tmp-${crypto.randomUUID()}`;
       try {
