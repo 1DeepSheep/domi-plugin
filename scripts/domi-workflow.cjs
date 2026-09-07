@@ -8,6 +8,7 @@ const { pathToFileURL } = require("node:url");
 const { stableJson } = require("../skills/todo/scripts/todo-ledger.js");
 const { acquireProcessLock } = require("./process-lock.cjs");
 const { checkNotesFormat } = require("./notes-format.cjs");
+const { checkNotesCoverage, sourceRefRange, NotesCoverageError } = require("./notes-coverage.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const HASH = /^[a-f0-9]{64}$/;
@@ -135,11 +136,16 @@ function validateSemanticQa(qa, manifest, stage) {
   assert(!qa.materialConflicts?.length, "Material conflicts block advancement");
 }
 
-function completedStageChecks(manifest) {
+function completedStageChecks(manifest, { requireCoverage = true, legacyStages = new Set() } = {}) {
+  const legacyUnverifiedStages = [];
   for (const name of manifest.completedStages) {
     const stage = manifest.stagePlan.find(item => item.name === name);
+    const strictStage = requireCoverage && !legacyStages.has(name);
     const expectedRules = contextBundle({ skill: stage.skill, mode: stage.mode, workflow: WORKFLOWS[manifest.workflow] ? manifest.workflow : undefined });
-    assert(stage.ruleBundleSha256 === expectedRules.bundleSha256, `Stage rules changed or were not fully resolved: ${name}`);
+    if (stage.ruleBundleSha256 !== expectedRules.bundleSha256) {
+      assert(stage.skill === "asr-notes" && !strictStage && HASH.test(stage.ruleBundleSha256 || ""), `Stage rules changed or were not fully resolved: ${name}`);
+      legacyUnverifiedStages.push(name);
+    }
     for (const role of stage.requiredRoles) assert(manifest.artifacts.some(file => file.role === role), `Missing ${name} artifact role: ${role}`);
     if (SEMANTIC_SKILLS.has(stage.skill)) {
       if (stage.skill === "asr-notes") {
@@ -152,17 +158,38 @@ function completedStageChecks(manifest) {
         assert(qa.workflowRunId === manifest.workflowRunId, "ASR QA workflow mismatch");
         assert(manifest.artifacts.some(file => file.role === "notes" && file.path === qa.notes?.path && file.sha256 === qa.notes?.sha256), "ASR receipt does not cover the current notes artifact");
         assert(manifest.artifacts.some(file => file.role === "evidence_index" && file.path === qa.evidenceIndex?.path && file.sha256 === qa.evidenceIndex?.sha256), "ASR receipt does not cover the current evidence index");
-        evidenceCheck(readJson(qa.evidenceIndex.path), qa);
-      } else validateSemanticQa(qa, manifest, stage);
+        const report = evidenceCheck(readJson(qa.evidenceIndex.path), qa, { requireCoverage: strictStage });
+        if (report.qualityStatus === "legacy-unverified") legacyUnverifiedStages.push(name);
+      } else {
+        assert(stage.skill !== "asr-notes" || !strictStage, "New ASR completion requires asr.qa-receipt.v1 and source coverage; generic semantic QA cannot certify notes");
+        validateSemanticQa(qa, manifest, stage);
+        if (stage.skill === "asr-notes") legacyUnverifiedStages.push(name);
+      }
     }
   }
+  return { legacyUnverifiedStages: [...new Set(legacyUnverifiedStages)] };
 }
 
-function inspectManifest(file) {
+function unchangedCompletedAsrStages(previous, next) {
+  if (!previous) return new Set();
+  const result = new Set();
+  for (const stage of next.stagePlan.filter(stage => stage.skill === "asr-notes")) {
+    if (!previous.completedStages?.includes(stage.name) || !next.completedStages.includes(stage.name)) continue;
+    if (stableJson(previous.stagePlan.find(old => old.name === stage.name)) !== stableJson(stage)) continue;
+    // Unowned artifacts are included conservatively, so adding/removing a QA or
+    // evidence sidecar cannot downgrade a completed stage into legacy mode.
+    const files = manifest => manifest.artifacts.filter(file => !file.stage || file.stage === stage.name).sort((a, b) => a.path.localeCompare(b.path));
+    if (stableJson(files(previous)) === stableJson(files(next))) result.add(stage.name);
+  }
+  return result;
+}
+
+function inspectManifest(file, { requireCoverage = false } = {}) {
   const manifest = readJson(file);
-  const failures = [];
-  try { validateManifest(manifest); completedStageChecks(manifest); } catch (error) { failures.push(error.message); }
+  const failures = []; let quality = { legacyUnverifiedStages: [] };
+  try { validateManifest(manifest); quality = completedStageChecks(manifest, { requireCoverage }); } catch (error) { failures.push(error.message); }
   return { ok: failures.length === 0, manifestSha256: sha256(fs.readFileSync(file)), manifest,
+    ...quality, qualityStatus: failures.length ? "blocked" : quality.legacyUnverifiedStages.length ? "legacy-unverified" : "verified",
     failures, resumeStage: failures.length ? manifest.failureCheckpoint?.stage || manifest.currentStage : manifest.currentStage,
     reusableArtifacts: manifest.artifacts?.filter(item => { try { verifyArtifact(item); return true; } catch { return false; } }) || [] };
 }
@@ -171,7 +198,7 @@ function saveManifest(file, input) {
   assert(nonempty(file), "Manifest path required");
   file = path.resolve(file);
   const next = structuredClone(input.manifest);
-  validateManifest(next); completedStageChecks(next);
+  validateManifest(next);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const lockPath = `${file}.lock`;
   const release = acquireProcessLock(lockPath);
@@ -197,6 +224,7 @@ function saveManifest(file, input) {
         artifacts: previous.artifacts, receipts: previous.receipts || {}, executionRunId: previous.executionRunId || null,
         completedStages: previous.completedStages, updatedAt: previous.updatedAt }];
     } else assert(input.expectedHash === null, "New manifest requires expectedHash:null");
+    completedStageChecks(next, { legacyStages: unchangedCompletedAsrStages(previous, next) });
     next.updatedAt = new Date().toISOString();
     atomicJson(file, next);
     return inspectManifest(file);
@@ -250,6 +278,7 @@ function invalidateManifest(file, stageName, reason, expectedHash) {
   assert(nonempty(reason), "Invalidation reason required");
   const manifest = readJson(file);
   validateManifest(manifest, { verify: false });
+  const previous = structuredClone(manifest);
   const index = manifest.stagePlan.findIndex(stage => stage.name === stageName);
   assert(index >= 0, "Unknown invalidation stage");
   assert(sha256(fs.readFileSync(file)) === expectedHash, "Manifest changed before invalidation");
@@ -264,7 +293,7 @@ function invalidateManifest(file, stageName, reason, expectedHash) {
   manifest.currentStage = stageName;
   manifest.nextStage = manifest.stagePlan[index + 1]?.name || null;
   manifest.failureCheckpoint = { stage: stageName, reason, invalidatedArtifacts: invalidated };
-  validateManifest(manifest); completedStageChecks(manifest);
+  validateManifest(manifest); completedStageChecks(manifest, { legacyStages: unchangedCompletedAsrStages(previous, manifest) });
   const lockPath = `${file}.lock`, release = acquireProcessLock(lockPath);
   try {
     assert(sha256(fs.readFileSync(file)) === expectedHash, "Manifest changed before invalidation save");
@@ -275,6 +304,7 @@ function invalidateManifest(file, stageName, reason, expectedHash) {
 
 function sourceLocator(source, ref) {
   const text = fs.readFileSync(source.path, "utf8");
+  if (ref.start !== undefined || ref.end !== undefined) { sourceRefRange(text, ref); return; }
   const lines = ref.lines || String(ref.locator || "").match(/^L?(\d+)(?:-L?(\d+))?$/)?.slice(1).map(value => value === undefined ? undefined : Number(value));
   if (lines) {
     const [from, to = from] = lines;
@@ -285,8 +315,9 @@ function sourceLocator(source, ref) {
   }
 }
 
-function evidenceCheck(index, qa = null) {
+function evidenceCheck(index, qa = null, { requireCoverage = false } = {}) {
   assert(["asr.evidence-index.v1", "domi.research-evidence.v1"].includes(index.schema), "Unknown evidence index schema");
+  assert(!requireCoverage || index.schema === "asr.evidence-index.v1", "Strict ASR checking requires asr.evidence-index.v1");
   assert(nonempty(index.workflowRunId) && Array.isArray(index.sources) && index.sources.length, "Evidence sources and run required");
   if (index.schema === "asr.evidence-index.v1") {
     assert(["A", "B"].includes(index.mode) && ["current_session", "longitudinal"].includes(index.notesScope), "ASR mode and notesScope required");
@@ -300,7 +331,7 @@ function evidenceCheck(index, qa = null) {
     verifyArtifact(source); sources.set(source.sourceId, source);
     if (source.role === "historical_record") assert(index.notesScope === "longitudinal" && source.entityFingerprint === index.entityFingerprint && nonempty(index.entityFingerprint), "Historical material requires a confirmed matching entity and longitudinal scope");
   }
-  assert(Array.isArray(index.claims) && index.claims.length > 0, "Evidence claims required; mechanical checks cannot infer completeness");
+  assert(Array.isArray(index.claims) && (index.claims.length > 0 || (index.schema === "asr.evidence-index.v1" && index.coverage)), "Evidence claims required; mechanical checks cannot infer completeness");
   const claimIds = new Set();
   for (const claim of index.claims) {
     assert(nonempty(claim.claimId) && !claimIds.has(claim.claimId) && nonempty(claim.statement), "Claim ID/statement invalid"); claimIds.add(claim.claimId);
@@ -314,9 +345,15 @@ function evidenceCheck(index, qa = null) {
     assert(qa.schema === "asr.qa-receipt.v1" && qa.workflowRunId === index.workflowRunId, "ASR receipt schema/run mismatch");
     verifyArtifact(qa.notes);
     notesFormatCheck(qa.notes.path);
-    assert(HASH.test(qa.evidenceIndex?.sha256 || "") && sha256(fs.readFileSync(qa.evidenceIndex.path)) === qa.evidenceIndex.sha256, "Evidence index receipt hash mismatch");
+    if (requireCoverage || index.coverage) verifyArtifact(qa.evidenceIndex);
+    else {
+      // The original v1 receipt documented only path + sha256 here.
+      assert(HASH.test(qa.evidenceIndex?.sha256 || "") && artifact(qa.evidenceIndex).sha256 === qa.evidenceIndex.sha256, "Evidence index receipt hash mismatch");
+    }
+    assert(stableJson(readJson(qa.evidenceIndex.path)) === stableJson(index), "Evidence index object differs from the receipt-bound file");
     const required = ["transcript_traceability", "entity_verification", "number_audit", "completeness", "attribution", "markdown_rendering"];
     assert(qa.overall === "passed" && required.every(key => qa.checks?.[key] === "passed"), "ASR semantic QA missing/blocked");
+    if (requireCoverage || index.coverage) assert(qa.checks?.editorial === "passed" && qa.reviewer === "model", "New ASR semantic QA requires model reviewer and editorial check passed");
     const optional = ["source_manifest", "education", "career_model_work", "material_verification", "pending_items"];
     assert(optional.every(key => ["passed", "not_applicable"].includes(qa.checks?.[key])), "ASR applicable checks must be recorded");
     if (index.claims.some(claim => claim.category === "education")) assert(qa.checks.education === "passed", "Education claims require education QA");
@@ -325,8 +362,15 @@ function evidenceCheck(index, qa = null) {
     assert(!(index.unresolved || []).some(item => item.materialToDecision === true), "Unresolved material claims block automatic advancement");
     assert(!qa.materialConflicts?.length, "Material conflicts block handoff");
   }
+  let coverage;
+  if (index.schema === "asr.evidence-index.v1") {
+    assert(!requireCoverage || qa, "Strict ASR evidence checking requires the model QA receipt and notes artifact");
+    coverage = checkNotesCoverage(index, { notes: qa?.notes, requireCoverage });
+    if (!coverage.ok) throw new NotesCoverageError(`ASR source coverage/notes bindings failed: ${JSON.stringify({ missing: coverage.missing, invalid: coverage.invalid })}`, coverage);
+  }
   return { ok: true, schema: index.schema, workflowRunId: index.workflowRunId, sourceCount: sources.size, claimCount: claimIds.size,
-    mechanicalChecksPassed: true, semanticReviewRequired: true, currentFactsVerified: false };
+    mechanicalChecksPassed: true, semanticReviewRequired: true, currentFactsVerified: false,
+    ...(coverage ? { qualityStatus: coverage.status, coverage } : {}) };
 }
 
 function icStructureCheck(file) {
@@ -391,10 +435,10 @@ function finalize(manifestPath, receiptPath, repository) {
     assert(qa.schema === "asr.qa-receipt.v1", "Podcast requires the full ASR QA schema");
     const evidenceIndex = verifyArtifact(manifest.artifacts.find(file => file.role === "evidence_index" && file.path === qa.evidenceIndex.path));
     const index = readJson(evidenceIndex.path);
-    evidenceCheck(index, qa);
+    const qualityReport = evidenceCheck(index, qa);
     const canonicalNotes = archived.find(file => file.role === "notes" && path.resolve(file.path) === path.resolve(documentPath));
     assert(canonicalNotes && canonicalNotes.sha256 === qa.notes.sha256, "Canonical podcast notes differ from model-reviewed notes");
-    quality = { schema: "domi.podcast-quality.v1", qaReceipt: verifyArtifact(qaArtifact), evidenceIndex,
+    quality = { schema: "domi.podcast-quality.v1", qualityStatus: qualityReport.qualityStatus, qaReceipt: verifyArtifact(qaArtifact), evidenceIndex,
       notes: verifyArtifact(qa.notes), transcript: verifyArtifact(index.transcript) };
   }
   const receipt = { schema: "domi.storage-receipt.v1", workflowRunId: manifest.workflowRunId,
@@ -428,7 +472,10 @@ function main() {
   else if (command === "checkpoint") result = checkpointManifest(flags.manifest, readJson(flags.input));
   else if (command === "rebind") result = rebindManifest(flags.manifest, flags["execution-run-id"], flags["expected-hash"]);
   else if (command === "invalidate") result = invalidateManifest(flags.manifest, flags.stage, flags.reason, flags["expected-hash"]);
-  else if (command === "evidence-check") result = evidenceCheck(readJson(flags.index), flags.qa ? readJson(flags.qa) : null);
+  else if (command === "evidence-check") {
+    const index = readJson(flags.index);
+    result = evidenceCheck(index, flags.qa ? readJson(flags.qa) : null, { requireCoverage: index.schema === "asr.evidence-index.v1" && flags["allow-legacy"] !== "true" });
+  }
   else if (command === "notes-check") result = notesFormatCheck(flags.path, flags.mode || "auto");
   else if (command === "ic-check") result = icStructureCheck(flags.path);
   else if (command === "finalize") {
@@ -442,5 +489,5 @@ function main() {
   if (result.ok === false) process.exitCode = 1;
 }
 
-if (require.main === module) { try { main(); } catch (error) { process.stdout.write(`${JSON.stringify({ ok: false, error: error.message })}\n`); process.exitCode = 1; } }
+if (require.main === module) { try { main(); } catch (error) { process.stdout.write(`${JSON.stringify({ ok: false, error: error.message, ...(error.report ? { report: error.report } : {}) })}\n`); process.exitCode = 1; } }
 module.exports = { artifact, verifyArtifact, atomicJson, contextBundle, validateManifest, inspectManifest, saveManifest, checkpointManifest, rebindManifest, invalidateManifest, evidenceCheck, notesFormatCheck, icStructureCheck, finalize };

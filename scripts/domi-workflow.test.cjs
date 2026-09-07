@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { DomiRepository } = require("./domi-repo.cjs");
+const { prepareNotesCoverage } = require("./notes-coverage.cjs");
 const { artifact, contextBundle, evidenceCheck, saveManifest, checkpointManifest, inspectManifest, rebindManifest,
   invalidateManifest, finalize, icStructureCheck } = require("./domi-workflow.cjs");
 
@@ -25,10 +26,14 @@ function notesFixture(t) {
   const notes = artifact({ role: "notes", stage: "notes", path: f.write("notes.md", "#### 访谈纪要\n\n嘉宾表示，公司处于研发阶段，尚无收入。\n") });
   const index = { schema: "asr.evidence-index.v1", workflowRunId: run, notesScope: "current_session", mode: "B",
     transcript, sources: [{ ...transcript, sourceId: "source-1", role: "current_transcript" }],
-    claims: [{ claimId: "claim-1", statement: "公司尚无收入", sourceRefs: [{ sourceId: "source-1", lines: [2, 2], quote: "还没有收入" }] }] };
+    claims: [{ claimId: "claim-1", statement: "公司仍在研发，尚无收入", sourceRefs: [{ sourceId: "source-1", lines: [1, 2], quote: "还没有收入" }],
+      notesRefs: [{ lines: [3, 3], quote: "公司处于研发阶段，尚无收入" }] }] };
+  const coverage = prepareNotesCoverage({ workflowRunId: run, sources: index.sources });
+  for (const source of coverage.sources) for (const segment of source.segments) segment.review = { status: "reviewed", reviewer: "model", claimIds: ["claim-1"], exclusions: [] };
+  index.coverage = artifact({ path: f.write("coverage.json", coverage) });
   const evidence = artifact({ role: "evidence_index", stage: "notes", path: f.write("evidence.json", index) });
-  const checks = Object.fromEntries(["source_manifest", "transcript_traceability", "entity_verification", "number_audit", "completeness", "attribution", "education", "career_model_work", "material_verification", "pending_items", "markdown_rendering"].map(key => [key, "passed"]));
-  const qa = { schema: "asr.qa-receipt.v1", workflowRunId: run, mode: "B", notes, evidenceIndex: evidence,
+  const checks = Object.fromEntries(["source_manifest", "transcript_traceability", "entity_verification", "number_audit", "completeness", "attribution", "education", "career_model_work", "material_verification", "pending_items", "markdown_rendering", "editorial"].map(key => [key, "passed"]));
+  const qa = { schema: "asr.qa-receipt.v1", workflowRunId: run, mode: "B", reviewer: "model", notes, evidenceIndex: evidence,
     checks, overall: "passed", materialConflicts: [], checkedAt: "2026-09-07T00:00:00.000Z" };
   const receipt = artifact({ role: "qa_receipt", stage: "notes", path: f.write("qa.json", qa) });
   const manifest = { schema: "domi.handoff.v1", workflowRunId: run, executionRunId: "claim-1", workflow: "podcast-ingestion", mode: "intake",
@@ -42,6 +47,87 @@ function notesFixture(t) {
     ] };
   return { ...f, transcript, notes, index, evidence, qa, receipt, manifest };
 }
+
+function bindUpdatedIndex(f) {
+  f.evidence = artifact({ ...f.evidence, path: f.write("evidence.json", f.index) });
+  f.qa.evidenceIndex = f.evidence;
+  f.receipt = artifact({ ...f.receipt, path: f.write("qa.json", f.qa) });
+  f.manifest.artifacts = [f.transcript, f.notes, f.evidence, f.receipt];
+}
+
+test("strict ASR rejects omitted coverage, missing editorial/model QA, borrowed index hashes and research-schema bypass", t => {
+  const f = notesFixture(t);
+  assert.equal(evidenceCheck(f.index, f.qa, { requireCoverage: true }).coverage.coverageVerified, true);
+  const other = structuredClone(f.index); other.claims[0].statement = "不同内存事实";
+  assert.throws(() => evidenceCheck(other, f.qa, { requireCoverage: true }), /object differs/);
+  assert.throws(() => evidenceCheck({ ...f.index, schema: "domi.research-evidence.v1" }, f.qa, { requireCoverage: true }), /requires asr.evidence/);
+  assert.throws(() => evidenceCheck(f.index, { ...f.qa, reviewer: undefined }, { requireCoverage: true }), /model reviewer/);
+  assert.throws(() => evidenceCheck(f.index, { ...f.qa, checks: { ...f.qa.checks, editorial: "blocked" } }, { requireCoverage: true }), /editorial/);
+  delete f.index.coverage; delete f.qa.checks.editorial; delete f.qa.reviewer; bindUpdatedIndex(f);
+  assert.equal(evidenceCheck(f.index, f.qa).qualityStatus, "legacy-unverified");
+  assert.throws(() => evidenceCheck(f.index, { ...f.qa, reviewer: "model", checks: { ...f.qa.checks, editorial: "passed" } }, { requireCoverage: true }), /source coverage/);
+});
+
+test("new completion cannot substitute generic semantic QA for source-reviewed ASR notes", t => {
+  const f = notesFixture(t), manifestPath = path.join(f.root, "manifest.json");
+  const initial = saveManifest(manifestPath, { expectedHash: null, manifest: f.manifest });
+  const generic = { schema: "domi.semantic-qa.v1", workflowRunId: f.manifest.workflowRunId, stage: "notes", reviewer: "model", overall: "passed",
+    checks: Object.fromEntries(["source_reading", "entity", "evidence", "numbers", "completeness", "attribution", "editorial"].map(key => [key, "passed"])),
+    artifacts: f.manifest.artifacts.filter(v => v.role !== "qa_receipt"), materialConflicts: [] };
+  const next = structuredClone(f.manifest);
+  next.artifacts = next.artifacts.filter(v => v.role !== "qa_receipt");
+  next.artifacts.push(artifact({ role: "qa_receipt", stage: "notes", path: f.write("generic-qa.json", generic) }));
+  next.completedStages = ["notes"];
+  assert.throws(() => saveManifest(manifestPath, { expectedHash: initial.manifestSha256, manifest: next }), /generic semantic QA/);
+  assert.equal(inspectManifest(manifestPath).manifestSha256, initial.manifestSha256);
+});
+
+test("legacy receipt path/hash without evidence bytes remains readable, while new coverage requires bytes", t => {
+  const f = notesFixture(t);
+  const newQa = { ...f.qa, evidenceIndex: { path: f.evidence.path, sha256: f.evidence.sha256 } };
+  assert.throws(() => evidenceCheck(f.index, newQa, { requireCoverage: true }), /expected sha256 and bytes/);
+  delete f.index.coverage; delete f.qa.checks.editorial; delete f.qa.reviewer; bindUpdatedIndex(f);
+  const oldQa = { ...f.qa, evidenceIndex: { path: f.evidence.path, sha256: f.evidence.sha256 } };
+  assert.equal(evidenceCheck(f.index, oldQa).qualityStatus, "legacy-unverified");
+  assert.throws(() => evidenceCheck({ ...f.index, mode: "A" }, oldQa), /object differs/);
+  assert.throws(() => evidenceCheck(f.index, { ...oldQa, evidenceIndex: { ...oldQa.evidenceIndex, sha256: "0".repeat(64) } }), /hash mismatch/);
+});
+
+test("existing completed legacy notes may advance unchanged but new completion and artifact downgrade cannot", t => {
+  const f = notesFixture(t), manifestPath = path.join(f.root, "legacy-manifest.json");
+  delete f.index.coverage; delete f.qa.checks.editorial; delete f.qa.reviewer; bindUpdatedIndex(f);
+  f.manifest.completedStages = ["notes"];
+  assert.throws(() => saveManifest(manifestPath, { expectedHash: null, manifest: f.manifest }), /editorial/);
+  assert.equal(fs.existsSync(manifestPath), false);
+  // An existing pre-upgrade record is read, never rewritten just to label it.
+  f.write("legacy-manifest.json", f.manifest);
+  const initial = inspectManifest(manifestPath);
+  assert.equal(initial.ok, true); assert.equal(initial.qualityStatus, "legacy-unverified");
+  assert.deepEqual(initial.legacyUnverifiedStages, ["notes"]);
+  const advanced = structuredClone(f.manifest); advanced.currentStage = "archive"; advanced.nextStage = null;
+  const saved = saveManifest(manifestPath, { expectedHash: initial.manifestSha256, manifest: advanced });
+  assert.equal(saved.ok, true); assert.equal(saved.qualityStatus, "legacy-unverified");
+  assert.deepEqual(saved.manifest.artifacts, f.manifest.artifacts);
+  const changed = structuredClone(saved.manifest);
+  changed.artifacts.push(artifact({ role: "source_material", stage: "notes", path: f.write("extra-source.txt", "新增事实") }));
+  assert.throws(() => saveManifest(manifestPath, { expectedHash: saved.manifestSha256, manifest: changed }), /editorial/);
+  assert.equal(inspectManifest(manifestPath).manifestSha256, saved.manifestSha256);
+});
+
+test("legacy completed podcast can archive unchanged with an explicit unverified quality status", t => {
+  const f = notesFixture(t), manifestPath = path.join(f.root, "legacy.json");
+  delete f.index.coverage; delete f.qa.checks.editorial; delete f.qa.reviewer; bindUpdatedIndex(f);
+  const repository = new DomiRepository({ libraryDir: path.join(f.root, "library"), databasePath: path.join(f.root, "repo.sqlite") });
+  t.after(() => repository.close());
+  const document = repository.createDocument({ ownerType: "industry", ownerId: "industry-1", canonicalDocumentId: "podcast:public:job-1", domain: "科技", subdomain: "芯片", program: "合成节目", kind: "纪要", title: "历史已完成纪要", contentFile: f.notes.path }).document;
+  f.manifest.archiveArtifacts = [artifact({ role: "notes", path: document.path })];
+  f.manifest.currentStage = "archive"; f.manifest.nextStage = null; f.manifest.completedStages = ["notes"];
+  f.write("legacy.json", f.manifest);
+  const result = finalize(manifestPath, path.join(f.root, "storage.json"), repository);
+  assert.equal(result.storageReceipt.quality.qualityStatus, "legacy-unverified");
+  assert.equal(result.storageReceipt.quality.notes.sha256, f.notes.sha256);
+  assert.equal(fs.readFileSync(f.notes.path, "utf8"), "#### 访谈纪要\n\n嘉宾表示，公司处于研发阶段，尚无收入。\n");
+});
 
 test("context resolves full transitive rule files once, selects exclusive research mode and detects version changes", t => {
   const f = fixture(t);

@@ -63,6 +63,38 @@ function transcriptResult(fileId, fileName, outDir) {
   return { fileId, fileName, rawPath, mdPath };
 }
 
+function makeNotesQuality(fileId, notesPath) {
+  const { artifact } = require('../../../scripts/domi-workflow.cjs');
+  const { prepareNotesCoverage } = require('../../../scripts/notes-coverage.cjs');
+  const transcriptPath = path.join(sandbox, `${fileId}-source.txt`);
+  fs.writeFileSync(transcriptPath, '团队有三人。\n产品已开始付费试点。\n');
+  fs.writeFileSync(notesPath, '#### 交流纪要\n#### 一、团队背景\n- 团队有三人，产品已开始付费试点。\n');
+  const source = artifact({ sourceId: 'current', role: 'current_transcript', path: transcriptPath });
+  const index = { schema: 'asr.evidence-index.v1', workflowRunId: fileId, mode: 'A', notesScope: 'current_session',
+    transcript: source, sources: [source], claims: [{ claimId: 'c1', category: 'product', subject: '示例公司',
+      statement: '团队有三人，产品已开始付费试点。', status: 'company_attributed',
+      sourceRefs: [{ sourceId: 'current', lines: [1, 3] }],
+      notesRefs: [{ lines: [3, 3], quote: '团队有三人，产品已开始付费试点。' }] }], unresolved: [] };
+  const coverage = prepareNotesCoverage({ workflowRunId: fileId, sources: index.sources });
+  for (const source of coverage.sources) for (const segment of source.segments) {
+    segment.review = { status: 'reviewed', reviewer: 'model', claimIds: ['c1'], exclusions: [] };
+  }
+  const coveragePath = path.join(sandbox, `${fileId}-coverage.json`);
+  fs.writeFileSync(coveragePath, JSON.stringify(coverage));
+  index.coverage = artifact({ role: 'source_coverage', path: coveragePath });
+  const evidenceIndexPath = path.join(sandbox, `${fileId}-evidence.json`);
+  fs.writeFileSync(evidenceIndexPath, JSON.stringify(index));
+  const qa = { schema: 'asr.qa-receipt.v1', workflowRunId: fileId, mode: 'A', reviewer: 'model',
+    notes: artifact({ role: 'notes', path: notesPath }), evidenceIndex: artifact({ path: evidenceIndexPath }),
+    checks: { transcript_traceability: 'passed', entity_verification: 'passed', number_audit: 'passed',
+      completeness: 'passed', attribution: 'passed', markdown_rendering: 'passed', editorial: 'passed',
+      source_manifest: 'passed', education: 'not_applicable', career_model_work: 'not_applicable',
+      material_verification: 'not_applicable', pending_items: 'not_applicable' }, overall: 'passed', materialConflicts: [] };
+  const qaReceiptPath = path.join(sandbox, `${fileId}-qa.json`);
+  fs.writeFileSync(qaReceiptPath, JSON.stringify(qa));
+  return { transcriptPath, coveragePath, evidenceIndexPath, qaReceiptPath };
+}
+
 test.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 test('PLAUD media tools prefer a validated domi-bundled executable', () => {
@@ -1465,6 +1497,52 @@ test('discussion_complete binds both notes and brief hashes and verify detects l
   assert.match(JSON.parse(tampered.stdout).error, /brief file changed/);
 });
 
+test('new notes require real source coverage and stale body references cannot be attested away', () => {
+  const { artifact } = require('../../../scripts/domi-workflow.cjs');
+  const fileId = 'coverage-gate';
+  const notesPath = path.join(sandbox, `${fileId}-notes.md`);
+  const quality = makeNotesQuality(fileId, notesPath);
+  __test.updateRecord(__test.loadState(), fileId, { stage: 'context_ready', transcriptPath: quality.transcriptPath });
+  const before = fs.readFileSync(path.join(process.env.DOMI_PLAUD_STATE_DIR, 'plaud-workflow.json'));
+  const mark = (metadata) => spawnSync(process.execPath, [scriptPath, 'mark', fileId, 'notes_non_project', notesPath, JSON.stringify(metadata)], {
+    encoding: 'utf8', env: process.env,
+  });
+  const missing = mark({});
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr + missing.stdout, /notesQuality/);
+  assert.deepEqual(fs.readFileSync(path.join(process.env.DOMI_PLAUD_STATE_DIR, 'plaud-workflow.json')), before);
+
+  const originalIndex = fs.readFileSync(quality.evidenceIndexPath);
+  const originalQa = fs.readFileSync(quality.qaReceiptPath);
+  const index = JSON.parse(originalIndex);
+  index.claims[0].notesRefs[0].quote = '正文根本没有这个事实';
+  fs.writeFileSync(quality.evidenceIndexPath, JSON.stringify(index));
+  const qa = JSON.parse(originalQa);
+  qa.evidenceIndex = artifact({ path: quality.evidenceIndexPath });
+  fs.writeFileSync(quality.qaReceiptPath, JSON.stringify(qa));
+  const fake = mark({ notesQuality: quality });
+  assert.equal(fake.status, 1);
+  assert.match(fake.stderr + fake.stdout, /quote|摘录|notesRef/i);
+  assert.deepEqual(fs.readFileSync(path.join(process.env.DOMI_PLAUD_STATE_DIR, 'plaud-workflow.json')), before);
+  fs.writeFileSync(quality.evidenceIndexPath, originalIndex);
+  fs.writeFileSync(quality.qaReceiptPath, originalQa);
+
+  const accepted = mark({ notesQuality: quality });
+  assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+  const verify = () => spawnSync(process.execPath, [scriptPath, 'verify', fileId], { encoding: 'utf8', env: process.env });
+  const valid = verify();
+  assert.equal(valid.status, 0, valid.stderr || valid.stdout);
+  assert.equal(JSON.parse(valid.stdout).checks.notesAudit, 'passed');
+  fs.appendFileSync(quality.coveragePath, ' ');
+  assert.equal(verify().status, 1);
+
+  const legacyId = 'legacy-non-project-coverage';
+  __test.updateRecord(__test.loadState(), legacyId, { stage: 'notes_non_project', notesPath });
+  const legacy = spawnSync(process.execPath, [scriptPath, 'verify', legacyId], { encoding: 'utf8', env: process.env });
+  assert.equal(legacy.status, 0);
+  assert.equal(JSON.parse(legacy.stdout).checks.notesAudit, 'legacy-unverified');
+});
+
 test('documented accepts verified receipts for both locked repository backends', () => {
   const notesAudit = {
     status: 'passed',
@@ -1493,14 +1571,14 @@ test('documented accepts verified receipts for both locked repository backends',
 
   function prepareReviewed(fileId) {
     const state = __test.loadState();
-    __test.updateRecord(state, fileId, { stage: 'context_ready' });
     const notesPath = path.join(sandbox, `${fileId}-notes.md`);
     const reviewPath = path.join(sandbox, `${fileId}-review.md`);
-    fs.writeFileSync(notesPath, '# Notes\n', { mode: 0o600 });
+    const notesQuality = makeNotesQuality(fileId, notesPath);
+    __test.updateRecord(state, fileId, { stage: 'context_ready', transcriptPath: notesQuality.transcriptPath });
     fs.writeFileSync(reviewPath, '# Review\n', { mode: 0o600 });
     const notesMarked = spawnSync(process.execPath, [
       scriptPath, 'mark', fileId, 'notes_project', notesPath,
-      JSON.stringify({ notesAudit }),
+      JSON.stringify({ notesAudit, notesQuality }),
     ], { encoding: 'utf8', env: process.env });
     assert.equal(notesMarked.status, 0, notesMarked.stderr || notesMarked.stdout);
     const reviewed = spawnSync(process.execPath, [
