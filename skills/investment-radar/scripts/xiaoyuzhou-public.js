@@ -318,7 +318,14 @@ async function downloadPublicEpisode(episodeUrl, outputPath, options = {}) {
   try {
     await pipeline(Readable.fromWeb(response.body), limiter, target);
   } catch (error) {
-    target.destroy();
+    // Opening a WriteStream is asynchronous. Wait for close before deleting a
+    // rejected payload, otherwise its pending open can recreate the .part file.
+    if (!target.closed) {
+      await new Promise((resolve) => {
+        target.once("close", resolve);
+        target.destroy();
+      });
+    }
     if (
       new Set([
         "XIAOYUZHOU_AUDIO_TOO_LARGE",

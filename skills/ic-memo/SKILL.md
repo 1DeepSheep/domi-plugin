@@ -31,7 +31,7 @@ description: 以投资总监视角，根据项目材料（datapack、创始人�
 
 ## 输出框架
 
-**严格按以下结构输出。用户可在使用时指定补充板块，未指定则只输出以下四大板块。**
+**严格按以下结构输出。用户可在使用时指定补充板块，未指定则只输出以下五大板块。**
 
 **字数规则**：
 - 默认目标约 5000 字，用户如有特殊要求以用户为准
@@ -429,3 +429,8 @@ description: 以投资总监视角，根据项目材料（datapack、创始人�
 ## Slides 交接
 
 用户同时要求 IC slides、上会 PPT 或把 memo 做成演示文稿时，先按本 Skill 完成并校验 IC memo、事实来源、关键问题、交易方案、风险与 unresolved 项，再把同一份底稿交给 `$domi:slides`。`$domi:slides` 统一负责故事线、页级合同、外资投行风格、字体、HTML/PDF/PPTX、渲染和 fail-closed QA；不得由本 Skill 或通用 presentations 自行选择模板并绕过它。
+
+
+## 程序结构核验
+
+正式交付前执行 `node <plugin-root>/scripts/domi-workflow.cjs ic-check --path <完整memo.md>`，检查五大板块顺序与文件哈希。机械通过不代表内容质量通过；全部证据、关键问题、投资判断、风险与文字审核继续由模型完成。进入后续归档时按 [程序化交接](../domi-router/references/programmatic-tools.md) 保存绑定产物哈希的模型 QA，不得通过标题关键词伪造语义通过。

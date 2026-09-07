@@ -48,6 +48,10 @@ domi 不提供启动本机麦克风录音的工作流；不得调用 `mac-record
 
 用户明确要求“把文件发我／给我下载／提供 PDF、PPTX、Markdown、文字稿或报告附件”时，完整读取并执行 [跨客户端真实附件交付](references/artifact-delivery.md)。交付物必须是已验证的真实文件引用；普通路径、来源链接或把内部文件指令打印成文本都不算交付成功。
 
+## 程序化执行入口
+
+多阶段任务必须使用 [程序化交接与质量工具](references/programmatic-tools.md) 的 `context → artifact → save/inspect → finalize`，不要手写哈希、凭聊天重建状态或自行拼成功回执。模型仍负责意图、实体、授权范围、证据与语义 QA；工具只执行确定性检查。
+
 ## 工作流选择
 
 | 用户目标 | 模式与主链路 | 按需读取 |
