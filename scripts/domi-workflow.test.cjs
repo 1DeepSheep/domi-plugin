@@ -22,7 +22,7 @@ function fixture(t) {
 function notesFixture(t) {
   const f = fixture(t), run = "podcast:job-1";
   const transcript = artifact({ role: "transcript", stage: "notes", path: f.write("transcript.txt", "00:00:01 嘉宾：公司仍处于研发阶段。\n00:00:02 我们还没有收入。\n") });
-  const notes = artifact({ role: "notes", stage: "notes", path: f.write("notes.md", "# 访谈纪要\n\n嘉宾表示，公司处于研发阶段，尚无收入。\n") });
+  const notes = artifact({ role: "notes", stage: "notes", path: f.write("notes.md", "#### 访谈纪要\n\n嘉宾表示，公司处于研发阶段，尚无收入。\n") });
   const index = { schema: "asr.evidence-index.v1", workflowRunId: run, notesScope: "current_session", mode: "B",
     transcript, sources: [{ ...transcript, sourceId: "source-1", role: "current_transcript" }],
     claims: [{ claimId: "claim-1", statement: "公司尚无收入", sourceRefs: [{ sourceId: "source-1", lines: [2, 2], quote: "还没有收入" }] }] };
@@ -71,6 +71,15 @@ test("evidence mechanically checks hashes and locators while requiring separate 
   assert.throws(() => evidenceCheck(f.index, blocked), /missing\/blocked/);
   fs.appendFileSync(f.notes.path, "事实更正\n");
   assert.throws(() => evidenceCheck(f.index, f.qa), /Artifact changed/);
+});
+
+test("ASR evidence rejects malformed notes even when a model receipt claims rendering passed", t => {
+  const f = notesFixture(t);
+  const bad = "# 访谈纪要\n\n## 团队背景\n- 两位成员。\n## 产品与技术\n- 自研引擎。\n";
+  const notes = artifact({ role: "notes", path: f.write("bad-notes.md", bad) });
+  const qa = { ...f.qa, notes };
+  assert.throws(() => evidenceCheck(f.index, qa), /纪要格式未通过/);
+  assert.equal(fs.readFileSync(notes.path, "utf8"), bad, "checking must not silently change reviewed bytes");
 });
 
 test("handoff rejects incomplete stages and stale writers, preserves artifacts across execution rebind and invalidates dependent stages", t => {

@@ -60,6 +60,8 @@ rebind 只更新 executionRunId 并清除旧执行成功回执；不会扩大授
 
 ## 3. 机械与语义 QA 分工
 
+ASR最终纪要先按[格式检查流程](../../asr-notes/references/format-validation.md)执行 `notes-format.cjs format` 和 `check`，再生成证据索引、QA与artifact哈希。检查 H4/H5 与主板块分隔线；不套用到原始转写、研究、快评或IC。格式程序不能补造事实或代替全文语义审核。
+
 ASR 必须使用 `asr.evidence-index.v1` 和 `asr.qa-receipt.v1` 的完整合同，通过 `evidence-check --index <json> --qa <json>` 校验文件、来源定位和已执行审核项。不能把程序的 mechanicalChecksPassed 写成模型已经审核。
 
 其他语义阶段完成后，模型实际执行完整 Skill QA，并保存：
