@@ -52,6 +52,8 @@ jobs:
       - name: Run plugin tests
         run: |
           node scripts/domi-repo.test.cjs
+          node scripts/domi-workflow.test.cjs
+          node scripts/process-lock.test.cjs
           node scripts/asr-notes-skill.test.cjs
           node scripts/financing-fields.test.cjs
           node scripts/intake-time-fields.test.cjs
@@ -61,6 +63,7 @@ jobs:
           node scripts/plugin-routing-contracts.test.cjs
           node scripts/investment-review-skill.test.cjs
           node scripts/schedule-skill.test.cjs
+          node scripts/schedule-validation.test.cjs
           node scripts/todo-ledger.test.cjs
           node scripts/compact-workflows.test.cjs
           node scripts/podcast-workflow.test.cjs
@@ -95,7 +98,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --commit "$GITHUB_SHA" \
             --tag "${{ steps.metadata.outputs.tag }}" \
-            --min-client-version "0.6.50"
+            --min-client-version "7.0.0"
 
       - name: Publish immutable plugin release
         env:

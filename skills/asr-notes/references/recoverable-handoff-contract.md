@@ -106,3 +106,16 @@ checkedAt: ISO-8601
 接收或恢复阶段先校验schema、`workflowRunId`、路径和哈希，再按当前阶段Skill完整读取规范产物及所需原始材料。哈希不一致、文件缺失或关键claim冲突时，从最后可信checkpoint定点恢复；禁止用聊天摘要重建事实，也禁止通过降低证据或QA标准继续。
 
 默认用户交付仍只显示纪要文件和必要结论。只有用户要求审计附件或存在必须确认的实质冲突时，才展示sidecar或其摘要。
+
+
+## 程序核验入口
+
+证据索引与 QA 回执统一使用 JSON（避免模型手工维护 YAML 转义）。`sourceRefs` 推荐增加 `lines:[起始行,结束行]` 与可选原文 `quote`；保留原 `locator`，脚本支持真实时间戳或 `L1-L3`。`verification_only` 的校正明确给 `existingClaimId`，历史材料给与主实体一致的 `entityFingerprint`。模型仍需全文核验覆盖、归因与可读性，存在有效 locator 不等于事实成立。
+
+每次完成／修正后调用：
+
+```bash
+node <plugin-root>/scripts/domi-workflow.cjs evidence-check --index <evidence-index.json> --qa <qa-receipt.json>
+```
+
+工具实际回读源文件、纪要和索引，检查 schema、hash、字节数、sourceId、定位范围、来源角色和语义审核项是否完整。`mechanicalChecksPassed` 仅代表机械校验，不能替代模型检查；工具不会根据关键词判断 completeness。成功后将四类 artifact 用 `artifact` 命令登记，以 `save` 更新 manifest。完整流程见 [程序化交接](../../domi-router/references/programmatic-tools.md)。
