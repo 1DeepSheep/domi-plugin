@@ -110,6 +110,8 @@ checkedAt: ISO-8601
 
 ## 程序核验入口
 
+先执行[程序化格式检查](format-validation.md)，以格式化后的最终纪要建立 `notesLocation`、证据索引及QA哈希。`evidence-check` 会再次读取正文检查标题与分隔线，不能靠手写 `markdown_rendering: passed` 绕过。修改已审核文件时保留旧产物并重建对应版本的审核绑定。
+
 证据索引与 QA 回执统一使用 JSON（避免模型手工维护 YAML 转义）。`sourceRefs` 推荐增加 `lines:[起始行,结束行]` 与可选原文 `quote`；保留原 `locator`，脚本支持真实时间戳或 `L1-L3`。`verification_only` 的校正明确给 `existingClaimId`，历史材料给与主实体一致的 `entityFingerprint`。模型仍需全文核验覆盖、归因与可读性，存在有效 locator 不等于事实成立。
 
 每次完成／修正后调用：

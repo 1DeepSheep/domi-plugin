@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { stableJson } = require("../skills/todo/scripts/todo-ledger.js");
 const { acquireProcessLock } = require("./process-lock.cjs");
+const { checkNotesFormat } = require("./notes-format.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const HASH = /^[a-f0-9]{64}$/;
@@ -22,6 +23,11 @@ const sha256 = value => crypto.createHash("sha256").update(value).digest("hex");
 function assert(condition, message) { if (!condition) throw new Error(message); }
 function readJson(file) { return JSON.parse(fs.readFileSync(file, "utf8")); }
 function nonempty(value) { return typeof value === "string" && Boolean(value.trim()); }
+function notesFormatCheck(file, mode = "auto") {
+  const report = checkNotesFormat(fs.readFileSync(file, "utf8"), { profile: "structured-notes", mode });
+  assert(report.ok, `纪要格式未通过：文档/主板块须为四级标题，子标题为五级，主板块之间须有独立分隔线。先运行 notes-format.cjs format，再更新证据索引与QA。${report.error || JSON.stringify(report.issues || [])}`);
+  return { ...report, path: file, mechanicalChecksPassed: true, semanticReviewRequired: true };
+}
 function artifact(value) {
   assert(value && path.isAbsolute(value.path || ""), "Artifact path must be absolute");
   const stat = fs.lstatSync(value.path);
@@ -136,6 +142,9 @@ function completedStageChecks(manifest) {
     assert(stage.ruleBundleSha256 === expectedRules.bundleSha256, `Stage rules changed or were not fully resolved: ${name}`);
     for (const role of stage.requiredRoles) assert(manifest.artifacts.some(file => file.role === role), `Missing ${name} artifact role: ${role}`);
     if (SEMANTIC_SKILLS.has(stage.skill)) {
+      if (stage.skill === "asr-notes") {
+        for (const file of manifest.artifacts.filter(item => item.role === "notes" && (!item.stage || item.stage === name))) notesFormatCheck(file.path);
+      }
       const receipt = manifest.artifacts.find(file => file.role === "qa_receipt" && file.stage === name);
       assert(receipt, `Completed semantic stage ${name} requires a model QA receipt`);
       const qa = readJson(receipt.path);
@@ -304,6 +313,7 @@ function evidenceCheck(index, qa = null) {
   if (qa) {
     assert(qa.schema === "asr.qa-receipt.v1" && qa.workflowRunId === index.workflowRunId, "ASR receipt schema/run mismatch");
     verifyArtifact(qa.notes);
+    notesFormatCheck(qa.notes.path);
     assert(HASH.test(qa.evidenceIndex?.sha256 || "") && sha256(fs.readFileSync(qa.evidenceIndex.path)) === qa.evidenceIndex.sha256, "Evidence index receipt hash mismatch");
     const required = ["transcript_traceability", "entity_verification", "number_audit", "completeness", "attribution", "markdown_rendering"];
     assert(qa.overall === "passed" && required.every(key => qa.checks?.[key] === "passed"), "ASR semantic QA missing/blocked");
@@ -419,6 +429,7 @@ function main() {
   else if (command === "rebind") result = rebindManifest(flags.manifest, flags["execution-run-id"], flags["expected-hash"]);
   else if (command === "invalidate") result = invalidateManifest(flags.manifest, flags.stage, flags.reason, flags["expected-hash"]);
   else if (command === "evidence-check") result = evidenceCheck(readJson(flags.index), flags.qa ? readJson(flags.qa) : null);
+  else if (command === "notes-check") result = notesFormatCheck(flags.path, flags.mode || "auto");
   else if (command === "ic-check") result = icStructureCheck(flags.path);
   else if (command === "finalize") {
     const { DomiRepository, readConfig } = require("./domi-repo.cjs");
@@ -426,10 +437,10 @@ function main() {
     assert(fs.existsSync(config.databasePath), "Finalization cannot initialize a missing repository");
     const repository = new DomiRepository(config);
     try { result = finalize(flags.manifest, flags.receipt, repository); } finally { repository.close(); }
-  } else throw new Error("Usage: domi-workflow.cjs context|artifact|inspect|save|evidence-check|ic-check|finalize --flag value");
+  } else throw new Error("Usage: domi-workflow.cjs context|artifact|inspect|save|evidence-check|notes-check|ic-check|finalize --flag value");
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (result.ok === false) process.exitCode = 1;
 }
 
 if (require.main === module) { try { main(); } catch (error) { process.stdout.write(`${JSON.stringify({ ok: false, error: error.message })}\n`); process.exitCode = 1; } }
-module.exports = { artifact, verifyArtifact, atomicJson, contextBundle, validateManifest, inspectManifest, saveManifest, checkpointManifest, rebindManifest, invalidateManifest, evidenceCheck, icStructureCheck, finalize };
+module.exports = { artifact, verifyArtifact, atomicJson, contextBundle, validateManifest, inspectManifest, saveManifest, checkpointManifest, rebindManifest, invalidateManifest, evidenceCheck, notesFormatCheck, icStructureCheck, finalize };
