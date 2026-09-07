@@ -582,7 +582,7 @@ test("person records keep one homepage and archive research plus interaction doc
     ownerId: created.person.id,
     kind: "交流纪要",
     title: "20260803-电话沟通",
-    content: "# 电话沟通\n"
+    content: "#### 电话沟通\n- 讨论合作安排。\n"
   });
   assert.match(document.document.path, /纪要\/20260803-电话沟通\.md$/);
   const research = repository.createDocument({
@@ -601,6 +601,23 @@ test("person records keep one homepage and archive research plus interaction doc
     ["交流纪要:20260803-电话沟通", "研究:20260803-张三-人物研究"].sort()
   );
   assert.equal(fs.existsSync(person.documents[0].path), true);
+});
+
+test("formal notes reject bad headings and missing rules before any archive write", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const project = repository.upsertProject({ name: "格式校验示例" }).project;
+  const input = { ownerType: "project", ownerId: project.id, kind: "纪要", title: "合成交流纪要" };
+  const good = "#### 合成交流纪要\n参会人：张某\n#### 团队背景\n- 两位成员。\n\n---\n\n#### 产品与技术\n- 自研引擎。\n";
+  const created = repository.createDocument({ ...input, content: good });
+  const before = repository.database.prepare("SELECT * FROM documents WHERE id=?").get(created.document.id);
+  for (const content of [good.replace(/####/g, "##"), good.replace("\n\n---\n\n", "\n")]) {
+    assert.throws(() => repository.createDocument({ ...input, content }), error => error.code === "DOMI_NOTES_FORMAT_INVALID");
+    assert.equal(fs.readFileSync(created.document.path, "utf8"), good);
+    assert.deepEqual(repository.database.prepare("SELECT * FROM documents WHERE id=?").get(created.document.id), before);
+  }
+  const raw = repository.createDocument({ ...input, kind: "PLAUD文字稿", title: "原始文字稿", content: "# 原始文字稿\n00:01 Speaker 1\n原话\n" });
+  assert.match(fs.readFileSync(raw.document.path, "utf8"), /^# 原始文字稿/);
 });
 
 test("person upsert can persist the full research document in the same intake", (t) => {
