@@ -95,8 +95,8 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - `transcript_ready`：文字稿已下载，尚未向用户询问对话背景和参会人。
 - `context_pending`：已发送文字稿回忆提示，等待用户补充或明确跳过。
 - `context_ready`：用户已提供具体信息，或未提供具体信息并选择继续；等待整理纪要。
-- `notes_project`：已生成创业项目/创始人交流纪要，且实体、数字、核心成员学历、履历、职级和模型工作证据审计声明已通过，等待投资评分。CLI 校验审计声明的必填字段，并把它绑定到纪要文件 SHA-256；它能阻止纪要被替换或绕过阶段，但不能替代对底层来源的人工/模型核验。
-- `notes_non_project`：非项目纪要，流程结束。
+- `notes_project`：项目纪要已完成实体、数字、学历、履历、模型归因、完整性和编辑审查，等待投资评分。新标记必须提交`notesAudit`与`notesQuality:{evidenceIndexPath,qaReceiptPath}`；CLI检查当前队列文字稿的全源覆盖、实际正文摘录和哈希绑定。它不能代替模型判断事实与语义。详见[命令与示例](references/commands.md)。
+- `notes_non_project`：非项目纪要，流程结束；新标记同样必须提供`notesQuality`，不因非项目分类跳过内容质量检查。
 - `reviewed`：投资快评已完成，评分/评级及学历、履历、模型归因一致性声明已绑定到快评文件哈希，等待写入当前锁定资料库后端的结构化记录、主文档与材料目录。
 - `documented`：当前锁定后端的主文档、材料目录和结构化项目记录已写后验证，等待最终闭环标记；`storageReceipt.backend` 必须保持 `local` 或 `legacy_feishu_primary`，历史队列沿用原始后端恢复，不能顺带迁移。
 - `managed`：当前锁定资料库后端的结构化记录、主文档与材料目录闭环完成。本地主库下，飞书已连接时可由 Router 围绕当前实体做非阻塞只读参考；飞书副本只有本轮用户明确要求且受控导出成功时才另行记录，不影响本阶段。没有本轮飞书写指令时不得调用导出交接，也不得把副本缺失列为待处理或未完成。
