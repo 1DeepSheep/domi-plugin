@@ -73,3 +73,10 @@ updatedAt: ISO-8601
 5. 保留旧 artifact 的路径和哈希形成可审计链，不覆盖不同版本。
 
 任何校验失败都不得通过降低证据标准、缩短交付物、跳过 QA、切换模型／推理强度或重做整个工作流来掩盖。先从最后可信 checkpoint 定点恢复；恢复仍不能满足完整规则时，停止并报告具体缺口。
+
+
+## 可执行合同
+
+上述合同现在由 `<plugin-root>/scripts/domi-workflow.cjs` 执行，完整命令与 JSON 输入见 [程序化工具](programmatic-tools.md)。首次创建、阶段推进、失败恢复均调用工具；`inspect` 返回失败时禁止继续消费失效产物。每个 artifact 额外记录 `stage`，每个阶段在 `stagePlan` 注册 `name/skill/mode/requiredRoles/ruleBundleSha256`。规则依赖哈希由 `context` 返回，不能自行编造。
+
+`workflowRunId` 在同一任务的重试中保持不变；播客固定为 `podcast:<jobId>`。`executionRunId` 是当前客户端 claim ID，重新执行前先 `inspect`，再以回读的 manifest 哈希调用 `rebind`；旧成功回执不能证明新执行已完成。`invalidate` 只撤销指定阶段及其依赖阶段、保存旧产物元数据与失败点，不能重写实体或扩大授权。事实修正使用新的版本路径，保留旧版本。

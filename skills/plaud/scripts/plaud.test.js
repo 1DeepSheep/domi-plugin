@@ -549,7 +549,86 @@ test('PLAUD recognizes an explicit login page without exposing page contents', a
   assert.equal(await pageShowsPlaudLogin({ evaluate: async () => { throw new Error('closed'); } }), false);
 });
 
-test('PLAUD automatically reloads an intact session before asking the user to log in', async () => {
+test('PLAUD lets an eight-second cold session finish within the full authorization budget', async () => {
+  let clock = 0;
+  let navigationStartedAt = 0;
+  let reloads = 0;
+  const client = {
+    authorization: null,
+    browserLabel: 'Tabbit',
+    headless: true,
+    loginTimeoutMs: 12000,
+    page: {
+      isClosed: () => false,
+      evaluate: async () => false,
+      reload: async () => {
+        reloads += 1;
+        navigationStartedAt = clock;
+      },
+    },
+  };
+  const connected = await waitForPlaudAuthorization(client, {
+    now: () => clock,
+    pause: async (delay) => {
+      clock += delay;
+      if (clock - navigationStartedAt >= 8000) client.authorization = 'fixture';
+    },
+  });
+  assert.equal(connected, true);
+  assert.equal(clock, 8000);
+  assert.equal(reloads, 0);
+});
+
+test('PLAUD bounds an explicitly shorter probe and its reload by one total deadline', async () => {
+  let clock = 0;
+  const reloadTimeouts = [];
+  const client = {
+    authorization: null,
+    browserLabel: 'Tabbit',
+    headless: true,
+    loginTimeoutMs: 2000,
+    page: {
+      isClosed: () => false,
+      evaluate: async () => false,
+      reload: async ({ timeout }) => {
+        reloadTimeouts.push(timeout);
+        clock += 1000;
+      },
+    },
+  };
+  await assert.rejects(waitForPlaudAuthorization(client, {
+    attemptTimeoutMs: 1000,
+    now: () => clock,
+    pause: async (delay) => { clock += delay; },
+  }), /PLAUD_SESSION_PROBE_INCOMPLETE/);
+  assert.equal(clock, 2000);
+  assert.deepEqual(reloadTimeouts, [1000]);
+});
+
+test('PLAUD preserves the longer visible-login budget without a background reload', async () => {
+  let clock = 0;
+  const client = {
+    authorization: null,
+    browserLabel: 'Chrome',
+    headless: false,
+    loginTimeoutMs: 10 * 60 * 1000,
+    page: {
+      isClosed: () => false,
+      evaluate: async () => false,
+      reload: async () => { throw new Error('visible login must not be reloaded'); },
+    },
+  };
+  assert.equal(await waitForPlaudAuthorization(client, {
+    now: () => clock,
+    pause: async (delay) => {
+      clock += delay;
+      if (clock >= 16000) client.authorization = 'fixture';
+    },
+  }), true);
+  assert.equal(clock, 16000);
+});
+
+test('PLAUD can reload within an explicitly shortened probe without asking the user to log in', async () => {
   let clock = 0;
   let reloads = 0;
   const client = {

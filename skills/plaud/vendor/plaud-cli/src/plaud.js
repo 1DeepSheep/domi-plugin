@@ -1002,13 +1002,17 @@ async function waitForPlaudAuthorization(client, options = {}) {
   const totalTimeoutMs = Math.max(1000, Number(client.loginTimeoutMs) || 12000);
   const attemptTimeoutMs = Math.max(
     1000,
-    Number(options.attemptTimeoutMs) || Math.floor(totalTimeoutMs / attempts),
+    Number(options.attemptTimeoutMs) || totalTimeoutMs,
   );
   const now = options.now || Date.now;
   const pauseImpl = options.pause || ((delay) => client.page.waitForTimeout(delay));
+  const totalDeadline = now() + totalTimeoutMs;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const deadline = now() + attemptTimeoutMs;
+    // A cold PLAUD page may need more than half of the authorization budget.
+    // Let it finish before reloading; a reload restarts its pending renewal.
+    // Explicit shorter probes may retry, but navigation shares the same budget.
+    const deadline = Math.min(totalDeadline, now() + attemptTimeoutMs);
     while (!client.authorization && now() < deadline) {
       if (client.page.isClosed()) {
         throw new Error(`${client.browserLabel} PLAUD login window was closed.`);
@@ -1019,17 +1023,22 @@ async function waitForPlaudAuthorization(client, options = {}) {
     if (await pageShowsPlaudLogin(client.page)) {
       throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${client.browserLabel}.`);
     }
-    if (attempt + 1 < attempts) {
+    if (attempt + 1 < attempts && now() < totalDeadline) {
       try {
-        await client.page.reload({ waitUntil: 'commit', timeout: 12000 });
+        await client.page.reload({
+          waitUntil: 'commit',
+          timeout: Math.max(1, totalDeadline - now()),
+        });
       } catch (error) {
         if (!isTransientPlaudNavigationError(error)) throw error;
+        if (now() >= totalDeadline) break;
         await navigatePlaudWithRetry(client.page, PLAUD_LOGIN_URL, {
-          attempts: 2,
-          timeout: 12000,
+          attempts: 1,
+          timeout: Math.max(1, totalDeadline - now()),
         });
       }
     }
+    if (now() >= totalDeadline) break;
   }
   throw new Error('PLAUD_SESSION_PROBE_INCOMPLETE: PLAUD account page opened, but its authorization request was not observed.');
 }

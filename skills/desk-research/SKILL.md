@@ -148,3 +148,10 @@ description: 一级市场（VC/PE）和二级市场（公开股票）投资的�
 - 上游：`investment-mgmt`（从本地项目库取待研究项目）。
 - 下游：研究底稿 → `ic-memo`（一级 IC memo）/ `bigdata-com:investment-memo`（二级）/ `deal-negotiation`（进入谈判）/ `$domi:slides`（任何 slides、PPT、deck 或演示文稿交付）。
 - 平行：`product-deep-research`（一级产品深挖）、`daloopa:*` 与 `bigdata-com:*`（二级建模与数据）。
+
+
+## 研究证据的程序复用
+
+多阶段或可恢复研究把 Claim Ledger 保存为 `domi.research-evidence.v1` JSON（workflowRunId、entityFingerprint、sources、claims），sources 登记原始文件 path/sha256/bytes/sourceId/asOfDate/url，claims 使用唯一 claimId、原披露 statement 与 sourceRefs 的真实行号／时间戳。沿用 [程序工具](../domi-router/references/programmatic-tools.md) 的 `artifact` 与 `evidence-check`；角色、来源、口径、独立性和冲突继续由模型审核，程序不会把缓存命中认证为事实仍有效。
+
+接续研究／评级／入库先 `inspect`，复用哈希未变的完整报告、证据索引与来源文件；只补用户要求的增量与需重新核验的时效事实。修正后存新版本、重新语义 QA 并保存 manifest；不得靠哈希复用跳过原文阅读或联网核验。
