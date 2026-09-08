@@ -321,6 +321,16 @@ function fmtMs(ms) {
   return [h, m, s].map((v, i) => (i === 0 ? String(v) : String(v).padStart(2, '0'))).join(':');
 }
 
+function utf8Prefix(value, maxBytes) {
+  let result = '', bytes = 0;
+  for (const character of String(value)) {
+    const size = Buffer.byteLength(character, 'utf8');
+    if (bytes + size > maxBytes) break;
+    result += character; bytes += size;
+  }
+  return result;
+}
+
 function renderTranscript(items, title) {
   const lines = ['# ' + title, ''];
   for (const item of items) {
@@ -1216,6 +1226,7 @@ class PlaudClient {
   async apiOnce(pathname, options = {}) {
     const method = options.method || 'GET';
     const data = options.data;
+    const timeoutMs = Math.max(1, Math.min(this.apiTimeoutMs, Number(options.timeoutMs) || this.apiTimeoutMs));
     const url = pathname.startsWith('http') ? pathname : `${this.apiBase}${pathname}`;
     const headers = {
       accept: 'application/json, text/plain, */*',
@@ -1253,7 +1264,7 @@ class PlaudClient {
             clearTimeout(timer);
           }
         },
-        { url, method, headers, data, timeoutMs: this.apiTimeoutMs }
+        { url, method, headers, data, timeoutMs }
       );
     } catch (error) {
       if (/PLAUD API request timed out/i.test(error instanceof Error ? error.message : String(error))) {
@@ -1549,8 +1560,8 @@ class PlaudClient {
     return res.body.data_file_list;
   }
 
-  async getFileDetail(fileId) {
-    const res = await this.api(`/file/detail/${fileId}`);
+  async getFileDetail(fileId, options = {}) {
+    const res = await this.api(`/file/detail/${fileId}`, { timeoutMs: options.timeoutMs });
     if (res.status !== 200 || !res.body || res.body.status !== 0) {
       throw plaudApiError('Get file detail failed', res);
     }
@@ -1695,30 +1706,73 @@ class PlaudClient {
     };
   }
 
-  async downloadTranscript(fileId, outDir) {
-    const detail = await this.getFileDetail(fileId);
+  async downloadTranscript(fileId, outDir, options = {}) {
+    const timeoutMs = Math.max(1, Math.min(this.apiTimeoutMs || 15000, Number(options.timeoutMs) || this.apiTimeoutMs || 15000));
+    const deadline = Date.now() + timeoutMs;
+    let detailTimer;
+    let detail;
+    try {
+      detail = await Promise.race([this.getFileDetail(fileId, { timeoutMs }), new Promise((_, reject) => {
+        detailTimer = setTimeout(() => reject(new Error('PLAUD_NETWORK_TIMEOUT: Transcript detail read timed out')), timeoutMs);
+      })]);
+    } finally { clearTimeout(detailTimer); }
     const transcriptMeta = detail.content_list.find((x) => x.data_type === 'transaction');
     if (!transcriptMeta) {
-      throw new Error(`Transcript not found for file ${fileId}`);
+      const error = new Error(`Transcript not found for file ${fileId}`);
+      error.code = 'PLAUD_TRANSCRIPT_NOT_READY';
+      error.remoteProcessing = Boolean(detail.wait_pull || detail.content_list.some(item => item.task_status === 0));
+      throw error;
     }
-    const resp = await fetch(transcriptMeta.data_link);
-    if (!resp.ok) {
-      throw new Error(`Transcript download failed: ${resp.status} ${resp.statusText}`);
+    // The same budget covers headers and the complete response body. A
+    // stalled external transcript URL must not outlive the sync deadline.
+    const controller = new AbortController();
+    const remaining = Math.max(1, deadline - Date.now());
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error('PLAUD_NETWORK_TIMEOUT: Transcript download timed out'));
+      }, remaining);
+    });
+    let rawText;
+    try {
+      rawText = await Promise.race([timeout, (async () => {
+        const resp = await fetch(transcriptMeta.data_link, { signal: controller.signal });
+        if (!resp.ok) throw new Error(`Transcript download failed: ${resp.status} ${resp.statusText}`);
+        return resp.text();
+      })()]);
+    } finally { clearTimeout(timer); }
+    let items;
+    try { items = JSON.parse(rawText); } catch {
+      const error = new Error('PLAUD_TRANSCRIPT_INVALID: Transcript response is not complete valid JSON');
+      error.code = 'PLAUD_TRANSCRIPT_INVALID'; throw error;
     }
-    const rawText = await resp.text();
-    const items = JSON.parse(rawText);
+    if (!Array.isArray(items) || items.some(item => !item || typeof item !== 'object' || Array.isArray(item)
+      || typeof (item.content || item.text || item.transcript || '') !== 'string')) {
+      const error = new Error('PLAUD_TRANSCRIPT_INVALID: Transcript response has an unsupported structure');
+      error.code = 'PLAUD_TRANSCRIPT_INVALID'; throw error;
+    }
+    if (!items.some(item => (item.content || item.text || item.transcript || '').trim())) {
+      const error = new Error('PLAUD_TRANSCRIPT_EMPTY: Transcript has no usable text yet');
+      error.code = 'PLAUD_TRANSCRIPT_EMPTY'; throw error;
+    }
 
     fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(outDir, 0o700);
-    const base = safeName(detail.file_name);
+    // New downloads are immutable. Same-title recordings and simultaneous
+    // recoverers must never overwrite an artifact already bound to notes QA.
+    const suffix = `-${utf8Prefix(safeName(fileId), 64)}-${crypto.randomBytes(8).toString('hex')}`;
+    const titleBudget = 240 - Buffer.byteLength(`${suffix}-transcript.json`, 'utf8');
+    const base = `${utf8Prefix(safeName(detail.file_name), titleBudget)}${suffix}`;
     const rawPath = path.join(outDir, `${base}-transcript.json`);
     const mdPath = path.join(outDir, `${base}-transcript.md`);
-
-    fs.writeFileSync(rawPath, rawText, { mode: 0o600 });
-    fs.writeFileSync(mdPath, renderTranscript(items, detail.file_name), { mode: 0o600 });
-    fs.chmodSync(rawPath, 0o600);
-    fs.chmodSync(mdPath, 0o600);
-
+    fs.writeFileSync(rawPath, rawText, { mode: 0o600, flag: 'wx' });
+    try {
+      fs.writeFileSync(mdPath, renderTranscript(items, detail.file_name), { mode: 0o600, flag: 'wx' });
+    } catch (error) {
+      fs.rmSync(rawPath, { force: true });
+      throw error;
+    }
     return { fileId, fileName: detail.file_name, rawPath, mdPath };
   }
 

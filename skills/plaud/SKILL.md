@@ -40,6 +40,10 @@ scripts/plaud.js
 4. 用户明确要求生成或运行 domi 主工作流时，运行 `sync-pending <count> <outDir> [timeoutSec] [pollSec]`。
 5. 使用返回的 `transcriptPath` 生成简短回忆提示，在运行下游 Skill 前确认对话背景和参会人；每完成一阶段就调用 `mark` 更新队列。
 
+批量同步会在提交前持久化状态，确认成功后记录回执。短暂网络错误只重试读取；已提交、提交结果不明或旧版失败记录，均先用原 `fileId` 检查与下载，不因远端列表尚未更新而重复生成。等待超过本轮预算表示仍需后续读取，不代表远端转写失败。恢复成功后保留已经完成的背景确认、纪要与归档阶段。
+
+只恢复上述已有任务时使用 `recover-pending <count> <outDir> [timeoutSec] [pollSec]`。它只检查本地队列中保存的精确录音 ID 并下载已有文字稿，不提交生成，也不会把账户内的新录音带入后台处理。
+
 ## 本地录音上传与转写
 
 用户明确提供已经存在、经过音频校验的 `audioPath` 并要求上传／生成后，运行：
@@ -72,6 +76,7 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - 禁止调用全局 CLI 的 `plaud auth`；它会输出鉴权头。
 - 禁止调用旧版 `plaud pipeline ...`；该流程会自行启动 Codex 并写飞书，不属于 domi 的受控链路。
 - `connection`、`status`、`pending`、`queue`、`verify` 和 `doctor` 是只读操作。
+- `capabilities` 只返回本地命令能力，不访问浏览器或 PLAUD；`recover-pending` 只读取远端并保存已有文字稿，不上传音频或提交生成。
 - `login` 只打开 domi 专用浏览器 Profile 并等待用户亲自登录；不得代填账号密码。`logout` 只删除所选 domi 专用 Profile。
 - 除用户明确触发 `login` 外，CLI 必须通过 macOS 的隐藏后台启动模式运行专用浏览器，不得激活 Chrome／Tabbit 的日常窗口；同一专用 Profile 的命令必须串行执行，禁止通过重复启动生成多个 `Plaud Web` 标签页。
 - `sync-pending` 会在 PLAUD 中触发生成。只有用户明确要求生成、同步或运行 domi 主工作流时才能执行。
@@ -102,7 +107,9 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - `managed`：当前锁定资料库后端的结构化记录、主文档与材料目录闭环完成。本地主库下，飞书已连接时可由 Router 围绕当前实体做非阻塞只读参考；飞书副本只有本轮用户明确要求且受控导出成功时才另行记录，不影响本阶段。没有本轮飞书写指令时不得调用导出交接，也不得把副本缺失列为待处理或未完成。
 - `discussion_notes_ready`：快速讨论的完整纪要已生成，并绑定文字稿、上下文和纪要哈希；等待讨论摘要。
 - `discussion_complete`：完整纪要与讨论摘要均已生成并绑定哈希，快速讨论流程结束。
-- `generation_failed` / `generation_timeout` / `failed`：需要报告并按具体错误恢复。
+- `generation_timeout`：本轮等待已结束，远端仍可能继续处理；稍后只检查和下载，不重新生成。
+- `generation_failed`：新记录表示明确拒绝；旧版本也曾把读取失败写成此阶段，没有确定拒绝证据时按结果不明恢复。
+- `failed`：按具体错误恢复，不得直接标记完成。
 
 禁止把失败项目直接标为完成。账户内已有录音的批处理在重新运行时先处理 `queue`；旧版快速讨论恢复时按其精确 `workflowId` 和音频继续，不先处理无关队列项，也不得启动新录音。
 
