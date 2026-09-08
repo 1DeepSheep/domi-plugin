@@ -14,6 +14,8 @@ node <plaud-cli> pending [limit]
 node <plaud-cli> queue
 node <plaud-cli> verify <fileId>
 node <plaud-cli> sync-pending [count] [outDir] [timeoutSec] [pollSec]
+node <plaud-cli> recover-pending [count] [outDir] [timeoutSec] [pollSec]
+node <plaud-cli> capabilities
 node <plaud-cli> transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow-id ID] [--adopt-file-id ID] [--retry-upload] [--retry-generation]
 node <plaud-cli> download <fileId> [outDir]
 node <plaud-cli> mark <fileId> <stage> [artifactPath|-] [metadataJson]
@@ -29,7 +31,9 @@ node <plaud-cli> mark <fileId> <stage> [artifactPath|-] [metadataJson]
 - `pending`：只返回尚无文字稿且无摘要的录音，字段经过清理，不包含鉴权信息。
 - `queue`：读取 `~/.domi/plaud-workflow.json` 中尚未结束的 domi 处理项。
 - `verify`：只读校验指定队列项的 `notesAudit`、`notesQuality`、`reviewAudit`、评分/评级和已绑定文件SHA-256；新纪要还检查全源分段覆盖与实际正文摘录。旧记录缺少覆盖凭据时显示`legacy-unverified`，不冒充新版内容验证通过；不改写旧记录。失败时输出`ok:false`并以非零状态退出。
-- `sync-pending`：触发最多 `count` 条未生成录音，轮询等待 transcript，下载 JSON 和 Markdown，并写出 manifest。
+- `sync-pending`：触发最多 `count` 条未生成录音，同时恢复已有提交记录，轮询等待 transcript，下载 JSON 和 Markdown，并写出 manifest。提交前持久化状态，已提交或提交结果不明的录音只检查与下载，短暂网络错误有界重试读取，不重复生成。
+- `recover-pending`：只读取本地队列中的未完成录音 ID，补下载已有文字稿，不列举或生成新录音；默认最多 100 条、本轮等待 30 秒、间隔 3 秒。后台恢复使用此命令，不得替换成 `sync-pending`。
+- `capabilities`：只返回命令与结果格式能力，不启动浏览器或访问远端。
 - `transcribe-local`：对一条已校验的本地音频计算 SHA-256；MP3/ASR/Opus 直接上传，其余受支持格式用 domi 内置的离线 FFmpeg 转为单声道 Opus，再按稳定标题去重上传。只针对上传返回的精确 `fileId` 触发生成并下载 transcript。`--workflow-id` 把该音频绑定到快速讨论；不带时为普通 `local_transcription`，也用于上游已校验、已取得单集／信源授权的公开播客临时音频。播客成功后必须把 `transcriptPath` 与 `transcriptProvider=plaud` 交给下游，禁止本地 ASR。`--adopt-file-id` 只用于用户从歧义候选中明确选择一条且远端稳定标题校验通过的恢复。`--retry-upload` 仅用于用户明确接受 `upload_unknown` 可能导致重复上传的情况；`--retry-generation` 仅用于用户明确接受 `generation_submitting/generation_unknown/generation_timeout` 可能导致重复提交生成请求的情况。
 - `download`：下载指定 fileId 的 transcript，不重新触发生成。
 - `mark`：更新 domi 工作流阶段。`metadataJson` 必须是 JSON 对象。
@@ -65,6 +69,8 @@ node <plaud-cli> mark FILE_ID failed - '{"error":"reason"}'
 
 所有命令将机器可读 JSON 写到 stdout。`sync-pending` 同时在输出目录写入 `domi-plaud-manifest-<timestamp>.json`。调用方必须从 JSON 字段读取 `fileId`、`fileName`、`transcriptPath` 和 `manifestPath`，不要从人类可读日志猜测路径。
 
+批量结果保留 `ok`、`stage` 和 `error`，并提供 `outcome`：`ready` 表示已有本地文字稿，`waiting` 表示等待远端结果，`retryable` 表示读取暂时受阻，`failed` 表示需要处理的错误。`retryable` 只允许恢复读取，不授权重新提交生成。只有 `ready` 的 `ok` 为 `true`；不得把其他三类全部解释成“生成失败”或“需要重新生成”。
+
 ## 恢复规则
 
 - `transcript_ready`：先生成回忆提示并询问对话背景与参会人，不得直接调用 `asr-notes`。
@@ -75,6 +81,8 @@ node <plaud-cli> mark FILE_ID failed - '{"error":"reason"}'
 - `documented`：复用已保存的 `storageReceipt`，按其中锁定的 `local` 或 `legacy_feishu_primary` 后端核验记录、主文档与材料目录后进入 `managed`；不得重复创建文档、目录或第二套项目。没有新式回执的历史队列沿用其原始 Wiki／本地材料字段恢复，不得顺带迁移。
 - `notes_non_project` 和 `managed` 是结束状态，不出现在 `queue`。
 - `generation_timeout` 不代表 PLAUD 已停止处理。稍后先尝试 `download <fileId>`；成功后标记为 `transcript_ready`，不要再次生成。
+- `PLAUD_GENERATION_NOT_SUBMITTED` 表示本轮尚未提交这一条，不能称为“正在生成”；后台恢复不补交 POST，下一次用户主动同步时处理。
+- 新版记录带有匹配当前尝试的明确拒绝回执时，下一次用户主动 `sync-pending` 可以重新提交；仍会先检查已有文字稿。后台 `recover-pending` 和旧版模糊失败不会重交。
 - `upload_unknown` 先重新运行同一 `transcribe-local` 等待稳定标题出现，不得默认追加 `--retry-upload`。
 - `upload_recovery_ambiguous`：从 `queue` 读取 `uploadCandidateFileIds`，让用户明确选择后，用同一命令追加 `--adopt-file-id <所选ID>`；CLI 校验不通过时继续暂停，不得猜测。
 - `generation_unknown`、`generation_timeout` 和 `download_failed` 都复用已保存的精确 `fileId` 继续下载，不重新上传或重复生成。
