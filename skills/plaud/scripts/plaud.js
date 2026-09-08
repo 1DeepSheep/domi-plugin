@@ -59,6 +59,8 @@ function usage() {
   node plaud.js pending [limit]
   node plaud.js queue
   node plaud.js verify <fileId>
+  node plaud.js capabilities
+  node plaud.js recover-pending [count] [outDir] [timeoutSec] [pollSec]
   node plaud.js sync-pending [count] [outDir] [timeoutSec] [pollSec]
   node plaud.js transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow-id ID] [--adopt-file-id ID] [--retry-upload] [--retry-generation]
   node plaud.js download <fileId> [outDir]
@@ -178,7 +180,7 @@ function sleep(ms) {
 }
 
 function knownGenerationRejection(message) {
-  return /^Generate file failed: HTTP (?:4\d\d(?:;|$)|200; API status )/.test(message);
+  return /^(?:Generate file failed: HTTP (?:4\d\d(?:;|$)|200; API status )|PLAUD_(?:AUTH_REQUIRED|UNAUTHORIZED|ACCESS_DENIED|RATE_LIMITED)\b)/.test(message);
 }
 
 function loadState() {
@@ -195,9 +197,15 @@ function writeStateUnlocked(state) {
   fs.chmodSync(STATE_DIR, 0o700);
   const temp = `${STATE_FILE}.tmp-${process.pid}`;
   const sanitizedState = sanitizeStructuredValue(state);
-  fs.writeFileSync(temp, `${JSON.stringify(sanitizedState, null, 2)}\n`, { mode: 0o600 });
+  const fd = fs.openSync(temp, 'w', 0o600);
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(sanitizedState, null, 2)}\n`);
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
   fs.chmodSync(temp, 0o600);
   fs.renameSync(temp, STATE_FILE);
+  const directory = fs.openSync(STATE_DIR, 'r');
+  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
 }
 
 function syncPause(ms) {
@@ -491,93 +499,281 @@ function verify(fileId) {
   }
 }
 
-async function syncPending(count, outDir, timeoutSec, pollSec) {
-  fs.mkdirSync(outDir, { recursive: true });
-  const state = loadState();
+const PLAUD_SYNC_CAPABILITIES = {
+  schema: 'domi.plaud-sync.v1',
+  commands: ['sync-pending', 'recover-pending'],
+  outcomes: ['ready', 'waiting', 'retryable', 'failed'],
+};
+const GENERATION_STAGES = new Set([
+  'uploaded', 'generation_submitting', 'generation_unknown', 'generating',
+  'generation_failed', 'generation_timeout', 'download_failed', 'failed',
+]);
 
-  const result = await withClient(async (client) => {
-    const files = await client.listPendingFiles({ limit: count });
-    const submitted = [];
-    const results = [];
+function isTransientTranscriptRead(error) {
+  return /Failed to fetch|fetch failed|PLAUD_NETWORK_TIMEOUT|timed?\s*out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ENETUNREACH|socket hang up|ERR_CONNECTION|ERR_NETWORK|Target page, context or browser has been closed|Execution context was destroyed|HTTP 5\d\d|download failed: 5\d\d/i.test(String(error?.message || error));
+}
 
-    for (const file of files) {
-      const info = safePendingFile(file);
-      updateRecord(state, info.fileId, { ...info, stage: 'generating', outputDir: outDir });
-      try {
-        await client.generateFile(info.fileId);
-        submitted.push(info);
-      } catch (error) {
-        const message = safeErrorMessage(error);
-        updateRecord(state, info.fileId, { stage: 'generation_failed', error: message });
-        results.push({ ...info, ok: false, stage: 'generation_failed', error: message });
+function syncErrorCode(error, fallback) {
+  if (['PLAUD_TRANSCRIPT_EMPTY', 'PLAUD_TRANSCRIPT_INVALID'].includes(error?.code)) return error.code;
+  const message = String(error?.message || error);
+  if (/PLAUD_AUTH_REQUIRED|PLAUD_UNAUTHORIZED|HTTP 401/.test(message)) return 'PLAUD_AUTH_REQUIRED';
+  if (/PLAUD_ACCESS_DENIED|HTTP 403/.test(message)) return 'PLAUD_ACCESS_DENIED';
+  if (/PLAUD_RATE_LIMITED|HTTP 429/.test(message)) return 'PLAUD_RATE_LIMITED';
+  return fallback;
+}
+
+function syncFileInfo(info) {
+  return Object.fromEntries(['fileId', 'fileName', 'duration', 'createdAt', 'editedAt']
+    .filter(key => info[key] !== undefined).map(key => [key, info[key]]));
+}
+
+function hasKnownGenerationRejection(record) {
+  return Boolean(record?.generationAttemptId && !record.generationAcceptedAt
+    && record.generationRejection?.attemptId === record.generationAttemptId);
+}
+
+function maySubmitGeneration(record) {
+  return !record || ((!record.stage || record.stage === 'uploaded')
+    && !record.generationRequestedAt && !record.generationAcceptedAt && !record.generationAttemptId);
+}
+
+// The decision and durable pre-submit record share one cross-process state
+// lock. A second sync may read this ID, but cannot submit the same generation.
+function claimGeneration(info, outDir, options = {}) {
+  return withStateWriteLock(() => {
+    const state = loadState();
+    const previous = state.records[info.fileId];
+    if (!maySubmitGeneration(previous)
+      && !(options.retryKnownRejection && hasKnownGenerationRejection(previous))) return null;
+    const record = { ...previous, ...syncFileInfo(info), fileId: info.fileId, outputDir: outDir,
+      stage: 'generation_submitting', generationAttemptId: crypto.randomUUID(), generationRejection: null, generationSubmissionError: null,
+      generationRequestedAt: new Date().toISOString(), syncOutcome: 'waiting', retryable: true, error: null, errorCode: null,
+      updatedAt: new Date().toISOString() };
+    state.records[info.fileId] = record;
+    writeStateUnlocked(state);
+    return record;
+  });
+}
+
+function updateSyncRecord(fileId, patch, expectedAttemptId) {
+  return withStateWriteLock(() => {
+    const state = loadState();
+    const previous = state.records[fileId] || { fileId };
+    // A transcript may have been bound or notes completed while this read was
+    // in flight. Never replace that path, downgrade its stage, or erase QA.
+    if (expectedAttemptId && previous.generationAttemptId !== expectedAttemptId) return previous;
+    if (patch.errorCode === 'PLAUD_GENERATION_NOT_SUBMITTED' && !maySubmitGeneration(previous)) return previous;
+    const protectedArtifact = (previous.stage && !GENERATION_STAGES.has(previous.stage)) || usableTranscript(previous);
+    if (protectedArtifact) {
+      if (!expectedAttemptId || !patch.generationAcceptedAt) return previous;
+      // A fast read may have completed notes before the POST acknowledgement
+      // arrives. Preserve its binding and still save that genuine receipt.
+      patch = { generationAcceptedAt: patch.generationAcceptedAt };
+    } else if (!expectedAttemptId && previous.stage && patch.stage !== 'transcript_ready') {
+      patch = { ...patch, stage: previous.stage };
+    }
+    const record = { ...previous, ...patch, fileId, updatedAt: new Date().toISOString() };
+    state.records[fileId] = record;
+    writeStateUnlocked(state);
+    return record;
+  });
+}
+
+function syncResult(record, outcome, errorCode = '', error = '', extra = {}) {
+  if (errorCode === 'PLAUD_GENERATION_NOT_SUBMITTED' && !maySubmitGeneration(record)) {
+    outcome = record.syncOutcome || 'waiting'; errorCode = record.errorCode || 'PLAUD_TRANSCRIPT_PENDING';
+    error = record.error || 'Transcript is not ready yet.';
+  }
+  if (usableTranscript(record)) { outcome = 'ready'; errorCode = ''; error = ''; }
+  else if (record?.stage && !GENERATION_STAGES.has(record.stage)) {
+    outcome = 'failed'; errorCode = 'PLAUD_TRANSCRIPT_ARTIFACT_MISSING';
+    error = 'The existing workflow transcript is missing; its stage and artifact bindings were preserved.';
+  }
+  return { ...record, ...extra, ok: outcome === 'ready', outcome, syncOutcome: outcome,
+    retryable: outcome === 'waiting' || outcome === 'retryable', errorCode,
+    error: error || null };
+}
+
+function ensurePlaudSyncEnabled() {
+  const configPath = String(process.env.DOMI_CONFIG_PATH || '').trim();
+  if (!configPath || !fs.existsSync(configPath)) return;
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  if (config.plaudConnectionMode === 'disabled') {
+    throw new Error('PLAUD_DISABLED: PLAUD is disabled; no browser or transcript operation was started.');
+  }
+}
+
+async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
+  ensurePlaudSyncEnabled();
+  fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
+  const runWithClient = options.withClientImpl || withClient;
+  const now = options.now || Date.now;
+  const pause = options.pause || sleep;
+  const readOnly = options.readOnly === true;
+  const initial = loadState();
+  const local = Object.values(initial.records)
+    .filter(record => record.fileId && !String(record.fileId).startsWith('local:') && GENERATION_STAGES.has(record.stage)
+      && (!readOnly || (!hasKnownGenerationRejection(record)
+        && !['PLAUD_GENERATION_REJECTED', 'PLAUD_GENERATION_NOT_SUBMITTED', 'PLAUD_TRANSCRIPT_INVALID',
+          'PLAUD_AUTH_REQUIRED', 'PLAUD_ACCESS_DENIED'].includes(record.errorCode)))
+      && (!readOnly || record.stage !== 'uploaded' || record.generationRequestedAt
+        || record.generationAttemptId || record.generationAcceptedAt
+        || (record.syncOutcome === 'retryable' && ['PLAUD_READ_TRANSIENT', 'PLAUD_TRANSCRIPT_EMPTY', 'PLAUD_RATE_LIMITED'].includes(record.errorCode))))
+    .sort((a, b) => String(a.syncCheckedAt || '').localeCompare(String(b.syncCheckedAt || '')));
+  const results = [];
+  let submitted = 0;
+  const result = await runWithClient(async client => {
+    const candidates = new Map();
+    // Recovery deliberately does not list recent files: an acknowledged or
+    // uncertain request remains recoverable after falling outside that page.
+    if (!readOnly) {
+      const files = await client.listFiles({ limit: Math.max(count * 10, 100) });
+      for (const file of files) {
+        const info = safePendingFile(file);
+        if (!info.fileId) continue;
+        const previous = initial.records[info.fileId];
+        if ((!file.is_trans && !file.is_summary) || (previous && GENERATION_STAGES.has(previous.stage))) {
+          candidates.set(info.fileId, { ...info, remoteProcessing: Boolean(file.wait_pull) });
+        }
       }
     }
-
-    const remaining = new Map(submitted.map((item) => [item.fileId, item]));
-    const deadline = Date.now() + timeoutSec * 1000;
-
-    while (remaining.size > 0 && Date.now() < deadline) {
-      for (const [fileId, info] of [...remaining.entries()]) {
+    for (const record of local) if (!candidates.has(record.fileId)) candidates.set(record.fileId, record);
+    const selected = [...candidates.values()].slice(0, count);
+    const remaining = new Map(selected.map(info => [info.fileId, { info, readFailures: 0 }]));
+    const deadline = now() + timeoutSec * 1000;
+    do {
+      for (const [fileId, entry] of [...remaining.entries()]) {
+        if (now() >= deadline) break;
+        ensurePlaudSyncEnabled();
+        let record = loadState().records[fileId];
+        if (usableTranscript(record)) {
+          results.push(syncResult(record, 'ready', '', '', { reused: true, source: 'recovered' }));
+          remaining.delete(fileId);
+          continue;
+        }
+        if (record?.stage && !GENERATION_STAGES.has(record.stage)) {
+          results.push(syncResult(record, 'failed', 'PLAUD_TRANSCRIPT_ARTIFACT_MISSING',
+            'The existing workflow transcript is missing; its completed stage and artifacts were preserved.'));
+          remaining.delete(fileId);
+          continue;
+        }
         try {
-          const transcript = await client.downloadTranscript(fileId, outDir);
-          const record = updateRecord(state, fileId, {
-            ...info,
-            stage: 'transcript_ready',
-            transcriptPath: transcript.mdPath,
-            transcriptRawPath: transcript.rawPath,
-            error: null,
-          });
-          results.push({ ...record, ok: true });
+          // Always prefer the actual transcript, even when wait_pull/task
+          // status still says processing. This also checks stale list flags
+          // before the very first POST for a new recording.
+          const transcript = await client.downloadTranscript(fileId, record?.outputDir || outDir,
+            { timeoutMs: Math.max(1, deadline - now()) });
+          record = updateSyncRecord(fileId, { ...syncFileInfo(entry.info), stage: 'transcript_ready',
+            transcriptPath: transcript.mdPath, transcriptRawPath: transcript.rawPath,
+            outputDir: record?.outputDir || outDir, fileName: transcript.fileName || entry.info.fileName,
+            syncCheckedAt: new Date().toISOString(), syncOutcome: 'ready', retryable: false, error: null, errorCode: null });
+          results.push(syncResult(record, 'ready', '', '', { reused: !entry.submitted, source: entry.submitted ? 'generated' : 'recovered' }));
           remaining.delete(fileId);
         } catch (error) {
           const message = safeErrorMessage(error);
-          if (!message.includes('Transcript not found')) {
-            updateRecord(state, fileId, { stage: 'generation_failed', error: message });
-            results.push({ ...info, ok: false, stage: 'generation_failed', error: message });
-            remaining.delete(fileId);
+          const notReady = error?.code === 'PLAUD_TRANSCRIPT_NOT_READY' || message.includes('Transcript not found');
+          if (notReady) {
+            entry.readFailures = 0;
+            if (!readOnly && now() < deadline && !entry.info.remoteProcessing && !error.remoteProcessing) {
+              ensurePlaudSyncEnabled();
+              const claim = claimGeneration(entry.info, outDir, { retryKnownRejection: true });
+              if (claim) {
+                try {
+                  await client.generateFile(fileId);
+                  submitted += 1;
+                  entry.submitted = true;
+                  record = updateSyncRecord(fileId, { stage: 'generating',
+                    generationAcceptedAt: new Date().toISOString(), syncOutcome: 'waiting', retryable: true, error: null, errorCode: null }, claim.generationAttemptId);
+                } catch (submitError) {
+                  const submitMessage = safeErrorMessage(submitError);
+                  const rejected = knownGenerationRejection(submitMessage);
+                  record = updateSyncRecord(fileId, { stage: rejected ? 'generation_failed' : 'generation_unknown',
+                    syncOutcome: rejected ? 'failed' : 'waiting', retryable: !rejected,
+                    generationRejection: rejected ? { attemptId: claim.generationAttemptId, at: new Date().toISOString(),
+                      errorCode: 'PLAUD_GENERATION_REJECTED', message: submitMessage } : null,
+                    generationSubmissionError: submitMessage, error: submitMessage, errorCode: rejected ? 'PLAUD_GENERATION_REJECTED' : 'PLAUD_GENERATION_UNCONFIRMED' }, claim.generationAttemptId);
+                  if (rejected) {
+                    results.push(syncResult(record, 'failed', 'PLAUD_GENERATION_REJECTED', submitMessage));
+                    remaining.delete(fileId);
+                    continue;
+                  }
+                }
+              }
+            }
+            record = loadState().records[fileId] || entry.info;
+            const rejected = hasKnownGenerationRejection(record);
+            const notSubmitted = readOnly && maySubmitGeneration(record);
+            entry.last = syncResult(record, rejected ? 'failed' : 'waiting',
+              rejected ? 'PLAUD_GENERATION_REJECTED' : notSubmitted ? 'PLAUD_GENERATION_NOT_SUBMITTED' : 'PLAUD_TRANSCRIPT_PENDING',
+              rejected ? record.generationRejection.message : notSubmitted
+                ? 'Generation has not been submitted; use explicit sync to continue.'
+                : 'Transcript is not ready yet; only this recording will be checked again.');
+            if (rejected || entry.last.outcome === 'ready' || entry.last.outcome === 'failed') {
+              results.push(entry.last); remaining.delete(fileId);
+            } else {
+              updateSyncRecord(fileId, { stage: record.stage || 'generating', syncCheckedAt: new Date().toISOString(),
+                syncOutcome: entry.last.outcome, retryable: entry.last.retryable });
+            }
+          } else {
+            entry.readFailures += 1;
+            const explicitCode = syncErrorCode(error, '');
+            const transient = !explicitCode && isTransientTranscriptRead(error);
+            const code = explicitCode || (transient ? 'PLAUD_READ_TRANSIENT' : 'PLAUD_TRANSCRIPT_READ_FAILED');
+            record = updateSyncRecord(fileId, { ...syncFileInfo(entry.info), stage: record?.stage || 'uploaded',
+              syncCheckedAt: new Date().toISOString(), syncOutcome: transient || ['PLAUD_RATE_LIMITED', 'PLAUD_TRANSCRIPT_EMPTY'].includes(code) ? 'retryable' : 'failed',
+              retryable: transient || ['PLAUD_RATE_LIMITED', 'PLAUD_TRANSCRIPT_EMPTY'].includes(code), error: message, errorCode: code });
+            entry.last = syncResult(record, transient || ['PLAUD_RATE_LIMITED', 'PLAUD_TRANSCRIPT_EMPTY'].includes(code) ? 'retryable' : 'failed', code, message);
+            // Retry only reads, with a bounded consecutive-failure budget.
+            // Authentication/permission/rate limits are immediately actionable.
+            if (entry.last.outcome === 'ready' || entry.last.outcome === 'failed' || !transient || entry.readFailures >= 3) {
+              results.push(entry.last); remaining.delete(fileId);
+            }
           }
         }
       }
-      if (remaining.size > 0 && Date.now() < deadline) await sleep(pollSec * 1000);
+      if (remaining.size && now() < deadline) await pause(Math.min(pollSec * 1000, deadline - now()));
+    } while (remaining.size && now() < deadline);
+    for (const [fileId, entry] of remaining) {
+      const record = loadState().records[fileId] || entry.info;
+      const unsubmitted = !entry.last && maySubmitGeneration(record);
+      const last = entry.last || syncResult(record, 'waiting',
+        unsubmitted ? 'PLAUD_GENERATION_NOT_SUBMITTED' : 'PLAUD_TRANSCRIPT_PENDING',
+        unsubmitted ? 'Generation has not been submitted; use explicit sync to continue.' : 'Transcript is not ready yet.');
+      const saved = updateSyncRecord(fileId, { ...syncFileInfo(entry.info), stage: record.stage || 'uploaded',
+        syncCheckedAt: entry.last ? new Date().toISOString() : record.syncCheckedAt,
+        syncOutcome: last.outcome, retryable: last.retryable, error: last.error, errorCode: last.errorCode });
+      results.push(syncResult(saved, last.outcome, last.errorCode, last.error));
     }
-
-    for (const [fileId, info] of remaining.entries()) {
-      const message = `Transcript was not ready within ${timeoutSec} seconds`;
-      updateRecord(state, fileId, { stage: 'generation_timeout', error: message });
-      results.push({ ...info, ok: false, stage: 'generation_timeout', error: message });
-    }
-
-    return { requested: count, found: files.length, submitted: submitted.length, results };
-  }, plaudCommandClientOptions('sync-pending'));
-
+    return { requested: count, found: selected.length, submitted, results };
+  }, plaudCommandClientOptions(readOnly ? 'recover-pending' : 'sync-pending'));
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const manifestPath = path.join(outDir, `domi-plaud-manifest-${timestamp}.json`);
-  const manifest = {
-    generatedAt: new Date().toISOString(),
-    outputDir: outDir,
-    ...result,
-    manifestPath,
-  };
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  printJson(manifest);
+  const manifestPath = path.join(outDir, `domi-plaud-manifest-${timestamp}-${crypto.randomUUID().slice(0, 8)}.json`);
+  const manifest = { schema: PLAUD_SYNC_CAPABILITIES.schema, generatedAt: new Date().toISOString(),
+    outputDir: outDir, ...result, manifestPath };
+  fs.writeFileSync(manifestPath, `${JSON.stringify(sanitizeStructuredValue(manifest), null, 2)}\n`, { mode: 0o600 });
+  if (!options.withClientImpl) printJson(manifest);
+  return manifest;
 }
 
 async function download(fileId, outDir) {
+  const existing = loadState().records[fileId];
+  if (usableTranscript(existing)) { printJson({ ...existing, ok: true, reused: true }); return; }
+  if (existing?.stage && !GENERATION_STAGES.has(existing.stage)) {
+    throw new Error('PLAUD_TRANSCRIPT_ARTIFACT_MISSING: The existing workflow transcript is missing; its artifact bindings require repair.');
+  }
   fs.mkdirSync(outDir, { recursive: true });
   const transcript = await withClient(
     (client) => client.downloadTranscript(fileId, outDir),
     plaudCommandClientOptions('download'),
   );
-  const state = loadState();
-  const record = updateRecord(state, fileId, {
-    fileName: transcript.fileName,
-    stage: 'transcript_ready',
-    outputDir: outDir,
-    transcriptPath: transcript.mdPath,
-    transcriptRawPath: transcript.rawPath,
-    error: null,
+  const record = updateSyncRecord(fileId, {
+    fileName: transcript.fileName, stage: 'transcript_ready', outputDir: outDir,
+    transcriptPath: transcript.mdPath, transcriptRawPath: transcript.rawPath,
+    syncOutcome: 'ready', retryable: false, error: null, errorCode: null,
   });
-  printJson({ ok: true, ...record });
+  const result = syncResult(record, 'ready', '', '', { source: 'recovered' });
+  printJson(result);
+  if (!result.ok) process.exitCode = 1;
 }
 
 function fingerprintAudio(audioPath) {
@@ -621,8 +817,9 @@ function replaceRecordKey(state, oldFileId, newFileId, patch) {
 }
 
 function usableTranscript(record) {
-  return Boolean(record?.transcriptPath && fs.existsSync(record.transcriptPath) &&
-    fs.statSync(record.transcriptPath).isFile() && fs.statSync(record.transcriptPath).size > 0);
+  if (!record?.transcriptPath) return false;
+  try { const stat = fs.statSync(record.transcriptPath); return stat.isFile() && stat.size > 0; }
+  catch { return false; }
 }
 
 async function withSourceLock(fingerprint, callback) {
@@ -1384,12 +1581,14 @@ async function main() {
   }
   if (command === 'status') return status(positiveInt(args[0], 20, 'limit', 100));
   if (command === 'pending') return pending(positiveInt(args[0], 20, 'limit', 100));
-  if (command === 'sync-pending') {
-    const count = positiveInt(args[0], 3, 'count', 100);
+  if (command === 'capabilities') { printJson(PLAUD_SYNC_CAPABILITIES); return; }
+  if (command === 'sync-pending' || command === 'recover-pending') {
+    const readOnly = command === 'recover-pending';
+    const count = positiveInt(args[0], readOnly ? 100 : 3, 'count', 100);
     const outDir = path.resolve(args[1] || path.join(process.cwd(), 'work', 'domi', 'plaud'));
-    const timeoutSec = positiveInt(args[2], 1800, 'timeoutSec', 7200);
-    const pollSec = positiveInt(args[3], 15, 'pollSec', 300);
-    return syncPending(count, outDir, timeoutSec, pollSec);
+    const timeoutSec = positiveInt(args[2], readOnly ? 30 : 1800, 'timeoutSec', 7200);
+    const pollSec = positiveInt(args[3], readOnly ? 3 : 15, 'pollSec', 300);
+    return syncPending(count, outDir, timeoutSec, pollSec, { readOnly });
   }
   if (command === 'transcribe-local') {
     const { positional, retryUpload, retryGeneration, workflowId, adoptFileId } = parseTranscribeLocalArgs(args);
@@ -1434,6 +1633,9 @@ module.exports = {
     FINAL_STAGES,
     STATE_DIR,
     STATE_FILE,
+    PLAUD_SYNC_CAPABILITIES,
+    claimGeneration,
+    syncPending,
     findRecordBySource,
     fingerprintAudio,
     loadState,
