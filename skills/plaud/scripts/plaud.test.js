@@ -3,6 +3,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -11,6 +12,8 @@ const { EventEmitter } = require('node:events');
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'domi-plaud-test-'));
 process.env.DOMI_PLAUD_STATE_DIR = path.join(sandbox, 'state');
+process.env.DOMI_CONFIG_PATH = path.join(sandbox, 'sync-test-config.json');
+fs.writeFileSync(process.env.DOMI_CONFIG_PATH, JSON.stringify({ plaudConnectionMode: 'enabled' }));
 
 const scriptPath = path.join(__dirname, 'plaud.js');
 const { __test } = require('./plaud.js');
@@ -1191,7 +1194,7 @@ test('downloaded transcripts and an existing output directory are private', asyn
   const originalFetch = global.fetch;
   global.fetch = async () => ({
     ok: true,
-    text: async () => '[]',
+    text: async () => '[{"content":"完整的合成转写正文。"}]',
   });
   try {
     const result = await client.downloadTranscript('private-file', outputDir);
@@ -1631,4 +1634,404 @@ test('documented accepts verified receipts for both locked repository backends',
   ], { encoding: 'utf8', env: process.env });
   assert.equal(unsupported.status, 1);
   assert.match(JSON.parse(unsupported.stdout).error, /does not support storageReceipt backend/);
+});
+
+function resetSyncRecords(records = {}) {
+  fs.mkdirSync(__test.STATE_DIR, { recursive: true });
+  fs.writeFileSync(__test.STATE_FILE, JSON.stringify({ version: 1, records }), { mode: 0o600 });
+}
+
+function pendingTranscript(processing = false) {
+  const error = new Error('Transcript not found for synthetic recording');
+  error.code = 'PLAUD_TRANSCRIPT_NOT_READY';
+  error.remoteProcessing = processing;
+  return error;
+}
+
+function runSync(fake, options = {}) {
+  let clock = 0;
+  return __test.syncPending(options.count || 100, path.join(sandbox, 'sync-output'),
+    options.timeoutSec || 5, options.pollSec || 1, {
+      now: () => clock, pause: async ms => { clock += ms; },
+      withClientImpl: async callback => callback(fake), ...options,
+    });
+}
+
+test('sync records a durable claim before POST, retries transient reads, and reuses the exact artifact', async () => {
+  resetSyncRecords();
+  let generated = 0, reads = 0;
+  const fake = {
+    listFiles: async () => [{ id: 'sync-fresh', filename: 'Same title' }],
+    generateFile: async id => {
+      generated++;
+      const record = __test.loadState().records[id];
+      assert.equal(record.stage, 'generation_submitting');
+      assert.ok(record.generationAttemptId && record.generationRequestedAt);
+      assert.equal(record.generationAcceptedAt, undefined);
+    },
+    downloadTranscript: async (id, dir) => {
+      reads++;
+      if (!generated) throw pendingTranscript();
+      if (reads < 4) throw new Error('page.evaluate: TypeError: Failed to fetch');
+      return transcriptResult(id, id, dir);
+    },
+  };
+  const first = await runSync(fake);
+  assert.equal(first.results[0].outcome, 'ready');
+  assert.equal(first.results[0].source, 'generated');
+  assert.equal(first.submitted, 1);
+  assert.equal(generated, 1);
+  const record = __test.loadState().records['sync-fresh'];
+  assert.ok(record.generationAcceptedAt);
+  assert.equal(record.syncOutcome, 'ready');
+  assert.equal(record.error, null);
+  const again = await runSync(fake);
+  assert.equal(generated, 1);
+  assert.equal(reads, 4);
+  assert.equal(again.results[0].transcriptPath, record.transcriptPath);
+});
+
+test('a lost POST response recovers by exact ID without a second POST or a fabricated receipt', async () => {
+  resetSyncRecords();
+  let posts = 0;
+  const result = await runSync({
+    listFiles: async () => [{ id: 'sync-ambiguous', filename: 'Ambiguous' }],
+    generateFile: async () => { posts++; throw new Error('page.evaluate: TypeError: Failed to fetch'); },
+    downloadTranscript: async (id, dir) => {
+      if (!posts) throw pendingTranscript();
+      return transcriptResult(id, id, dir);
+    },
+  });
+  assert.equal(posts, 1);
+  assert.equal(result.submitted, 0);
+  assert.equal(result.results[0].outcome, 'ready');
+  assert.equal(result.results[0].source, 'recovered');
+  assert.equal(result.results[0].generationAcceptedAt, undefined);
+  assert.ok(result.results[0].generationAttemptId);
+});
+
+test('legacy ambiguous stages remain read-only across repeated ordinary sync and exact-ID recovery', async () => {
+  const stages = ['generation_failed', 'generation_timeout', 'generation_unknown', 'generation_submitting', 'failed'];
+  resetSyncRecords(Object.fromEntries(stages.map((stage, i) => [`legacy-${i}`, { fileId: `legacy-${i}`, stage, error: 'Failed to fetch' }])));
+  let posts = 0, reads = 0;
+  const fake = { listFiles: async () => stages.map((_, i) => ({ id: `legacy-${i}` })),
+    generateFile: async () => { posts++; }, downloadTranscript: async () => { reads++; throw pendingTranscript(); } };
+  for (const readOnly of [false, false, true]) {
+    const result = await runSync(fake, { readOnly, timeoutSec: 1 });
+    assert.equal(result.results.length, stages.length);
+    assert.ok(result.results.every(item => item.outcome === 'waiting' && item.retryable));
+  }
+  assert.equal(posts, 0);
+  assert.equal(reads, stages.length * 3);
+  assert.deepEqual(Object.values(__test.loadState().records).map(item => item.stage), stages);
+});
+
+test('exact-ID recovery works beyond the remote page and downloads ready text despite processing flags', async () => {
+  resetSyncRecords({ 'off-page': { fileId: 'off-page', stage: 'generating', generationAcceptedAt: 'accepted' } });
+  const result = await runSync({
+    listFiles: async () => { throw new Error('recovery must not list'); },
+    generateFile: async () => { throw new Error('recovery must not POST'); },
+    downloadTranscript: async (id, dir) => transcriptResult(id, id, dir),
+  }, { readOnly: true });
+  assert.equal(result.results[0].outcome, 'ready');
+  assert.equal(result.results[0].generationAcceptedAt, 'accepted');
+  resetSyncRecords({ 'processing-ready': { fileId: 'processing-ready', stage: 'generating' } });
+  const ready = await runSync({ listFiles: async () => [{ id: 'processing-ready', is_trans: true, wait_pull: 1 }],
+    generateFile: async () => { throw new Error('must prefer transcript over processing'); },
+    downloadTranscript: async (id, dir) => transcriptResult(id, id, dir) });
+  assert.equal(ready.results[0].outcome, 'ready');
+});
+
+test('transient read retries stop at three attempts while permission and programming failures stop immediately', async () => {
+  for (const [message, expectedReads, outcome, code] of [
+    ['page.evaluate: TypeError: Failed to fetch', 3, 'retryable', 'PLAUD_READ_TRANSIENT'],
+    ['PLAUD_ACCESS_DENIED: page.evaluate Failed to fetch HTTP 403', 1, 'failed', 'PLAUD_ACCESS_DENIED'],
+    ['page.evaluate: TypeError: cannot read property missing', 1, 'failed', 'PLAUD_TRANSCRIPT_READ_FAILED'],
+  ]) {
+    resetSyncRecords({ bounded: { fileId: 'bounded', stage: 'generating', generationAcceptedAt: 'accepted' } });
+    let reads = 0;
+    const result = await runSync({ downloadTranscript: async () => { reads++; throw new Error(message); } }, { readOnly: true });
+    assert.equal(reads, expectedReads);
+    assert.equal(result.results[0].outcome, outcome);
+    assert.equal(result.results[0].errorCode, code);
+    assert.equal(__test.loadState().records.bounded.generationAcceptedAt, 'accepted');
+  }
+});
+
+test('the total recovery budget is checked between files and unchecked IDs remain ahead next time', async () => {
+  resetSyncRecords(Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`budget-${i}`, { fileId: `budget-${i}`, stage: 'generating' }])));
+  let clock = 0; const seen = [];
+  await runSync({ downloadTranscript: async id => { seen.push(id); clock += 600; throw pendingTranscript(); } },
+    { readOnly: true, timeoutSec: 1, now: () => clock, pause: async ms => { clock += ms; } });
+  assert.equal(seen.length, 2);
+  clock = 0;
+  await runSync({ downloadTranscript: async id => { seen.push(id); clock += 1000; throw pendingTranscript(); } },
+    { readOnly: true, timeoutSec: 1, now: () => clock, pause: async ms => { clock += ms; } });
+  assert.equal(seen[2], 'budget-2');
+});
+
+test('concurrent workflow advancement wins over a delayed recovery and a missing bound transcript is never ready', async () => {
+  resetSyncRecords({ advanced: { fileId: 'advanced', stage: 'generating' } });
+  const bound = path.join(sandbox, 'must-not-replace.md');
+  const result = await runSync({ downloadTranscript: async (id, dir) => {
+    __test.updateRecord(__test.loadState(), id, { stage: 'notes_project', transcriptPath: bound, notesQuality: { immutable: true } });
+    return transcriptResult(id, 'unbound-new-copy', dir);
+  } }, { readOnly: true });
+  assert.equal(result.results[0].outcome, 'failed');
+  assert.equal(result.results[0].errorCode, 'PLAUD_TRANSCRIPT_ARTIFACT_MISSING');
+  const record = __test.loadState().records.advanced;
+  assert.equal(record.stage, 'notes_project');
+  assert.equal(record.transcriptPath, bound);
+  assert.deepEqual(record.notesQuality, { immutable: true });
+  fs.writeFileSync(bound, 'Previously verified transcript');
+  const next = await runSync({ listFiles: async () => [{ id: 'advanced' }],
+    downloadTranscript: async () => { throw new Error('bound transcript must be reused'); } });
+  assert.equal(next.results[0].outcome, 'ready');
+  assert.equal(fs.readFileSync(bound, 'utf8'), 'Previously verified transcript');
+});
+
+test('a process exiting after possible acceptance leaves a durable claim and the next process only reads', async () => {
+  resetSyncRecords();
+  const code = `const fs=require('node:fs');const {__test}=require(${JSON.stringify(scriptPath)});__test.syncPending(1,${JSON.stringify(path.join(sandbox, 'crash-out'))},5,1,{withClientImpl:async fn=>fn({listFiles:async()=>[{id:'crash-id'}],downloadTranscript:async()=>{throw new Error('Transcript not found')},generateFile:async()=>process.exit(0)})}).catch(e=>{console.error(e);process.exit(1)});`;
+  const child = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8', env: process.env, timeout: 10000 });
+  assert.equal(child.status, 0, child.stderr);
+  const record = __test.loadState().records['crash-id'];
+  assert.equal(record.stage, 'generation_submitting');
+  assert.ok(record.generationAttemptId);
+  const recovered = await runSync({ downloadTranscript: async (id, dir) => transcriptResult(id, id, dir),
+    generateFile: async () => { throw new Error('must not resubmit after process death'); } }, { readOnly: true });
+  assert.equal(recovered.results[0].outcome, 'ready');
+  assert.equal(recovered.results[0].generationAttemptId, record.generationAttemptId);
+});
+
+test('six real processes race one atomic claim and exactly one is allowed to POST', async () => {
+  resetSyncRecords();
+  const barrier = path.join(sandbox, 'claim-start');
+  const postLog = path.join(sandbox, 'claim-posts');
+  const code = `const fs=require('node:fs');const{__test}=require(${JSON.stringify(scriptPath)});(async()=>{while(!fs.existsSync(${JSON.stringify(barrier)}))await new Promise(r=>setTimeout(r,5));const claim=__test.claimGeneration({fileId:'race-id'},${JSON.stringify(sandbox)});if(claim)fs.appendFileSync(${JSON.stringify(postLog)},claim.generationAttemptId+'\\n');process.stdout.write(JSON.stringify({claimed:Boolean(claim)}));})().catch(e=>{console.error(e);process.exitCode=1});`;
+  const children = Array.from({ length: 6 }, () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', code], { env: process.env });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', value => { stdout += value; }); child.stderr.on('data', value => { stderr += value; });
+    child.on('error', reject); child.on('exit', code => resolve({ code, stdout, stderr }));
+  }));
+  fs.writeFileSync(barrier, 'go');
+  const outcomes = await Promise.all(children);
+  assert.ok(outcomes.every(item => item.code === 0), JSON.stringify(outcomes));
+  assert.equal(outcomes.filter(item => JSON.parse(item.stdout).claimed).length, 1);
+  const posts = fs.readFileSync(postLog, 'utf8').trim().split('\n');
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0], __test.loadState().records['race-id'].generationAttemptId);
+});
+
+test('a failed pre-submit state write never reaches generateFile', async () => {
+  resetSyncRecords();
+  const original = fs.renameSync; let posts = 0;
+  fs.renameSync = (...args) => {
+    if (args[1] === __test.STATE_FILE) throw new Error('Synthetic durable state write failure');
+    return original(...args);
+  };
+  try {
+    await assert.rejects(runSync({ listFiles: async () => [{ id: 'disk-full' }],
+      downloadTranscript: async () => { throw pendingTranscript(); }, generateFile: async () => { posts++; } }), /durable state/);
+    assert.equal(posts, 0);
+  } finally { fs.renameSync = original; }
+});
+
+test('transcript body timeout aborts a stalled download and immutable paths prevent same-title overwrite', async () => {
+  const client = Object.create(PlaudClient.prototype);
+  client.apiTimeoutMs = 15000;
+  client.getFileDetail = async () => ({ file_name: 'Same title', wait_pull: 1,
+    content_list: [{ data_type: 'transaction', data_link: 'https://synthetic.invalid/transcript' }] });
+  const original = global.fetch; let signal;
+  try {
+    global.fetch = async (_url, options) => { signal = options.signal; return { ok: true, text: () => new Promise(() => {}) }; };
+    await assert.rejects(client.downloadTranscript('timeout-body', sandbox, { timeoutMs: 20 }), /PLAUD_NETWORK_TIMEOUT/);
+    assert.equal(signal.aborted, true);
+    global.fetch = async () => ({ ok: true, text: async () => '[{"content":"完整的合成转写正文。"}]' });
+    const first = await client.downloadTranscript('same-one', sandbox);
+    const second = await client.downloadTranscript('same-two', sandbox);
+    const repeated = await client.downloadTranscript('same-one', sandbox);
+    assert.equal(new Set([first.mdPath, second.mdPath, repeated.mdPath]).size, 3);
+    assert.equal(fs.readFileSync(first.rawPath, 'utf8'), '[{"content":"完整的合成转写正文。"}]');
+  } finally { global.fetch = original; }
+});
+
+test('only a new explicit sync retries a proven rejected attempt, never background recovery or ambiguous legacy state', async () => {
+  resetSyncRecords();
+  let posts = 0, accepted = false;
+  const fake = { listFiles: async () => [{ id: 'proven-rejected' }],
+    downloadTranscript: async (id, dir) => {
+      if (!accepted) throw pendingTranscript();
+      return transcriptResult(id, id, dir);
+    },
+    generateFile: async () => {
+      posts++;
+      if (posts === 1) throw new Error('Generate file failed: HTTP 200; API status QUOTA');
+      accepted = true;
+    } };
+  const failed = await runSync(fake);
+  assert.equal(failed.results[0].outcome, 'failed');
+  assert.equal(posts, 1);
+  const oldAttempt = failed.results[0].generationAttemptId;
+  assert.equal(failed.results[0].generationRejection.attemptId, oldAttempt);
+  const background = await runSync(fake, { readOnly: true });
+  assert.equal(background.found, 0);
+  assert.equal(posts, 1);
+  const retried = await runSync(fake);
+  assert.equal(retried.results[0].outcome, 'ready');
+  assert.equal(posts, 2);
+  assert.notEqual(retried.results[0].generationAttemptId, oldAttempt);
+  assert.equal(retried.results[0].generationRejection, null);
+});
+
+test('a late genuine submission receipt survives concurrent notes advancement without changing its binding', async () => {
+  resetSyncRecords();
+  const bound = transcriptResult('late-receipt', 'late-bound', sandbox);
+  let sent = false;
+  const result = await runSync({ listFiles: async () => [{ id: 'late-receipt' }],
+    downloadTranscript: async () => { if (!sent) throw pendingTranscript(); return bound; },
+    generateFile: async id => {
+      sent = true;
+      __test.updateRecord(__test.loadState(), id, { stage: 'managed', transcriptPath: bound.mdPath, notesQuality: { preserved: true } });
+    } });
+  const record = __test.loadState().records['late-receipt'];
+  assert.equal(record.stage, 'managed');
+  assert.equal(record.transcriptPath, bound.mdPath);
+  assert.deepEqual(record.notesQuality, { preserved: true });
+  assert.ok(record.generationAcceptedAt);
+  assert.equal(result.results[0].outcome, 'ready');
+});
+
+test('disabled PLAUD configuration blocks recovery before a client or output directory is created', async () => {
+  resetSyncRecords({ disabled: { fileId: 'disabled', stage: 'generating' } });
+  const config = process.env.DOMI_CONFIG_PATH;
+  const before = fs.readFileSync(__test.STATE_FILE, 'utf8');
+  fs.writeFileSync(config, JSON.stringify({ plaudConnectionMode: 'disabled' }));
+  const output = path.join(sandbox, 'disabled-output');
+  try {
+    await assert.rejects(__test.syncPending(1, output, 1, 1, { readOnly: true,
+      withClientImpl: async () => { throw new Error('client must not initialize'); } }), /PLAUD_DISABLED/);
+    assert.equal(fs.existsSync(output), false);
+    assert.equal(fs.readFileSync(__test.STATE_FILE, 'utf8'), before);
+  } finally { fs.writeFileSync(config, JSON.stringify({ plaudConnectionMode: 'enabled' })); }
+});
+
+test('long Chinese and emoji transcript titles fit UTF-8 filename limits without altering the transcript', async () => {
+  const client = Object.create(PlaudClient.prototype);
+  const title = '完整中文标题😀🧑🏽‍💻'.repeat(30);
+  const content = '保留中文、emoji 😀 和所有原文。';
+  client.getFileDetail = async () => ({ file_name: title,
+    content_list: [{ data_type: 'transaction', data_link: 'https://synthetic.invalid/body' }] });
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: true, text: async () => JSON.stringify([{ content }]) });
+  try {
+    const result = await client.downloadTranscript('long-id-'.repeat(15), sandbox);
+    for (const file of [result.mdPath, result.rawPath]) {
+      assert.ok(Buffer.byteLength(path.basename(file), 'utf8') <= 240);
+      assert.equal(path.basename(file).includes('\uFFFD'), false);
+    }
+    const text = fs.readFileSync(result.mdPath, 'utf8');
+    assert.ok(text.includes(title));
+    assert.ok(text.includes(content));
+  } finally { global.fetch = original; }
+});
+
+test('empty, malformed and truncated transcripts never create artifacts or report ready', async () => {
+  const client = Object.create(PlaudClient.prototype);
+  client.getFileDetail = async () => ({ file_name: 'Unready', wait_pull: 1,
+    content_list: [{ data_type: 'transaction', data_link: 'https://synthetic.invalid/body' }] });
+  const original = global.fetch;
+  try {
+    for (const [text, expectedCode] of [
+      ['[]', 'PLAUD_TRANSCRIPT_EMPTY'], ['[{"content":"  "}]', 'PLAUD_TRANSCRIPT_EMPTY'],
+      ['[{"content":', 'PLAUD_TRANSCRIPT_INVALID'], ['{"text":"wrong shape"}', 'PLAUD_TRANSCRIPT_INVALID'],
+    ]) {
+      const out = path.join(sandbox, `invalid-${crypto.randomUUID()}`);
+      global.fetch = async () => ({ ok: true, text: async () => text });
+      await assert.rejects(client.downloadTranscript('invalid-id', out), error => error.code === expectedCode);
+      assert.equal(fs.existsSync(out), false);
+    }
+  } finally { global.fetch = original; }
+});
+
+test('an unvisited new candidate stays unsubmitted and a later explicit sync can generate it', async () => {
+  resetSyncRecords();
+  let clock = 0, posts = 0;
+  const remote = [{ id: 'slow-ready' }, { id: 'not-visited' }];
+  const first = await runSync({ listFiles: async () => remote,
+    downloadTranscript: async (id, dir) => { clock += 1000; return transcriptResult(id, id, dir); },
+    generateFile: async () => { throw new Error('first batch must not generate'); } },
+  { timeoutSec: 1, now: () => clock, pause: async ms => { clock += ms; } });
+  const waiting = first.results.find(item => item.fileId === 'not-visited');
+  assert.equal(waiting.stage, 'uploaded');
+  assert.equal(waiting.errorCode, 'PLAUD_GENERATION_NOT_SUBMITTED');
+  assert.equal(waiting.generationAttemptId, undefined);
+  const background = await runSync({ downloadTranscript: async () => { throw new Error('unsubmitted records must not enter recovery'); } }, { readOnly: true });
+  assert.equal(background.found, 0);
+  const explicit = await runSync({ listFiles: async () => [{ id: 'not-visited' }],
+    downloadTranscript: async (id, dir) => { if (!posts) throw pendingTranscript(); return transcriptResult(id, id, dir); },
+    generateFile: async () => { posts++; } });
+  assert.equal(posts, 1);
+  assert.equal(explicit.results[0].outcome, 'ready');
+});
+
+test('explicit HTTP authentication, access and rate rejection are retryable only by a later explicit submission', async () => {
+  for (const prefix of ['PLAUD_AUTH_REQUIRED', 'PLAUD_UNAUTHORIZED', 'PLAUD_ACCESS_DENIED', 'PLAUD_RATE_LIMITED']) {
+    resetSyncRecords();
+    let posts = 0;
+    const result = await runSync({ listFiles: async () => [{ id: 'known-http-rejection' }],
+      downloadTranscript: async () => { throw pendingTranscript(); },
+      generateFile: async () => { posts++; throw new Error(`${prefix}: synthetic rejection`); } });
+    assert.equal(result.results[0].outcome, 'failed');
+    assert.equal(result.results[0].generationRejection.attemptId, result.results[0].generationAttemptId);
+    assert.equal(posts, 1);
+  }
+});
+
+test('first-read failures recover read-only, but an exact not-ready answer becomes explicitly unsubmitted', async () => {
+  resetSyncRecords({ 'first-read': { fileId: 'first-read', stage: 'uploaded', syncOutcome: 'retryable', errorCode: 'PLAUD_READ_TRANSIENT' } });
+  const result = await runSync({ downloadTranscript: async () => { throw pendingTranscript(); },
+    generateFile: async () => { throw new Error('background must not submit'); } }, { readOnly: true, timeoutSec: 1 });
+  assert.equal(result.results[0].stage, 'uploaded');
+  assert.equal(result.results[0].errorCode, 'PLAUD_GENERATION_NOT_SUBMITTED');
+  const again = await runSync({ downloadTranscript: async () => { throw new Error('do not poll definitely unsubmitted'); } }, { readOnly: true });
+  assert.equal(again.found, 0);
+});
+
+test('the download budget includes a stalled detail read or silent authorization refresh', async () => {
+  const client = Object.create(PlaudClient.prototype);
+  client.apiTimeoutMs = 15000;
+  client.getFileDetail = async () => new Promise(() => {});
+  await assert.rejects(client.downloadTranscript('detail-timeout', sandbox, { timeoutMs: 20 }), /PLAUD_NETWORK_TIMEOUT/);
+});
+
+
+test('legacy failed records recover by precise ID and retained notes artifacts never trigger generation', async () => {
+  const bound = transcriptResult('notes-failed', 'failed-bound-transcript', sandbox);
+  resetSyncRecords({
+    'generic-failed': { fileId: 'generic-failed', stage: 'failed', error: 'legacy ambiguous error' },
+    'notes-failed': { fileId: 'notes-failed', stage: 'failed', transcriptPath: bound.mdPath, notesPath: '/synthetic/notes.md' },
+  });
+  const read = [];
+  const result = await runSync({
+    generateFile: async () => { throw new Error('legacy failed must never resubmit'); },
+    downloadTranscript: async (id, dir) => { read.push(id); return transcriptResult(id, id, dir); },
+  }, { readOnly: true });
+  assert.deepEqual(read, ['generic-failed']);
+  assert.ok(result.results.every(item => item.outcome === 'ready'));
+  assert.equal(__test.loadState().records['notes-failed'].stage, 'failed');
+  assert.equal(__test.loadState().records['notes-failed'].transcriptPath, bound.mdPath);
+});
+
+
+test('blocked recovery records cannot consume the count ahead of an eligible precise ID', async () => {
+  resetSyncRecords({ ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`blocked-${i}`,
+    { fileId: `blocked-${i}`, stage: 'generating', errorCode: 'PLAUD_AUTH_REQUIRED' }])),
+    eligible: { fileId: 'eligible', stage: 'generation_unknown' } });
+  const reads = [];
+  const result = await runSync({ downloadTranscript: async (id, dir) => { reads.push(id); return transcriptResult(id, id, dir); } },
+    { readOnly: true, count: 1 });
+  assert.deepEqual(reads, ['eligible']);
+  assert.equal(result.results[0].outcome, 'ready');
 });
