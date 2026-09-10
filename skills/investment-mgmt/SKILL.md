@@ -108,6 +108,8 @@ node "$DOMI_REPO" person search --query "姓名"
 node "$DOMI_REPO" news list --from <ISO时间> --to <ISO时间>
 ```
 
+项目搜索只匹配名称，人物搜索只匹配姓名和组织；`searchCoverage` 标明实际匹配范围，`completeScope=pagination` 表示 `complete` 只管分页。空结果不能推出文档正文没有提及；当前网关不提供全文检索，正文未查时须保留这一范围限制。
+
 创建或更新时，先按中英文名、主体名、产品名查重；多匹配先让用户确认。把 JSON 写到权限受控的临时文件，再调用：
 
 ```bash
