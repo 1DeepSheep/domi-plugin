@@ -112,6 +112,34 @@ function createRepository(t) {
   });
 }
 
+test("empty entity search does not claim coverage of names mentioned in notes or documents", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const project = repository.upsertProject({ name: "青松科技", notes: "交流中提及林乙的产品。" }).project;
+  const { document } = repository.createDocument({
+    ownerType: "project", ownerId: project.id, kind: "研究",
+    title: "林乙产品交流", content: "# 交流记录\n\n林乙的产品名为青松助手。\n"
+  });
+  assert.match(fs.readFileSync(document.path, "utf8"), /林乙/);
+
+  for (const [kind, result] of [
+    ["project", repository.queryProjects({ query: "林乙" })],
+    ["person", repository.queryPeople({ query: "林乙" })]
+  ]) {
+    assert.deepEqual(result.items, []);
+    assert.equal(result.total, 0);
+    assert.equal(result.hasMore, false);
+    assert.equal(result.nextCursor, null);
+    assert.equal(result.complete, true);
+    assert.equal(result.completeScope, "pagination");
+    assert.deepEqual(result.searchCoverage, {
+      type: "entity_fields", queryApplied: true,
+      queryFields: kind === "project" ? ["name"] : ["name", "organization"],
+      documentTitlesSearched: false, documentContentSearched: false
+    });
+  }
+});
+
 test("query projection filters in SQL, preserves actual creation time, and paginates ties completely", (t) => {
   const repository = createRepository(t);
   t.after(() => repository.close());
@@ -121,12 +149,22 @@ test("query projection filters in SQL, preserves actual creation time, and pagin
   const first = repository.queryProjects(options);
   assert.equal(first.total, 5);
   assert.equal(first.hasMore, true);
+  assert.equal(first.complete, false);
+  assert.equal(first.completeScope, "pagination");
+  assert.deepEqual(first.searchCoverage, {
+    type: "entity_fields", queryApplied: true, queryFields: ["name"],
+    documentTitlesSearched: false, documentContentSearched: false
+  });
   assert.deepEqual(Object.keys(first.items[0]), ["id", "name", "createdAt"]);
   assert.equal(first.items[0].createdAt, 50);
   const ids = first.items.map(item => item.id);
   let page = first;
   while (page.hasMore) {
     page = repository.queryProjects({ ...options, cursor: page.nextCursor });
+    assert.equal(page.complete, !page.hasMore);
+    assert.equal(page.completeScope, "pagination");
+    assert.deepEqual(page.searchCoverage, first.searchCoverage);
+    assert.deepEqual(page.scope, first.scope);
     ids.push(...page.items.map(item => item.id));
   }
   assert.equal(page.complete, true);
@@ -141,8 +179,18 @@ test("person get/batch report missing IDs and compact projection avoids document
   const repository = createRepository(t);
   t.after(() => repository.close());
   const person = repository.upsertPerson({ name: "张三", organization: "A-B 公司" }).person;
+  repository.createDocument({
+    ownerType: "person", ownerId: person.id, kind: "研究",
+    title: "人物研究", content: "# 张三\n\n任职于 A-B 公司。\n"
+  });
   repository.database.prepare("UPDATE people SET created_at=? WHERE id=?").run(123, person.id);
   assert.equal(repository.getPerson(person.id).createdAt, 123);
+  const full = repository.queryPeople({ query: "A B公司" });
+  assert.equal(full.items[0].documents.length, 1);
+  assert.deepEqual(full.searchCoverage, {
+    type: "entity_fields", queryApplied: true, queryFields: ["name", "organization"],
+    documentTitlesSearched: false, documentContentSearched: false
+  });
   const prepare = repository.database.prepare.bind(repository.database);
   repository.database.prepare = (sql) => {
     assert.doesNotMatch(sql, /FROM documents/);
@@ -152,6 +200,12 @@ test("person get/batch report missing IDs and compact projection avoids document
   assert.equal(result.items.length, 1);
   assert.deepEqual(result.missingIds, ["missing"]);
   assert.equal(result.items[0].createdAt, 123);
+  assert.deepEqual(result.searchCoverage, full.searchCoverage);
+  const batch = repository.queryPeople({ ids: [person.id, "missing"], fields: ["name", "createdAt"] });
+  assert.deepEqual(batch.items, result.items);
+  assert.deepEqual(batch.missingIds, ["missing"]);
+  assert.equal(batch.completeScope, "pagination");
+  assert.deepEqual(batch.searchCoverage, { ...full.searchCoverage, queryApplied: false });
   assert.throws(() => repository.queryPeople({ fields: ["id); DROP TABLE people"] }), /Unknown projection/);
   assert.throws(() => repository.queryPeople({ limit: 0 }), /limit/);
 });
