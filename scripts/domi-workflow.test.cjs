@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { DomiRepository } = require("./domi-repo.cjs");
 const { prepareNotesCoverage } = require("./notes-coverage.cjs");
 const { artifact, contextBundle, evidenceCheck, saveManifest, checkpointManifest, inspectManifest, rebindManifest,
@@ -166,6 +167,44 @@ test("ASR evidence rejects malformed notes even when a model receipt claims rend
   const qa = { ...f.qa, notes };
   assert.throws(() => evidenceCheck(f.index, qa), /纪要格式未通过/);
   assert.equal(fs.readFileSync(notes.path, "utf8"), bad, "checking must not silently change reviewed bytes");
+});
+
+test("ASR evidence blocks delivery noise despite passed editorial QA and preserves all source locators", t => {
+  const f = notesFixture(t);
+  const sourceBefore = fs.readFileSync(f.transcript.path);
+  const indexBefore = fs.readFileSync(f.evidence.path);
+  const clean = fs.readFileSync(f.notes.path, "utf8");
+  for (const extra of [
+    "\n#### 来源与记录边界\n- 其中还包括公司明确披露的合同上限。\n",
+    "\n本纪要仅依据本次交流整理，未经独立核验。\n",
+    "\n- 嘉宾表示仍无收入（原文逐字稿00:00:01–00:00:02）。\n"
+  ]) {
+    const content = clean + extra;
+    const notes = artifact({ role: "notes", path: f.write("noisy-notes.md", content) });
+    assert.throws(() => evidenceCheck(f.index, { ...f.qa, notes }, { requireCoverage: true }),
+      error => error.code === "DOMI_NOTES_DELIVERY_INVALID" && error.report.deliveryOk === false
+        && error.report.issues.some(issue => issue.line > 3 && issue.column >= 1));
+    assert.equal(fs.readFileSync(notes.path, "utf8"), content);
+    assert.deepEqual(fs.readFileSync(f.transcript.path), sourceBefore);
+    assert.deepEqual(fs.readFileSync(f.evidence.path), indexBefore);
+  }
+  assert.equal(evidenceCheck(f.index, f.qa, { requireCoverage: true }).ok, true,
+    "clean notes still verify against original timestamped transcript and unchanged sourceRefs");
+});
+
+test("notes-check CLI propagates delivery code and line issues instead of suggesting a format-only repair", t => {
+  const f = fixture(t);
+  const content = "#### 合成纪要\n会议性质：创业项目交流\n#### 产品与技术\n- 公司预计2027年交付，仍需客户验收。\n";
+  const file = f.write("notes.md", content);
+  const result = spawnSync(process.execPath, [path.join(__dirname, "domi-workflow.cjs"), "notes-check", "--path", file, "--mode", "A"], { encoding: "utf8" });
+  assert.equal(result.status, 1, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.code, "DOMI_NOTES_DELIVERY_INVALID");
+  assert.equal(report.report.formatOk, true);
+  assert.equal(report.report.deliveryOk, false);
+  assert.equal(report.report.issues[0].line, 2);
+  assert.match(report.error, /按 issues 行列定位审改正文/);
+  assert.equal(fs.readFileSync(file, "utf8"), content);
 });
 
 test("handoff rejects incomplete stages and stale writers, preserves artifacts across execution rebind and invalidates dependent stages", t => {
