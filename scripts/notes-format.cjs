@@ -9,6 +9,165 @@ const PROFILE = "structured-notes";
 const MAIN_HEADINGS = new Set([
   "团队背景", "团队", "产品与技术", "商业化", "商业化与增长", "商业进展", "市场与行业", "市场与竞争", "融资情况", "融资", "其他"
 ]);
+const INTERNAL_DELIVERY_HEADINGS = new Set([
+  "来源与记录边界", "来源及记录边界", "信息来源与记录边界", "来源与整理边界", "来源与记录范围",
+  "来源与核验说明", "来源与核验边界", "纪要来源与边界", "记录边界说明", "纪要整理说明",
+  "整理与核验说明", "核验与整理说明", "ASR纠错说明", "核心修正项"
+]);
+const OPENING_METADATA = /^(?:会议日期|会议时间|录音日期|访谈日期|交流日期|会议性质|会议类型|会议形式|交流性质|访谈性质)[ \t]*[：:]/;
+const SOURCE_TIME = String.raw`\d{1,3}:[0-5]\d(?::[0-5]\d)?`;
+const SOURCE_TIME_LOCATOR = new RegExp(String.raw`[（(【](?:原文(?:逐字稿|转写稿)?|逐字稿|转写稿|原始转写)(?:定位|时间戳|时间|片段|位置)?[ \t：:]*${SOURCE_TIME}(?:[ \t]*(?:[-–—~～]|至)[ \t]*${SOURCE_TIME})?[ \t]*[）)】]|[（(【]录音(?:定位|时间戳|片段|位置)[ \t：:]*${SOURCE_TIME}(?:[ \t]*(?:[-–—~～]|至)[ \t]*${SOURCE_TIME})?[ \t]*[）)】]`, "g");
+
+// This is a conservative exclusion scanner, not a Markdown renderer. Preserve
+// offsets while masking code, quotations and links so an editorial lint cannot
+// mistake a quoted fact, URL or a syntax example for the author's own prose.
+function deliveryVisibleText(text) {
+  const output = text.split("");
+  const mask = (start, end) => { for (let i = start; i < end; i++) if (!/[\r\n]/.test(text[i])) output[i] = " "; };
+  const balancedEnd = (start, open, close) => {
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === "\\") { i++; continue; }
+      if (text[i] === open) depth++;
+      if (text[i] === close && --depth === 0) return i + 1;
+    }
+    return -1;
+  };
+  for (let i = 0; i < text.length;) {
+    let end = -1;
+    if (text[i] === "\\") end = Math.min(text.length, i + 2);
+    else if (text[i] === "`") {
+      const run = text.slice(i).match(/^`+/)[0];
+      let cursor = i + run.length;
+      while (cursor < text.length) {
+        const found = text.indexOf("`", cursor);
+        if (found < 0) break;
+        const next = text.slice(found).match(/^`+/)[0];
+        if (next.length === run.length) { end = found + next.length; break; }
+        cursor = found + next.length;
+      }
+      if (end < 0) end = text.length;
+    } else if (text.startsWith("<!--", i)) {
+      const close = text.indexOf("-->", i + 4); end = close < 0 ? text.length : close + 3;
+    } else if (text[i] === "<") {
+      const code = text.slice(i).match(/^<(code|pre)(?:\s[^>]*|)>/i);
+      if (code) {
+        const close = new RegExp(`</${code[1]}\\s*>`, "i").exec(text.slice(i + code[0].length));
+        end = close ? i + code[0].length + close.index + close[0].length : text.length;
+      } else {
+        if (/^<(?:\/?[A-Za-z]|[^\s<>]+@)/.test(text.slice(i))) {
+          let quote = null;
+          for (let cursor = i + 1; cursor < text.length; cursor++) {
+            const char = text[cursor];
+            if (quote) { if (char === quote) quote = null; }
+            else if (char === '"' || char === "'") quote = char;
+            else if (char === ">") { end = cursor + 1; break; }
+          }
+          if (end < 0) end = text.length;
+        }
+      }
+    } else if (/[“「『"]/u.test(text[i])) {
+      const closeChar = { "“": "”", "「": "」", "『": "』", '"': '"' }[text[i]];
+      for (let cursor = i + 1; cursor < text.length; cursor++) {
+        if (text[cursor] === "\\") { cursor++; continue; }
+        if (text[cursor] === closeChar) { end = cursor + 1; break; }
+      }
+      if (end < 0) end = text.length;
+    } else if (text[i] === "[") {
+      const labelEnd = balancedEnd(i, "[", "]");
+      if (labelEnd > 0 && text[labelEnd] === "(") end = balancedEnd(labelEnd, "(", ")");
+      else if (labelEnd > 0 && text[labelEnd] === "[") end = balancedEnd(labelEnd, "[", "]");
+      else if (labelEnd > 0) end = labelEnd; // Conservatively protect shortcut reference labels too.
+    } else if (/^https?:\/\//i.test(text.slice(i))) {
+      end = i + text.slice(i).match(/^\S+/)[0].length;
+    }
+    if (end > i) { mask(i, end); i = end; } else i++;
+  }
+  return output.join("");
+}
+
+function deliveryVisibleLines(lines) {
+  const visible = lines.map(item => " ".repeat(item.text.length));
+  let paragraph = [], lazyQuote = false;
+  const flush = () => {
+    if (!paragraph.length) return;
+    const masked = deliveryVisibleText(paragraph.map(index => lines[index].text).join("\n")).split("\n");
+    paragraph.forEach((index, offset) => { visible[index] = masked[offset]; });
+    paragraph = [];
+  };
+  for (let index = 0; index < lines.length; index++) {
+    const item = lines[index];
+    const listStart = /^ {0,3}(?:[-+*]|\d+[.)])[ \t]+/.test(item.text);
+    const boundary = !item.text.trim() || item.heading || item.separator || item.protected || listStart
+      || /^ {0,3}\[[^\]]+\]:/.test(item.text);
+    if (/^ {0,3}>/.test(item.text)) {
+      flush(); lazyQuote = true; continue;
+    }
+    // CommonMark permits paragraph continuation without another > marker.
+    // Keep it opaque until a blank line or an explicit block boundary.
+    if (lazyQuote && item.text.trim() && (!boundary || /^(?: {4}|\t)/.test(item.text))) { flush(); continue; }
+    lazyQuote = false;
+    // Indented code cannot interrupt an open paragraph. Its line may continue
+    // an inline code span, quote or link; blank-separated code stays opaque.
+    if (paragraph.length && item.text.trim() && /^(?: {4}|\t)/.test(item.text)) {
+      paragraph.push(index); continue;
+    }
+    if (boundary) flush();
+    if (item.protected || !item.text.trim() || item.separator || /^ {0,3}\[[^\]]+\]:/.test(item.text)) continue;
+    if (item.heading) { visible[index] = deliveryVisibleText(item.text); continue; }
+    paragraph.push(index);
+  }
+  flush();
+  return visible;
+}
+
+function deliveryIssues(markdown) {
+  const { lines, headings } = parse(markdown), issues = [];
+  const visibleLines = deliveryVisibleLines(lines);
+  const titleIndex = headings[0].index;
+  let opening = true;
+  const add = (item, rule, reason, start = 0, length = item.text.length) => {
+    issues.push({ line: item.line, column: start + 1, endColumn: start + length + 1, rule, reason });
+  };
+  for (const item of lines.slice(titleIndex + 1)) {
+    if (item.heading) {
+      opening = false;
+      if (INTERNAL_DELIVERY_HEADINGS.has(item.heading.key)) add(item, "internal-process-section",
+        "内部来源/整理过程章节不属于最终纪要。先将其中实质事实及必要限定移入对应主题，再将过程信息保留于独立证据记录；不要整节删除事实。");
+      continue;
+    }
+    if (item.protected || /^ {0,3}\[[^\]]+\]:/.test(item.text)) continue;
+    const visible = visibleLines[item.line - 1];
+    const prose = visible.trim().replace(/^(?:[-+*]|\d+[.)])[ \t]+/, "")
+      .replace(/\*\*|__/g, "").trim();
+    if (opening && OPENING_METADATA.test(prose)) add(item, "opening-meeting-metadata",
+      "最终纪要开头不重复会议日期、性质等元数据；保留参会人，将有业务意义的日期、时段或背景并入相应事实，勿由格式程序删除。");
+    else if (prose && !/^(?:参会人|参会人员|与会者|访谈对象|交流对象)[ \t]*[：:]/.test(prose)) opening = false;
+    const disclaimer = prose.replace(/^(?:说明|注|备注|记录说明|口径说明)[ \t]*[：:][ \t]*/, "");
+    let repeatedNarrativeBoundary = false;
+    if (/^下文保留双方判断和分歧[。；;]/.test(disclaimer)) {
+      // Match one known whole-document wrapper, including a softly wrapped
+      // paragraph. Do not classify business facts merely mentioning reports.
+      let paragraph = disclaimer;
+      for (const next of lines.slice(item.line, item.line + 3)) {
+        if (!next.text.trim() || next.heading || next.protected || next.separator
+          || /^ {0,3}(?:[-+*]|\d+[.)])[ \t]+/.test(next.text)) break;
+        paragraph += visibleLines[next.line - 1];
+      }
+      repeatedNarrativeBoundary = /均按现场自述、转述或估算记录/.test(paragraph)
+        && /未取得底层报表/.test(paragraph);
+    }
+    if (repeatedNarrativeBoundary || (/^(?:本(?:次)?(?:会议)?纪要|本记录|本文|本稿|全文(?:内容)?|(?:以下|以上)(?:内容|记录|纪要))(?:全部内容|所有内容)?[ \t，,：:]*(?:仅|只|均|未经|未作|未做|未进行|不作|不做|不进行|不构成|不代表|不等同于|依据|根据|基于|系|是|中的|所涉|所述)/.test(disclaimer)
+      && /(?:仅(?:依据|根据|基于|反映).{0,35}(?:会中|会议|交流|访谈|录音|逐字稿|转写|原文|嘉宾|受访者).{0,45}(?:整理|陈述|信息|观点|口述)|(?:未经|未作|未做|未进行|不作|不做|不进行).{0,8}(?:独立|外部)(?:核验|核实|验证)|不(?:构成|代表|等同于).{0,12}(?:投资建议|已核实事实|事实认定|独立验证|已验证事实))/.test(disclaimer))) {
+      add(item, "global-process-disclaimer",
+        "请审改面向全篇的通用来源/核验免责声明；具体事实的归因、估算、计划、冲突口径和适用条件仍须保留，过程信息移入独立证据记录。");
+    }
+    SOURCE_TIME_LOCATOR.lastIndex = 0;
+    for (const match of visible.matchAll(SOURCE_TIME_LOCATOR)) add(item, "explicit-source-time-locator",
+      "原文/逐字稿时间定位应保留在 sourceRefs 或独立证据记录，不作为纪要正文括号尾注；不要删除事实中的实际时间、日期或业务条件。", match.index, match[0].length);
+  }
+  return issues;
+}
 
 class NotesFormatError extends Error {
   constructor(message, code = "DOMI_NOTES_FORMAT_AMBIGUOUS", issues = []) {
@@ -221,8 +380,12 @@ function formatNotesMarkdown(markdown, options = {}) {
 function checkNotesFormat(markdown, options = {}) {
   try {
     const result = formatNotesMarkdown(markdown, options);
-    return { ok: !result.changed, changed: result.changed, profile: result.profile, mode: result.mode,
-      headings: result.headings, issues: result.issues };
+    const delivery = deliveryIssues(markdown);
+    return { ok: !result.changed && !delivery.length, changed: result.changed,
+      formatOk: !result.changed, deliveryOk: delivery.length === 0, profile: result.profile, mode: result.mode,
+      headings: result.headings, issues: [...result.issues, ...delivery],
+      ...(delivery.length ? { code: "DOMI_NOTES_DELIVERY_INVALID",
+        error: "纪要交付检查未通过：按 issues 行列定位审改正文，保留实质事实及必要限定；format 只修格式，不会删除交付噪音。" } : {}) };
   } catch (error) {
     if (!(error instanceof NotesFormatError)) throw error;
     return { ok: false, changed: false, profile: options.profile, mode: options.mode || "auto",

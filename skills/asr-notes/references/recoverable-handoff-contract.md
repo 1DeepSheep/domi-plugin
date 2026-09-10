@@ -58,6 +58,7 @@ generatedAt: ISO-8601
 
 - `transcript`必须指向完整规范文字稿并带SHA-256和字节数；evidence index不能用摘要替代原文。
 - 每条进入最终纪要的高重要性实体、数字、学历、履历、模型工作、融资和决策事实都要能回到`sourceRefs`定位。
+- 纪要正文去掉的是展示用定位标签，不是证据定位本身：`sourceRefs.locator`／`lines`必须继续指向真实原文，原文和精修稿的时间戳保持不变。正文中的事实日期、估算或归因仍按其含义保留；不要为证明可追溯而把sidecar内容回填成“来源与记录边界”小节。
 - 新ASR完成或重写必须执行[全源覆盖合同](source-coverage.md)：复用claims记录原文有效信息，`coverage`绑定固定原文区间的审阅，`notesRefs`绑定实际正文摘录；`notesLocation`只作人类可读辅助，不能单独证明内容已写入。旧工件保留可读，不冒充新版审查通过。
 - `verification_only`只能校正已有claim，不能静默产生正文新claim；`historical_record`只有在`notesScope=longitudinal`且实体唯一时才能贡献正文。
 - 用户更正应作为独立source记录，不覆盖原始转写稿；冲突保留为`conflict`，不能删除反证。

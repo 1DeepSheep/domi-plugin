@@ -1168,8 +1168,11 @@ ${event.action || "继续关注。"}
     if (structuredNotes || input.formatProfile === "structured-notes") {
       const format = checkNotesFormat(content, { profile: "structured-notes", mode: input.notesMode || "auto" });
       if (!format.ok) {
-        const error = new Error(`纪要格式未通过，尚未写入。请先运行 notes-format.cjs format --input <草稿> --output <格式化纪要> --profile structured-notes，再校验并归档。${format.error || JSON.stringify(format.issues || [])}`);
-        error.code = "DOMI_NOTES_FORMAT_INVALID";
+        const error = new Error(format.code === "DOMI_NOTES_DELIVERY_INVALID"
+          ? `${format.error} 尚未写入。${JSON.stringify(format.issues)}`
+          : `纪要格式未通过，尚未写入。请先运行 notes-format.cjs format --input <草稿> --output <格式化纪要> --profile structured-notes，再校验并归档。${format.error || JSON.stringify(format.issues || [])}`);
+        error.code = format.code === "DOMI_NOTES_DELIVERY_INVALID" ? format.code : "DOMI_NOTES_FORMAT_INVALID";
+        error.issues = format.issues;
         throw error;
       }
     }

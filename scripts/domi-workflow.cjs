@@ -26,7 +26,14 @@ function readJson(file) { return JSON.parse(fs.readFileSync(file, "utf8")); }
 function nonempty(value) { return typeof value === "string" && Boolean(value.trim()); }
 function notesFormatCheck(file, mode = "auto") {
   const report = checkNotesFormat(fs.readFileSync(file, "utf8"), { profile: "structured-notes", mode });
-  assert(report.ok, `纪要格式未通过：文档/主板块须为四级标题，子标题为五级，主板块之间须有独立分隔线。先运行 notes-format.cjs format，再更新证据索引与QA。${report.error || JSON.stringify(report.issues || [])}`);
+  if (!report.ok) {
+    const error = new Error(report.code === "DOMI_NOTES_DELIVERY_INVALID"
+      ? `${report.error} ${JSON.stringify(report.issues)}`
+      : `纪要格式未通过：文档/主板块须为四级标题，子标题为五级，主板块之间须有独立分隔线。先运行 notes-format.cjs format，再更新证据索引与QA。${report.error || JSON.stringify(report.issues || [])}`);
+    error.code = report.code || "DOMI_NOTES_FORMAT_INVALID";
+    error.report = report;
+    throw error;
+  }
   return { ...report, path: file, mechanicalChecksPassed: true, semanticReviewRequired: true };
 }
 function artifact(value) {
@@ -489,5 +496,5 @@ function main() {
   if (result.ok === false) process.exitCode = 1;
 }
 
-if (require.main === module) { try { main(); } catch (error) { process.stdout.write(`${JSON.stringify({ ok: false, error: error.message, ...(error.report ? { report: error.report } : {}) })}\n`); process.exitCode = 1; } }
+if (require.main === module) { try { main(); } catch (error) { process.stdout.write(`${JSON.stringify({ ok: false, error: error.message, ...(error.code ? { code: error.code } : {}), ...(error.report ? { report: error.report } : {}) })}\n`); process.exitCode = 1; } }
 module.exports = { artifact, verifyArtifact, atomicJson, contextBundle, validateManifest, inspectManifest, saveManifest, checkpointManifest, rebindManifest, invalidateManifest, evidenceCheck, notesFormatCheck, icStructureCheck, finalize };
