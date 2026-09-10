@@ -113,7 +113,16 @@ function queryRecords(repository, kind, input = {}) {
     const nextCursor = hasMore ? Buffer.from(JSON.stringify({ fingerprint, identity, version, updatedAt: last.updated_at, id: last.id })).toString("base64url") : null;
     db.exec("ROLLBACK"); // Read-only snapshot: no writes to commit.
     return { items, total, hasMore, nextCursor, complete: !hasMore, snapshotVersion: `${identity}:${version}`,
-      scope: { ...options, createdToExclusive: true }, ...(options.ids.length ? { missingIds: options.ids.filter(id => !items.some(item => item.id === id)) } : {}) };
+      scope: { ...options, createdToExclusive: true }, ...(options.ids.length ? { missingIds: options.ids.filter(id => !items.some(item => item.id === id)) } : {}),
+      // Preserve complete and cursor identity; completeness describes pagination, not document coverage.
+      completeScope: "pagination",
+      searchCoverage: {
+        type: "entity_fields",
+        queryApplied: Boolean(normalized),
+        queryFields: kind === "project" ? ["name"] : ["name", "organization"],
+        documentTitlesSearched: false,
+        documentContentSearched: false
+      } };
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
