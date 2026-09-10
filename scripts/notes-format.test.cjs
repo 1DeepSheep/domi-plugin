@@ -166,7 +166,8 @@ test("delivery check reports opening meeting shell without changing dates, natur
 });
 
 test("dedicated internal process sections block delivery but retain their substantive facts", () => {
-  for (const heading of ["来源与记录边界", "七、来源及记录边界", "来源与核验说明", "核心修正项"]) {
+  for (const heading of ["来源与记录边界", "七、来源及记录边界", "来源与核验说明", "核心修正项",
+    "来源与证据边界", "七、数字审计与冲突清单", "数字核验与冲突清单"]) {
     const source = `#### 合成项目纪要\n参会人：甲、乙\n#### 产品与技术\n- 交付2026年Q4开始。\n\n---\n\n#### ${heading}\n- 公司表示已签订3份合同，金额仅为框架上限。\n`;
     const report = check(source, options("B"));
     assert.equal(report.code, "DOMI_NOTES_DELIVERY_INVALID");
@@ -174,6 +175,77 @@ test("dedicated internal process sections block delivery but retain their substa
     assert.equal(report.issues[0].rule, "internal-process-section");
     assert.match(report.issues[0].reason, /先将其中实质事实/);
     assert.equal(format(source, options("B")).markdown, source);
+  }
+});
+
+test("opening time and topic labels are review errors while business topics and schedules remain intact", () => {
+  const source = "#### 合成项目纪要\n**时间：**2026年9月10日\n**主题：**产品能力和商业进展\n参会人：创始人甲、投资人乙\n#### 产品与技术\n- 主题：面向工业设备的故障检测。\n- 时间：2027年第一季度试点，前提是客户完成验收。\n";
+  const report = check(source, options("A"));
+  assert.equal(report.code, "DOMI_NOTES_DELIVERY_INVALID");
+  assert.deepEqual(report.issues.map(issue => [issue.line, issue.rule]), [
+    [2, "opening-meeting-metadata"], [3, "opening-meeting-metadata"]
+  ]);
+  assert.equal(format(source, options("A")).markdown, source);
+  const body = source.replace(/^\*\*(?:时间|主题)：.*\n/gm, "");
+  assert.equal(check(body, options("A")).ok, true);
+});
+
+test("labelled whole-notes data scope is rejected without requiring a 本文 prefix", () => {
+  for (const text of [
+    "口径说明：除“资料库既有研究核验”明确标注的内容外，经营、技术、客户及融资数据均为创始人甲会中陈述，未经合同、财务底稿或独立技术测试验证。",
+    "**口径说明：**除“资料库既有研究核验”明确标注的内容外，\n经营、技术、客户及融资数据均为创始人甲会中陈述，\n未经合同、财务底稿或独立技术测试验证。",
+    "记录口径：经营、客户和融资信息全部来自嘉宾现场口述，尚未经财务报表核验。"
+  ]) {
+    const source = `#### 合成项目纪要\n参会人：甲、乙\n${text}\n#### 产品与技术\n- 公司预计明年进入试点，仍需客户验收。\n`;
+    const report = check(source, options("A"));
+    assert.equal(report.code, "DOMI_NOTES_DELIVERY_INVALID", text);
+    assert.deepEqual(report.issues.map(issue => [issue.line, issue.rule]), [[3, "global-process-disclaimer"]]);
+    assert.equal(format(source, options("A")).markdown, source);
+  }
+});
+
+test("metric limitations and attributed meeting requests never become whole-notes delivery errors", () => {
+  const source = [
+    "#### 合成项目纪要", "参会人：甲、乙", "#### 商业化",
+    "- 口径说明：收入约500万元，为创始人甲会中估算，未经财务底稿验证。",
+    "- 口径说明：经营、客户及融资数据按月整理，财务底稿尚未交齐，交割因此延期。",
+    "- 口径说明：技术、技术、技术数据均为嘉宾会中陈述，未经独立技术测试验证。",
+    "- 投资人乙建议同步索取：试点合同和收入明细；公司承诺本周提供。",
+    "- 会中要求补充：验收条件与客户反馈，不要求提供客户个人信息。",
+    "##### 合同审计与争议处理", "- 客户合同的审计范围仍需双方律师确认。", ""
+  ].join("\n");
+  const report = check(source, options("A"));
+  assert.equal(report.ok, true, JSON.stringify(report));
+  assert.equal(report.reviewCandidates, undefined);
+  assert.equal(format(source, options("A")).markdown, source);
+});
+
+test("unattributed material requests are nonblocking source-review candidates and never silently removed", () => {
+  const source = "#### 合成项目纪要\n#### 其他\n- **建议同步索取：**试点合同、收入明细与客户反馈。\n";
+  const report = check(source, options("A"));
+  assert.equal(report.ok, true);
+  assert.equal(report.deliveryOk, true);
+  assert.equal(report.code, undefined);
+  assert.deepEqual(report.issues, []);
+  assert.deepEqual(report.reviewCandidates.map(issue => [issue.line, issue.rule]), [[3, "unattributed-follow-up-suggestion"]]);
+  assert.match(report.reviewCandidates[0].reason, /真实会中请求或承诺/);
+  assert.equal(format(source, options("A")).markdown, source);
+});
+
+test("new delivery patterns remain opaque in multiline quotations, code and source links", () => {
+  const noise = "口径说明：经营、技术、客户及融资数据均为嘉宾会中陈述，未经合同、财务底稿或独立技术测试验证。";
+  for (const protectedText of [
+    `合同引文：“第一行\n    第二行\n${noise}”`,
+    `示例：\`第一行\n\t第二行\n${noise}\``,
+    `[原文摘录：\n    第二行\n${noise}](https://example.test)`,
+    `> 附件原文：\n${noise}\n建议同步索取：客户合同。`,
+    '```markdown\n#### 数字审计与冲突清单\n#### 来源与证据边界\n主题：业务说明\n```'
+  ]) {
+    const source = `#### 合成项目纪要\n#### 产品与技术\n${protectedText}\n`;
+    const report = check(source, options("A"));
+    assert.equal(report.ok, true, JSON.stringify(report));
+    assert.equal(report.reviewCandidates, undefined);
+    assert.equal(format(source, options("A")).markdown, source);
   }
 });
 
