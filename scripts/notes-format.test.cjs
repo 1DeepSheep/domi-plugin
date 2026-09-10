@@ -149,6 +149,185 @@ test("explicit structured-notes profile prevents incidental changes to other doc
   }
 });
 
+test("delivery check reports opening meeting shell without changing dates, nature or participant bytes", () => {
+  const source = "#### 20260910-合成项目纪要\n参会人：创始人甲、投资人乙\n**会议日期：**2026年9月10日\n- **会议性质**：产品交流\n#### 产品与技术\n- 产品计划2027年第一季度上线。\n";
+  const formatted = format(source, options("A"));
+  assert.equal(formatted.markdown, source);
+  assert.equal(formatted.changed, false, "formatter remains lossless even for rejected delivery prose");
+  const report = check(source, options("A"));
+  assert.equal(report.ok, false);
+  assert.equal(report.formatOk, true);
+  assert.equal(report.deliveryOk, false);
+  assert.equal(report.code, "DOMI_NOTES_DELIVERY_INVALID");
+  assert.deepEqual(report.issues.map(issue => [issue.line, issue.rule]), [
+    [3, "opening-meeting-metadata"], [4, "opening-meeting-metadata"]
+  ]);
+  assert(report.issues.every(issue => issue.column === 1 && issue.endColumn > 1));
+});
+
+test("dedicated internal process sections block delivery but retain their substantive facts", () => {
+  for (const heading of ["来源与记录边界", "七、来源及记录边界", "来源与核验说明", "核心修正项"]) {
+    const source = `#### 合成项目纪要\n参会人：甲、乙\n#### 产品与技术\n- 交付2026年Q4开始。\n\n---\n\n#### ${heading}\n- 公司表示已签订3份合同，金额仅为框架上限。\n`;
+    const report = check(source, options("B"));
+    assert.equal(report.code, "DOMI_NOTES_DELIVERY_INVALID");
+    assert.equal(report.issues[0].line, 8);
+    assert.equal(report.issues[0].rule, "internal-process-section");
+    assert.match(report.issues[0].reason, /先将其中实质事实/);
+    assert.equal(format(source, options("B")).markdown, source);
+  }
+});
+
+test("limited global disclaimer patterns are review errors, not deletion instructions", () => {
+  for (const text of [
+    "本纪要仅依据本次交流内容整理，不构成独立核验。",
+    "以下内容仅反映受访者陈述，不代表已核实事实。",
+    "说明：本记录未经独立验证，不构成投资建议。",
+    "**备注：**本文未进行独立核验。",
+    "下文保留双方判断和分歧。收入、留存、融资、销量及成本等均按现场自述、转述或估算记录，未取得底层报表；明确写作“计划”“假设”的内容不代表已经实现。",
+    "下文保留双方判断和分歧。\n收入、留存、融资、销量及成本等均按现场自述、转述或估算记录，未取得底层报表；\n明确写作“计划”“假设”的内容不代表已经实现。"
+  ]) {
+    const source = `#### 合成访谈纪要\n参会人：甲、乙\n#### 产品与技术\n${text}\n`;
+    const report = check(source, options("B"));
+    assert.equal(report.ok, false, text);
+    assert.equal(report.issues[0].rule, "global-process-disclaimer");
+    assert.equal(report.issues[0].line, 4);
+    assert.equal(format(source, options("B")).markdown, source);
+  }
+});
+
+test("explicit transcript time locators expose exact line and column without changing source text", () => {
+  for (const locator of ["（原文00:12:30–00:13:05）", "(逐字稿：02:31-03:20)", "【转写稿定位 01:22】", "（录音时间戳：01:12:03）"]) {
+    const line = `- 公司计划2027年交付${locator}，首批仅3家客户。`;
+    const source = `#### 合成访谈纪要\n#### 产品与技术\n${line}\n`;
+    const report = check(source, options("A"));
+    assert.equal(report.ok, false, locator);
+    assert.deepEqual(report.issues.map(issue => [issue.line, issue.column, issue.endColumn, issue.rule]),
+      [[3, line.indexOf(locator) + 1, line.indexOf(locator) + locator.length + 1, "explicit-source-time-locator"]]);
+    assert.equal(format(source, options("A")).markdown, source);
+  }
+});
+
+test("business dates, action times, ratios, estimates, attribution and applicable conditions remain valid", () => {
+  const source = [
+    "#### 合成访谈纪要", "参会人：甲、乙", "#### 产品与技术",
+    "- 公司表示2026年9月30日前交付，前提是客户完成验收。",
+    "- 营业时间（09:00–18:00），分成比例（1:3），计划下一轮会议（14:30–15:00）。",
+    "- 下一次会议日期：2026年10月1日；录音时间（10:00–11:00）由会务确认。",
+    "- 原文给出的营业时间为09:00–18:00；该时间不表示全天候服务。",
+    "- 收入约500万元，为公司估算、尚未经审计；不等同于已回款金额。",
+    "- 实验没有独立核验，由合作方复测；不代表该功能已进入量产。",
+    "- 客户未提供底层报表，交割因此延期。",
+    "##### 数据来源与使用边界", "- 客户数据仅用于本地推理；2027年Q1上线仍取决于合规验收。", ""
+  ].join("\n");
+  assert.equal(check(source, options("A")).ok, true);
+  assert.equal(format(source, options("A")).markdown, source);
+});
+
+test("quoted facts, code, frontmatter and links cannot be mistaken for authored delivery noise", () => {
+  const source = [
+    "---", "会议日期: 2026-09-10", "locator: '（原文00:12）'", "---",
+    "#### 合成访谈纪要", "参会人：甲、乙", "#### 产品与技术",
+    '> 会议性质：甲方要求保留的原始引文。',
+    '> #### 来源与记录边界',
+    '> 以下内容未经独立核验。（原文00:12）',
+    '- 合同写明“以下内容未经独立核验。（原文00:12）”，客户尚未签署。',
+    '- 示例代码：`（原文00:12）`；多反引号：`` `（原文00:12）` ``。',
+    '- [引用（原文00:12）](https://example.test/a_(b) "（逐字稿00:14）")',
+    '- [原始链接][source]；https://example.test/（原文00:12）',
+    '- [引用（原文00:12）]',
+    '[source]: https://example.test/（原文00:12） "source locator"',
+    '<span data-value=">（原文00:12）">业务范围仍限于本地。</span>',
+    '<code>（原文00:12）</code>',
+    '```markdown', '#### 来源与记录边界', '会议日期：2026-09-10', '（原文00:12）', '```',
+    '    #### 来源与记录边界', '    （原文00:12）', ''
+  ].join("\n");
+  const report = check(source, options("B"));
+  assert.equal(report.ok, true, JSON.stringify(report));
+  assert.equal(format(source, options("B")).markdown, source);
+});
+
+test("checking nested markup and escapes keeps locator offsets while ignoring reference labels", () => {
+  const source = "#### 合成纪要\n#### 产品与技术\n- [**引用（原文00:12）**](https://example.test)；**真实正文**（原文00:22）。\n";
+  const report = check(source, options("A"));
+  assert.equal(report.issues.length, 1);
+  assert.equal(report.issues[0].column, source.split("\n")[2].indexOf("（原文00:22）") + 1);
+});
+
+test("multiline inline code, quotations and links stay protected until their closing marker", () => {
+  for (const protectedText of [
+    '示例：`第一行\n（逐字稿00:12）`',
+    '示例：`第一行\n    第二行\n（逐字稿00:12）`',
+    '示例：`第一行\n\t第二行\n（逐字稿00:12）`',
+    '示例：``第一行 `代码`\n（逐字稿00:12）``',
+    '[原文摘录：\n（逐字稿00:12）](https://example.test)',
+    '[原文摘录：\n    第二行\n（逐字稿00:12）](https://example.test)',
+    '[原文摘录：\n\t第二行\n（逐字稿00:12）](https://example.test)',
+    '[原文摘录：\n（逐字稿00:12）][source]',
+    '“客户文档原文：\n以下内容未经独立核验。”',
+    '“客户来函：\n    第二行\n以下内容未经独立核验。”',
+    '“客户来函：\n\t第二行\n以下内容未经独立核验。”',
+    '「客户文档原文：\n以下内容未经独立核验。」',
+    '原文："客户文档 \\"中的说明\n以下内容未经独立核验。（逐字稿00:12）"',
+    '示例：<code>第一行\n（逐字稿00:12）</code>',
+    '客户范围：<span title="第一行\n（逐字稿00:12）">有效</span>'
+  ]) {
+    const clean = `#### 测试纪要\n\n#### 产品讨论\n${protectedText}\n`;
+    const cleanReport = check(clean, options("B"));
+    assert.equal(cleanReport.ok, true, JSON.stringify({ protectedText, cleanReport }));
+    assert.equal(format(clean, options("B")).markdown, clean);
+    const source = clean.slice(0, -1) + ' 正文（逐字稿00:33）\n';
+    const report = check(source, options("B"));
+    const lastLine = source.trimEnd().split("\n").at(-1);
+    assert.deepEqual(report.issues.map(issue => [issue.line, issue.column, issue.rule]), [[
+      source.trimEnd().split("\n").length, lastLine.indexOf("（逐字稿00:33）") + 1, "explicit-source-time-locator"
+    ]], protectedText);
+    assert.equal(format(source, options("B")).markdown, source);
+  }
+});
+
+test("lazy blockquote continuation is opaque but explicit paragraph and block boundaries resume checks", () => {
+  const quoted = '> 客户文档原文：\n    合同附注继续：\n以下内容未经独立核验。\n（逐字稿00:12）';
+  const clean = `#### 测试纪要\n\n#### 产品讨论\n${quoted}\n`;
+  assert.equal(check(clean, options("B")).ok, true);
+  assert.equal(format(clean, options("B")).markdown, clean);
+  for (const boundary of ["\n", "##### 后续核验\n", "- "]) {
+    const source = clean + boundary + "本纪要未经独立核验。\n";
+    const report = check(source, options("B"));
+    assert.deepEqual(report.issues.map(issue => [issue.line, issue.rule]), [[
+      source.trimEnd().split("\n").length, "global-process-disclaimer"
+    ]], boundary);
+    assert.equal(format(source, options("B")).markdown, source);
+  }
+});
+
+test("unclosed inline exclusions cannot conceal prose beyond paragraph or section boundaries", () => {
+  for (const opening of ['示例：`未闭合', '原文："未闭合', '[未闭合标签']) {
+    for (const boundary of ["\n\n", "\n##### 后续核验\n", "\n- "]) {
+      const source = `#### 测试纪要\n\n#### 产品讨论\n${opening}${boundary}本纪要未经独立核验。\n`;
+      const report = check(source, options("B"));
+      assert.deepEqual(report.issues.map(issue => [issue.line, issue.rule]), [[
+        source.trimEnd().split("\n").length, "global-process-disclaimer"
+      ]], JSON.stringify({ opening, boundary }));
+      assert.equal(format(source, options("B")).markdown, source);
+    }
+  }
+});
+
+test("CLI format preserves delivery noise and subsequent check blocks without writing reviewed files", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-notes-delivery-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const input = path.join(root, "notes.md");
+  const source = "#### 合成纪要\n会议性质：创业项目交流\n#### 产品与技术\n- 已签3份框架协议（原文00:12）。\n";
+  fs.writeFileSync(input, source);
+  const run = command => spawnSync(process.execPath, [path.join(__dirname, "notes-format.cjs"), command,
+    "--input", input, "--profile", "structured-notes", "--mode", "A"], { encoding: "utf8" });
+  assert.equal(run("format").stdout, source);
+  const checked = run("check");
+  assert.equal(checked.status, 1);
+  assert.equal(JSON.parse(checked.stdout).code, "DOMI_NOTES_DELIVERY_INVALID");
+  assert.equal(fs.readFileSync(input, "utf8"), source);
+});
+
 test("real CLI checks and formats synthetic files, with invalid-input and ambiguity exit codes", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-notes-format-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

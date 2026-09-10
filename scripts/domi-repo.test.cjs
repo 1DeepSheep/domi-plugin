@@ -670,6 +670,17 @@ test("formal notes reject bad headings and missing rules before any archive writ
     assert.equal(fs.readFileSync(created.document.path, "utf8"), good);
     assert.deepEqual(repository.database.prepare("SELECT * FROM documents WHERE id=?").get(created.document.id), before);
   }
+  for (const content of [
+    good.replace("参会人：张某", "参会人：张某\n会议日期：2026年9月10日"),
+    good + "\n本纪要未经独立核验。\n",
+    good + "\n\n---\n\n#### 来源与记录边界\n- 该段仍含须移回正文的合同事实。\n",
+    good.replace("自研引擎。", "自研引擎（逐字稿00:12）。")
+  ]) {
+    assert.throws(() => repository.createDocument({ ...input, content }), error =>
+      error.code === "DOMI_NOTES_DELIVERY_INVALID" && error.issues.some(issue => issue.line > 1));
+    assert.equal(fs.readFileSync(created.document.path, "utf8"), good);
+    assert.deepEqual(repository.database.prepare("SELECT * FROM documents WHERE id=?").get(created.document.id), before);
+  }
   const raw = repository.createDocument({ ...input, kind: "PLAUD文字稿", title: "原始文字稿", content: "# 原始文字稿\n00:01 Speaker 1\n原话\n" });
   assert.match(fs.readFileSync(raw.document.path, "utf8"), /^# 原始文字稿/);
 });
