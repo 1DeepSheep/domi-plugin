@@ -123,7 +123,7 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 
 1. 用 taxonomy 确定领域、多个子领域和唯一主子领域；不确定则进入 `_未分类`。
 2. `project search` 按名称变体查重；多匹配先确认。
-3. 把纪要、研究或快评整理为 Markdown 临时文件。
+3. 把纪要、研究或快评整理为 Markdown 临时文件。已通过asr-notes审核的纪要直接使用原文件，不在归档时重新生成或追加数据库字段说明、审计附录和尽调建议；确需修改事实时，回到asr-notes重新审核并绑定修改后文件的哈希。
 4. `project upsert` 同一次写入 SQLite 并创建／更新稳定的 `项目主页.md` 与项目目录。
 5. `document create` 把纪要／研究写入项目目录；BP、录音和附件进入 `原始材料/`，同文件跳过、不同版本并存。
 6. `project get` 与 `workspace verify` 回读；SQLite、Markdown 与目录都通过才返回 `managed`。

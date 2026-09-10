@@ -672,8 +672,12 @@ test("formal notes reject bad headings and missing rules before any archive writ
   }
   for (const content of [
     good.replace("参会人：张某", "参会人：张某\n会议日期：2026年9月10日"),
+    good.replace("参会人：张某", "参会人：张某\n主题：产品能力与商业进展"),
     good + "\n本纪要未经独立核验。\n",
+    good + "\n口径说明：经营、技术、客户及融资数据均为嘉宾会中陈述，未经合同、财务底稿或独立技术测试验证。\n",
     good + "\n\n---\n\n#### 来源与记录边界\n- 该段仍含须移回正文的合同事实。\n",
+    good + "\n\n---\n\n#### 数字审计与冲突清单\n- 其中有须移回正文的预测条件。\n",
+    good + "\n\n---\n\n#### 来源与证据边界\n- 该段仍含须移回正文的合同事实。\n",
     good.replace("自研引擎。", "自研引擎（逐字稿00:12）。")
   ]) {
     assert.throws(() => repository.createDocument({ ...input, content }), error =>
