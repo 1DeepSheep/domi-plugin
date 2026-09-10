@@ -12,9 +12,12 @@ const MAIN_HEADINGS = new Set([
 const INTERNAL_DELIVERY_HEADINGS = new Set([
   "来源与记录边界", "来源及记录边界", "信息来源与记录边界", "来源与整理边界", "来源与记录范围",
   "来源与核验说明", "来源与核验边界", "纪要来源与边界", "记录边界说明", "纪要整理说明",
-  "整理与核验说明", "核验与整理说明", "ASR纠错说明", "核心修正项"
+  "整理与核验说明", "核验与整理说明", "ASR纠错说明", "核心修正项",
+  "来源与证据边界", "数字审计与冲突清单", "数字核验与冲突清单"
 ]);
-const OPENING_METADATA = /^(?:会议日期|会议时间|录音日期|访谈日期|交流日期|会议性质|会议类型|会议形式|交流性质|访谈性质)[ \t]*[：:]/;
+const OPENING_METADATA = /^(?:会议日期|会议时间|录音日期|访谈日期|交流日期|会议性质|会议类型|会议形式|交流性质|访谈性质|时间|主题|会议主题)[ \t]*[：:]/;
+const BROAD_DATA_CATEGORY = String.raw`(?:经营|技术|客户|融资|财务|收入|成本|销量|留存)`;
+const BROAD_DATA_SCOPE = new RegExp(String.raw`((?:${BROAD_DATA_CATEGORY}[ \t、，,及与和]*){3,})(?:等)?(?:数据|信息|数字|内容)[ \t]*(?:均|全部)`);
 const SOURCE_TIME = String.raw`\d{1,3}:[0-5]\d(?::[0-5]\d)?`;
 const SOURCE_TIME_LOCATOR = new RegExp(String.raw`[（(【](?:原文(?:逐字稿|转写稿)?|逐字稿|转写稿|原始转写)(?:定位|时间戳|时间|片段|位置)?[ \t：:]*${SOURCE_TIME}(?:[ \t]*(?:[-–—~～]|至)[ \t]*${SOURCE_TIME})?[ \t]*[）)】]|[（(【]录音(?:定位|时间戳|片段|位置)[ \t：:]*${SOURCE_TIME}(?:[ \t]*(?:[-–—~～]|至)[ \t]*${SOURCE_TIME})?[ \t]*[）)】]`, "g");
 
@@ -121,13 +124,22 @@ function deliveryVisibleLines(lines) {
   return visible;
 }
 
-function deliveryIssues(markdown) {
-  const { lines, headings } = parse(markdown), issues = [];
+function inspectNotesDelivery(markdown) {
+  const { lines, headings } = parse(markdown), issues = [], reviewCandidates = [];
   const visibleLines = deliveryVisibleLines(lines);
   const titleIndex = headings[0].index;
   let opening = true;
   const add = (item, rule, reason, start = 0, length = item.text.length) => {
     issues.push({ line: item.line, column: start + 1, endColumn: start + length + 1, rule, reason });
+  };
+  const paragraphFrom = (item, firstLine) => {
+    let paragraph = firstLine;
+    for (const next of lines.slice(item.line, item.line + 3)) {
+      if (!next.text.trim() || next.heading || next.protected || next.separator
+        || /^ {0,3}(?:[-+*]|\d+[.)])[ \t]+/.test(next.text)) break;
+      paragraph += visibleLines[next.line - 1].trim();
+    }
+    return paragraph;
   };
   for (const item of lines.slice(titleIndex + 1)) {
     if (item.heading) {
@@ -141,32 +153,40 @@ function deliveryIssues(markdown) {
     const prose = visible.trim().replace(/^(?:[-+*]|\d+[.)])[ \t]+/, "")
       .replace(/\*\*|__/g, "").trim();
     if (opening && OPENING_METADATA.test(prose)) add(item, "opening-meeting-metadata",
-      "最终纪要开头不重复会议日期、性质等元数据；保留参会人，将有业务意义的日期、时段或背景并入相应事实，勿由格式程序删除。");
+      "最终纪要开头不重复时间、主题、会议日期、性质等元数据；保留参会人，将有业务意义的日期、时段或背景并入相应事实，勿由格式程序删除。");
     else if (prose && !/^(?:参会人|参会人员|与会者|访谈对象|交流对象)[ \t]*[：:]/.test(prose)) opening = false;
     const disclaimer = prose.replace(/^(?:说明|注|备注|记录说明|口径说明)[ \t]*[：:][ \t]*/, "");
     let repeatedNarrativeBoundary = false;
     if (/^下文保留双方判断和分歧[。；;]/.test(disclaimer)) {
       // Match one known whole-document wrapper, including a softly wrapped
       // paragraph. Do not classify business facts merely mentioning reports.
-      let paragraph = disclaimer;
-      for (const next of lines.slice(item.line, item.line + 3)) {
-        if (!next.text.trim() || next.heading || next.protected || next.separator
-          || /^ {0,3}(?:[-+*]|\d+[.)])[ \t]+/.test(next.text)) break;
-        paragraph += visibleLines[next.line - 1];
-      }
+      const paragraph = paragraphFrom(item, disclaimer);
       repeatedNarrativeBoundary = /均按现场自述、转述或估算记录/.test(paragraph)
         && /未取得底层报表/.test(paragraph);
     }
-    if (repeatedNarrativeBoundary || (/^(?:本(?:次)?(?:会议)?纪要|本记录|本文|本稿|全文(?:内容)?|(?:以下|以上)(?:内容|记录|纪要))(?:全部内容|所有内容)?[ \t，,：:]*(?:仅|只|均|未经|未作|未做|未进行|不作|不做|不进行|不构成|不代表|不等同于|依据|根据|基于|系|是|中的|所涉|所述)/.test(disclaimer)
+    let broadScopeBoundary = false;
+    if (/^(?:口径说明|记录口径|数据口径说明)[ \t]*[：:]/.test(prose)) {
+      const paragraph = paragraphFrom(item, prose), scope = BROAD_DATA_SCOPE.exec(paragraph);
+      // Require a labelled, multi-domain whole-notes scope AND oral sourcing
+      // AND blanket verification language, not a single metric's limitation.
+      broadScopeBoundary = scope && new Set(scope[1].match(new RegExp(BROAD_DATA_CATEGORY, "g"))).size >= 3
+        && /(?:均|全部)(?:为|来自|依据|根据).{0,30}(?:会中|现场|受访者).{0,8}(?:陈述|口述|自述|转述)/.test(paragraph)
+        && /(?:未经|尚未).{0,60}(?:合同|财务底稿|财务报表|底层报表|独立技术测试).{0,24}(?:验证|核验|核实)/.test(paragraph);
+    }
+    if (repeatedNarrativeBoundary || broadScopeBoundary || (/^(?:本(?:次)?(?:会议)?纪要|本记录|本文|本稿|全文(?:内容)?|(?:以下|以上)(?:内容|记录|纪要))(?:全部内容|所有内容)?[ \t，,：:]*(?:仅|只|均|未经|未作|未做|未进行|不作|不做|不进行|不构成|不代表|不等同于|依据|根据|基于|系|是|中的|所涉|所述)/.test(disclaimer)
       && /(?:仅(?:依据|根据|基于|反映).{0,35}(?:会中|会议|交流|访谈|录音|逐字稿|转写|原文|嘉宾|受访者).{0,45}(?:整理|陈述|信息|观点|口述)|(?:未经|未作|未做|未进行|不作|不做|不进行).{0,8}(?:独立|外部)(?:核验|核实|验证)|不(?:构成|代表|等同于).{0,12}(?:投资建议|已核实事实|事实认定|独立验证|已验证事实))/.test(disclaimer))) {
       add(item, "global-process-disclaimer",
         "请审改面向全篇的通用来源/核验免责声明；具体事实的归因、估算、计划、冲突口径和适用条件仍须保留，过程信息移入独立证据记录。");
     }
+    if (/^建议(?:同步)?索取[ \t]*[：:]/.test(prose)) reviewCandidates.push({
+      line: item.line, column: 1, endColumn: item.text.length + 1, rule: "unattributed-follow-up-suggestion",
+      reason: "核对这项建议是否来自真实会中请求或承诺。若有来源，保留并补明提出方、事项及条件；若为整理时追加的建议，不混入会议事实。此候选不认定内容错误，不阻断检查或授权删除。"
+    });
     SOURCE_TIME_LOCATOR.lastIndex = 0;
     for (const match of visible.matchAll(SOURCE_TIME_LOCATOR)) add(item, "explicit-source-time-locator",
       "原文/逐字稿时间定位应保留在 sourceRefs 或独立证据记录，不作为纪要正文括号尾注；不要删除事实中的实际时间、日期或业务条件。", match.index, match[0].length);
   }
-  return issues;
+  return { issues, reviewCandidates };
 }
 
 class NotesFormatError extends Error {
@@ -380,11 +400,12 @@ function formatNotesMarkdown(markdown, options = {}) {
 function checkNotesFormat(markdown, options = {}) {
   try {
     const result = formatNotesMarkdown(markdown, options);
-    const delivery = deliveryIssues(markdown);
-    return { ok: !result.changed && !delivery.length, changed: result.changed,
-      formatOk: !result.changed, deliveryOk: delivery.length === 0, profile: result.profile, mode: result.mode,
-      headings: result.headings, issues: [...result.issues, ...delivery],
-      ...(delivery.length ? { code: "DOMI_NOTES_DELIVERY_INVALID",
+    const delivery = inspectNotesDelivery(markdown);
+    return { ok: !result.changed && !delivery.issues.length, changed: result.changed,
+      formatOk: !result.changed, deliveryOk: delivery.issues.length === 0, profile: result.profile, mode: result.mode,
+      headings: result.headings, issues: [...result.issues, ...delivery.issues],
+      ...(delivery.reviewCandidates.length ? { reviewCandidates: delivery.reviewCandidates } : {}),
+      ...(delivery.issues.length ? { code: "DOMI_NOTES_DELIVERY_INVALID",
         error: "纪要交付检查未通过：按 issues 行列定位审改正文，保留实质事实及必要限定；format 只修格式，不会删除交付噪音。" } : {}) };
   } catch (error) {
     if (!(error instanceof NotesFormatError)) throw error;

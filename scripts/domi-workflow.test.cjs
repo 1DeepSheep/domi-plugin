@@ -176,7 +176,10 @@ test("ASR evidence blocks delivery noise despite passed editorial QA and preserv
   const clean = fs.readFileSync(f.notes.path, "utf8");
   for (const extra of [
     "\n#### 来源与记录边界\n- 其中还包括公司明确披露的合同上限。\n",
+    "\n#### 数字审计与冲突清单\n- 两次会议的收入均为预测口径。\n",
+    "\n#### 来源与证据边界\n- 其中有须迁回业务章节的合同事实。\n",
     "\n本纪要仅依据本次交流整理，未经独立核验。\n",
+    "\n口径说明：经营、技术、客户及融资数据均为嘉宾会中陈述，未经合同、财务底稿或独立技术测试验证。\n",
     "\n- 嘉宾表示仍无收入（原文逐字稿00:00:01–00:00:02）。\n"
   ]) {
     const content = clean + extra;
@@ -204,6 +207,21 @@ test("notes-check CLI propagates delivery code and line issues instead of sugges
   assert.equal(report.report.deliveryOk, false);
   assert.equal(report.report.issues[0].line, 2);
   assert.match(report.error, /按 issues 行列定位审改正文/);
+  assert.equal(fs.readFileSync(file, "utf8"), content);
+});
+
+test("notes-check CLI exposes nonblocking source-review candidates without changing actual meeting requests", t => {
+  const f = fixture(t);
+  const content = "#### 合成纪要\n#### 其他\n- 建议同步索取：试点合同和客户反馈。\n- 投资人乙建议同步索取：收入明细，公司承诺本周提供。\n";
+  const file = f.write("notes.md", content);
+  const result = spawnSync(process.execPath, [path.join(__dirname, "domi-workflow.cjs"), "notes-check", "--path", file, "--mode", "A"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.ok, true);
+  assert.equal(report.deliveryOk, true);
+  assert.equal(report.semanticReviewRequired, true);
+  assert.equal(report.code, undefined);
+  assert.deepEqual(report.reviewCandidates.map(issue => [issue.line, issue.rule]), [[3, "unattributed-follow-up-suggestion"]]);
   assert.equal(fs.readFileSync(file, "utf8"), content);
 });
 
