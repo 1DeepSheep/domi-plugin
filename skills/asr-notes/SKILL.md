@@ -43,6 +43,7 @@ description: 语音转文字结构化笔记专家。支持普通本地音频经Q
 3. [完整性与高信号覆盖审计](references/completeness-qa.md)
 4. [文件命名与交付规则](references/delivery-rules.md)
 5. [程序化格式检查](references/format-validation.md)：生成新纪要和修改已有纪要都适用，先格式化再绑定最终文件哈希。
+6. [专业投研写作规范](../domi-router/references/professional-investment-writing.md)：模式A／B均采用事实与业务主体直接陈述；只改变表达，不把纪要扩写为模型的新研究或新增分析。
 
 ### 按输入和风险追加
 
