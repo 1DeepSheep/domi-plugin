@@ -25,7 +25,7 @@ node <plugin-root>/scripts/notes-coverage.cjs prepare --index <evidence-index.js
 ## 绑定与检查
 
 5. 将审阅完的coverage文件以`{path,sha256,bytes}`登记在`index.coverage`中，使用`domi-workflow.cjs artifact`计算文件哈希和字节数，不手工填写。更新索引后再生成绑定最终纪要与索引的QA。
-6. QA使用`reviewer:model`，除原有实体、数字、完整性、归因等检查外，必须单独记录`checks.editorial:passed`：没有过程备注、泛化空话、未讨论字段清单或模型擅加的投资评价；重要未决边界简洁保留。
+6. QA使用`reviewer:model`，除原有实体、数字、完整性、归因等检查外，必须单独记录`checks.editorial:passed`：没有过程备注、泛化空话、未讨论字段清单或模型擅加的投资评价；重复发言套语已改为事实直接陈述，原有机制、案例、数字、实际行动者及问答关系均有落点，重要公司口径、预测／估算来源、转述、分歧与未决边界仍在相应事实旁简洁保留。复用现有claims与QA回执完成这一检查，不新建独立的写作审计工件。
 7. 运行：
 
 ```bash
