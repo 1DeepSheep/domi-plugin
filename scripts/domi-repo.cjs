@@ -8,8 +8,9 @@ const { pathToFileURL } = require("node:url");
 const { DatabaseSync } = require("node:sqlite");
 const { installQueryVersion, queryRecords } = require("./repository-query.cjs");
 const { checkNotesFormat } = require("./notes-format.cjs");
+const { normalizedProjectName, assertProjectBrandName, projectNameAliases } = require("./project-name-policy.cjs");
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 7;
 const PERSON_INTERACTION_NAME_PATTERN = /(?:交流|纪要|会议|访谈|沟通|会面|电话|路演|聊天)/i;
 const PERSON_RESEARCH_NAME_PATTERN = /(?:研究|调研|人物画像|背景|背调|资料|分析|profile)/i;
 const LOCAL_TODO_DOCUMENT_NAME = "0.待办事项.md";
@@ -133,12 +134,7 @@ function safeSegment(value, fallback = "_未分类") {
   return cleaned || fallback;
 }
 
-function normalizedName(value) {
-  return String(value || "")
-    .normalize("NFKC")
-    .toLocaleLowerCase("zh-CN")
-    .replace(/[\s·•._\-—–（）()【】[\]{}，,。.!！?？/&／]+/g, "");
-}
+function normalizedName(value) { return normalizedProjectName(value); }
 
 function archiveStyleProjectName(value) {
   const raw = String(value || "").normalize("NFKC").trim();
@@ -164,6 +160,10 @@ function assertCanonicalProjectName(value) {
   );
   error.code = "DOMI_PROJECT_NAME_REVIEW_REQUIRED";
   throw error;
+}
+
+function markdownTableValue(value) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
 }
 
 function stableId(prefix, value) {
@@ -229,6 +229,11 @@ function projectRecordHash(row) {
     documentPath: String(row.document_path || ""),
     createdAt: Number(row.created_at) || 0
   };
+  // Empty identity metadata must not invalidate pre-upgrade workflow receipts.
+  if (String(row.legal_name || "") || parseJsonList(row.aliases_json).length) {
+    canonical.legalName = String(row.legal_name || "");
+    canonical.aliases = parseJsonList(row.aliases_json);
+  }
   return crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
@@ -338,6 +343,8 @@ class DomiRepository {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         normalized_name TEXT NOT NULL UNIQUE,
+        legal_name TEXT NOT NULL DEFAULT '',
+        aliases_json TEXT NOT NULL DEFAULT '[]',
         domain TEXT NOT NULL DEFAULT '',
         subdomains_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT '待交流',
@@ -426,6 +433,14 @@ class DomiRepository {
     const projectColumns = new Set(
       this.database.prepare("PRAGMA table_info(projects)").all().map((column) => column.name)
     );
+    for (const [column, definition] of [["legal_name", "TEXT NOT NULL DEFAULT ''"], ["aliases_json", "TEXT NOT NULL DEFAULT '[]'"]]) {
+      if (projectColumns.has(column)) continue;
+      try {
+        this.database.exec(`ALTER TABLE projects ADD COLUMN ${column} ${definition}`);
+      } catch (error) {
+        if (!this.database.prepare("PRAGMA table_info(projects)").all().some(item => item.name === column)) throw error;
+      }
+    }
     if (!projectColumns.has("revision")) {
       try {
         this.database.exec("ALTER TABLE projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
@@ -548,6 +563,8 @@ domi_schema: ${SCHEMA_VERSION}
 entity_type: "project"
 project_id: ${yamlValue(id)}
 company_name: ${yamlValue(project.name)}
+legal_name: ${yamlValue(project.legalName || "")}
+aliases: ${yamlValue(project.aliases || [])}
 domain: ${yamlValue(project.domain || "")}
 subdomains: ${yamlValue(stringList(project.subdomains))}
 status: ${yamlValue(project.status || "待交流")}
@@ -570,7 +587,7 @@ ${project.notes || "暂无投资摘要。建议补充项目定位、核心产品
 
 | 项目字段 | 当前信息 |
 | --- | --- |
-| 领域 | ${project.domain || "未分类"} |
+${project.legalName ? `| 法律主体 | ${markdownTableValue(project.legalName)} |\n` : ""}${project.aliases?.length ? `| 历史名称／别名 | ${markdownTableValue(project.aliases.join("、"))} |\n` : ""}| 领域 | ${project.domain || "未分类"} |
 | 子领域 | ${subdomains.join("、") || "未分类"} |
 | 进展状态 | ${statusLabel} |
 | 项目评级 | ${project.rating || "未评级"} |
@@ -595,10 +612,9 @@ ${project.financingHistory || "暂无历史融资信息。"}
   }
 
   upsertProject(input) {
-    const name = String(input.name || input.companyName || "").trim();
-    if (!name) throw new Error("项目写入缺少 name/companyName。");
-    assertCanonicalProjectName(name);
-    const normalized = normalizedName(name);
+    const suppliedName = String(input.name || input.companyName || "").trim();
+    if (!suppliedName) throw new Error("项目写入缺少 name/companyName。");
+    assertCanonicalProjectName(suppliedName);
     const hasExpectedRevision = Object.prototype.hasOwnProperty.call(input, "expectedRevision");
     const hasExpectedHash = Object.prototype.hasOwnProperty.call(input, "expectedRecordHash");
     const expectedRevision = hasExpectedRevision ? Number(input.expectedRevision) : null;
@@ -616,34 +632,68 @@ ${project.financingHistory || "暂无历史融资信息。"}
     let transactionOpen = true;
     try {
       const requestedId = String(input.id || input.projectId || "").trim();
-      const existingByName = this.database.prepare(
-        "SELECT * FROM projects WHERE normalized_name = ?"
-      ).get(normalized);
       const existingById = requestedId
         ? this.database.prepare("SELECT * FROM projects WHERE id = ?").get(requestedId)
         : null;
-      if (existingByName && existingById && existingByName.id !== existingById.id) {
-        throw casError("projectId 与项目名称指向不同记录；为避免覆盖并发数据，已拒绝写入。");
+      const matchesFor = keys => {
+        if (!keys.length) return [];
+        const placeholders = keys.map(() => "?").join(",");
+        return this.database.prepare(`
+          SELECT * FROM projects p WHERE normalized_name IN (${placeholders})
+            OR domi_normalize(legal_name) IN (${placeholders})
+            OR EXISTS (SELECT 1 FROM json_each(p.aliases_json) a
+              WHERE domi_normalize(a.value) IN (${placeholders}))
+        `).all(...keys, ...keys, ...keys);
+      };
+      const suppliedKeys = [...new Set([suppliedName, input.legalName, ...stringList(input.aliases)]
+        .map(normalizedName).filter(Boolean))];
+      const identityMatches = existingById ? [] : matchesFor(suppliedKeys);
+      if (identityMatches.length > 1) {
+        throw casError("项目名称、法律主体或别名匹配多个项目；请核实实体关系，不能自动合并或覆盖。");
+      }
+      const existingByName = identityMatches[0] || null;
+      if (existingByName && requestedId && existingByName.id !== requestedId) {
+        throw casError("项目名称、法律主体或别名已绑定其他稳定 projectId；已拒绝创建重复记录或覆盖另一项目。");
       }
       const existing = existingById || existingByName || null;
-      if (existing && requestedId && existing.id !== requestedId) {
-        throw casError("项目名称已绑定其他稳定 projectId；已拒绝创建重复记录。");
-      }
+      const knownAlias = existing && [existing.legal_name, ...parseJsonList(existing.aliases_json)]
+        .some(alias => normalizedName(alias) === normalizedName(suppliedName));
+      // Ordinary updates through an old name cannot silently undo an established brand.
+      const name = existing && (!requestedId || (knownAlias && input.rename !== true))
+        ? existing.name : suppliedName;
+      assertCanonicalProjectName(name);
+      assertProjectBrandName(name, { previousName: existing?.name, allowLegalName: input.allowLegalName });
+      const normalized = normalizedName(name);
       const id = requestedId || existing?.id || stableId("prj", normalized);
+      const has = key => Object.prototype.hasOwnProperty.call(input, key);
+      const legalName = has("legalName") ? String(input.legalName || "").trim()
+        : String(existing?.legal_name || "");
+      const aliases = projectNameAliases(name, [
+        ...parseJsonList(existing?.aliases_json), ...stringList(input.aliases),
+        ...(existing && existing.name !== name ? [existing.name] : []),
+        ...(existing?.legal_name && existing.legal_name !== legalName ? [existing.legal_name] : [])
+      ]);
+      const existingKeys = new Set(existing
+        ? [existing.name, existing.legal_name, ...parseJsonList(existing.aliases_json)].map(normalizedName).filter(Boolean)
+        : []);
+      const newKeys = [...new Set([name, legalName, ...aliases].map(normalizedName).filter(Boolean))]
+        .filter(key => !existingKeys.has(key) || (name !== existing?.name && key === normalized));
+      if (matchesFor(newKeys).some(match => match.id !== id)) {
+        throw casError("新的项目名称、法律主体或别名已属于另一个项目；请核实实体关系，不能自动合并。");
+      }
       const now = Date.now();
       const hasLastUpdated = Object.prototype.hasOwnProperty.call(input, "lastUpdatedAt")
         || Object.prototype.hasOwnProperty.call(input, "lastFollowup");
+      const requestedDomain = has("domain") ? String(input.domain || "").trim() : String(existing?.domain || "");
       const project = {
-        name,
-        domain: String(input.domain || "").trim() === "消费科技"
-          && String(existing?.domain || "").trim() !== "消费科技"
-          ? "消费"
-          : String(input.domain || "").trim(),
-        subdomains: stringList(input.subdomains),
-        status: String(input.status || "待交流").trim(),
-        rating: String(input.rating || "").trim(),
-        notes: String(input.notes || "").trim(),
-        cities: stringList(input.cities),
+        name, legalName, aliases,
+        domain: requestedDomain === "消费科技" && String(existing?.domain || "").trim() !== "消费科技"
+          ? "消费" : requestedDomain,
+        subdomains: has("subdomains") ? stringList(input.subdomains) : parseJsonList(existing?.subdomains_json),
+        status: has("status") ? String(input.status || "待交流").trim() : String(existing?.status || "待交流"),
+        rating: has("rating") ? String(input.rating || "").trim() : String(existing?.rating || ""),
+        notes: has("notes") ? String(input.notes || "").trim() : String(existing?.notes || ""),
+        cities: has("cities") ? stringList(input.cities) : parseJsonList(existing?.cities_json),
         investors: Object.prototype.hasOwnProperty.call(input, "investors")
           ? stringList(input.investors)
           : parseJsonList(existing?.investors_json),
@@ -657,9 +707,9 @@ ${project.financingHistory || "暂无历史融资信息。"}
             ? null
             : Number(input.latestValuationUsd100m)
           : existing?.latest_valuation_usd_100m ?? null,
-        createdAt: existing?.created_at || now,
+        createdAt: existing?.created_at ?? now,
         lastUpdatedAt: hasLastUpdated
-          ? toEpochMs(input.lastUpdatedAt || input.lastFollowup, now)
+          ? toEpochMs(has("lastUpdatedAt") ? input.lastUpdatedAt : input.lastFollowup, now)
           : existing?.last_updated_at ?? now
       };
       if (project.latestValuationUsd100m !== null
@@ -673,6 +723,8 @@ ${project.financingHistory || "暂无历史融资信息。"}
         id,
         name,
         normalized_name: normalized,
+        legal_name: legalName,
+        aliases_json: jsonList(aliases),
         domain: project.domain,
         subdomains_json: jsonList(project.subdomains),
         status: project.status,
@@ -702,13 +754,15 @@ ${project.financingHistory || "暂无历史融资信息。"}
         const nextRevision = existing ? currentRevision + 1 : 1;
         this.database.prepare(`
           INSERT INTO projects (
-            id, name, normalized_name, domain, subdomains_json, status, rating, notes,
+            id, name, normalized_name, legal_name, aliases_json, domain, subdomains_json, status, rating, notes,
             cities_json, investors_json, financing_history, latest_valuation_usd_100m,
             last_updated_at, document_path, created_at, updated_at, revision
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             normalized_name = excluded.normalized_name,
+            legal_name = excluded.legal_name,
+            aliases_json = excluded.aliases_json,
             domain = excluded.domain,
             subdomains_json = excluded.subdomains_json,
             status = excluded.status,
@@ -723,7 +777,7 @@ ${project.financingHistory || "暂无历史融资信息。"}
             updated_at = excluded.updated_at,
             revision = excluded.revision
         `).run(
-          id, name, normalized, project.domain, jsonList(project.subdomains), project.status,
+          id, name, normalized, legalName, jsonList(aliases), project.domain, jsonList(project.subdomains), project.status,
           project.rating, project.notes, jsonList(project.cities), jsonList(project.investors),
           project.financingHistory, project.latestValuationUsd100m,
           project.lastUpdatedAt, documentPath, project.createdAt, now, nextRevision
@@ -797,6 +851,8 @@ ${project.financingHistory || "暂无历史融资信息。"}
     return {
       id: row.id,
       name: row.name,
+      legalName: String(row.legal_name || ""),
+      aliases: parseJsonList(row.aliases_json),
       domain: row.domain,
       subdomains: parseJsonList(row.subdomains_json),
       status: row.status,

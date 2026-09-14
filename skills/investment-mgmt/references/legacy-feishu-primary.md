@@ -41,7 +41,7 @@ localAuthorityMigrationCompleted != true
 名、品牌／产品名和法律主体查重，并以字段名动态读取真实 schema；项目名称
 字段固定按 `公司名称` 语义解析。先运行幂等 `ensure-intake-time-fields.js
 ensure`，确认项目表 `入库时间` 为系统 `created_at`，该字段不得进入写入
-payload。
+payload。`公司名称` 使用品牌／项目简称，工商全称与别名按[项目命名规则](project-names.md)保存到已有对应字段或 Notes，不把“规范主体”理解为必须使用工商全称。
 
 项目 intake／update 按以下顺序完成：
 

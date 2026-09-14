@@ -8,7 +8,7 @@ const COMMON = {
   documentPath: ["document_path"], documentUri: ["document_path"]
 };
 const FIELDS = {
-  project: { ...COMMON, domain: ["domain"], subdomains: ["subdomains_json"], notes: ["notes"],
+  project: { ...COMMON, legalName: ["legal_name"], aliases: ["aliases_json"], domain: ["domain"], subdomains: ["subdomains_json"], notes: ["notes"],
     investors: ["investors_json"], financingHistory: ["financing_history"],
     latestValuationUsd100m: ["latest_valuation_usd_100m"], lastUpdatedAt: ["last_updated_at"],
     recordRevision: ["revision"], recordHash: ["*"] },
@@ -72,8 +72,10 @@ function queryRecords(repository, kind, input = {}) {
   const normalized = repository.normalizeQuery(options.query);
   const conditions = [], parameters = [];
   if (normalized) {
-    conditions.push(kind === "project" ? "instr(normalized_name, ?) > 0" : "instr(domi_normalize(name || organization), ?) > 0");
-    parameters.push(normalized);
+    conditions.push(kind === "project"
+      ? "(instr(normalized_name, ?) > 0 OR instr(domi_normalize(legal_name), ?) > 0 OR EXISTS (SELECT 1 FROM json_each(projects.aliases_json) a WHERE instr(domi_normalize(a.value), ?) > 0))"
+      : "instr(domi_normalize(name || organization), ?) > 0");
+    parameters.push(...(kind === "project" ? [normalized, normalized, normalized] : [normalized]));
   }
   for (const [column, values] of [["id", options.ids], ["rating", options.ratings], ["status", options.statuses]]) {
     if (values.length) { conditions.push(`${column} IN (${values.map(() => "?").join(",")})`); parameters.push(...values); }
@@ -119,7 +121,7 @@ function queryRecords(repository, kind, input = {}) {
       searchCoverage: {
         type: "entity_fields",
         queryApplied: Boolean(normalized),
-        queryFields: kind === "project" ? ["name"] : ["name", "organization"],
+        queryFields: kind === "project" ? ["name", "legalName", "aliases"] : ["name", "organization"],
         documentTitlesSearched: false,
         documentContentSearched: false
       } };

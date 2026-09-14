@@ -63,4 +63,6 @@ console.log("domi plugin release build tests passed.");
 // Standalone Slides resources and the QA v3 completion gate require the matching
 // client. Older releases must keep their installed, compatible plugin.
 const publishWorkflow = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "publish-plugin.yml"), "utf8");
-assert.match(publishWorkflow, /--min-client-version "7\.0\.0"/);
+// Older clients may rewrite brand metadata and move directories without
+// updating material indexes when a renamed project is edited.
+assert.match(publishWorkflow, /--min-client-version "7\.0\.6"/);
