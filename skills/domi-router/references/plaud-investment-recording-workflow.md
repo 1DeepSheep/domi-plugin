@@ -106,7 +106,7 @@ mark <fileId> reviewed <reviewPath> {"score":X,"rating":"A","reviewAudit":{"stat
 本阶段是 `project` 录音的强制阶段。先按 `investment-mgmt/references/storage-backends.md` 读取并锁定 `repositoryBackend`，再采用 `domi:investment-mgmt`：
 
 1. 从纪要和快评提取规范公司名、会议日期、领域、子领域和评级；分类来自 taxonomy。
-   - 公司名只保留主体规范名；会议日期、产品／技术主题和评级用于文档标题或结构化字段，不得拼进 `project upsert.name`。日期型旧目录只能作为候选线索，必须经独立证据或用户确认后再写入。
+   - 项目名使用已确认的品牌／项目简称，工商全称写 `legalName`、旧名和中英文别名写 `aliases`；完整读取[项目命名规则](../../investment-mgmt/references/project-names.md)，避免把工商全称当展示名，或修正后再用旧名重复建项目。会议日期、产品／技术主题和评级用于文档标题或结构化字段，不得拼进 `project upsert.name`。日期型旧目录只能作为候选线索，必须经独立证据或用户确认后再写入。
 2. `local` 分支用 `project search` 检查中英文名、产品名和主体名，用 `project upsert` 创建／更新 SQLite 记录和稳定项目目录，再用 `document create` 把纪要、快评与实际存在材料归入同一项目。
 3. `legacy_feishu_primary` 分支完整执行 `legacy-feishu-primary.md`：在既有 Watching List／Wiki 查重，复用或创建唯一 Wiki 项目文档，将源材料保留在原有本地材料目录，最后 upsert 既有项目 Base；禁止调用本地网关或生成第二个本地项目记录。
 4. 两个分支都保持“交流纪要在前、桌面研究独立 Part 在后”的阅读顺序；相同内容跳过，不同版本并存，不静默覆盖。

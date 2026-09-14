@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -134,7 +135,7 @@ test("empty entity search does not claim coverage of names mentioned in notes or
     assert.equal(result.completeScope, "pagination");
     assert.deepEqual(result.searchCoverage, {
       type: "entity_fields", queryApplied: true,
-      queryFields: kind === "project" ? ["name"] : ["name", "organization"],
+      queryFields: kind === "project" ? ["name", "legalName", "aliases"] : ["name", "organization"],
       documentTitlesSearched: false, documentContentSearched: false
     });
   }
@@ -152,7 +153,7 @@ test("query projection filters in SQL, preserves actual creation time, and pagin
   assert.equal(first.complete, false);
   assert.equal(first.completeScope, "pagination");
   assert.deepEqual(first.searchCoverage, {
-    type: "entity_fields", queryApplied: true, queryFields: ["name"],
+    type: "entity_fields", queryApplied: true, queryFields: ["name", "legalName", "aliases"],
     documentTitlesSearched: false, documentContentSearched: false
   });
   assert.deepEqual(Object.keys(first.items[0]), ["id", "name", "createdAt"]);
@@ -250,7 +251,15 @@ test("existing repositories migrate project revision without losing records", (t
 
   const project = repository.getProject("prj_legacy");
   assert.equal(project.recordRevision, 1);
-  assert.match(project.recordHash, /^[a-f0-9]{64}$/);
+  assert.equal(project.legalName, "");
+  assert.deepEqual(project.aliases, []);
+  const legacyHash = crypto.createHash("sha256").update(JSON.stringify({
+    id: "prj_legacy", name: "历史项目", normalizedName: "历史项目", domain: "", subdomains: [],
+    status: "待交流", rating: "", notes: "", cities: [], investors: [], financingHistory: "",
+    latestValuationUsd100m: null, lastUpdatedAt: null, documentPath: "", createdAt: 1
+  })).digest("hex");
+  assert.equal(project.recordHash, legacyHash, "empty metadata preserves pre-upgrade receipts");
+  assert.equal(repository.summary().schemaVersion, 7);
 });
 
 test("local repository initialization creates and preserves 0.待办事项.md", (t) => {
@@ -743,4 +752,143 @@ test("local news upsert deduplicates by event ID and writes a readable Markdown 
     publishedAt: "2026-07-24T10:00:00+08:00"
   });
   assert.deepEqual(consumer.event.domains, ["消费"]);
+});
+
+
+test("new legal-form names require an explicit exception and genuine 科技 brands remain intact", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  for (const name of ["蓝云鲸科技有限公司", "上海星舟有限责任公司", "星舟股份有限公司", "Example Labs, Inc.", "Example LLC"]) {
+    assert.throws(() => repository.upsertProject({ name }), error =>
+      error.code === "DOMI_PROJECT_NAME_REVIEW_REQUIRED" && /legalName/.test(error.message));
+    assert.throws(() => repository.upsertProject({ name, allowLegalName: "true" }), /legalName/);
+  }
+  assert.equal(repository.listProjects().length, 0);
+  for (const name of ["若水科技", "上海电气", "科技之光", "360", "3D Systems", "B-ON", "MemoraX AI"]) {
+    assert.equal(repository.upsertProject({ name }).project.name, name);
+  }
+  const confirmed = repository.upsertProject({ name: "示例实业有限公司", allowLegalName: true }).project;
+  const updated = repository.upsertProject({ projectId: confirmed.id, name: confirmed.name, notes: "补充产品进展" }).project;
+  assert.equal(updated.name, confirmed.name);
+  assert.equal(updated.notes, "补充产品进展");
+  assert.throws(() => repository.upsertProject({ projectId: confirmed.id, name: "新示例有限公司" }), /legalName/);
+});
+
+test("brand correction preserves identity, materials, business fields and dates, and resolves stale names", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const initial = repository.upsertProject({
+    name: "蓝云鲸科技有限公司", allowLegalName: true, domain: "AI", subdomains: ["AI Infra"],
+    status: "已交流", rating: "A", notes: "保留完整摘要", cities: ["上海"], investors: ["示例机构"],
+    financingHistory: "2026年种子轮", latestValuationUsd100m: 0.1, lastUpdatedAt: 1700000000000,
+    aliases: ["CloudWhale AI"]
+  }).project;
+  const attachment = path.join(path.dirname(initial.documentPath), "原始材料", "BP.pdf");
+  fs.mkdirSync(path.dirname(attachment), { recursive: true });
+  fs.writeFileSync(attachment, "unchanged binary");
+  fs.appendFileSync(initial.documentPath, "\n## 用户章节\n保留用户文字。\n");
+  const corrected = repository.upsertProject({
+    projectId: initial.id, name: "蓝云鲸", legalName: initial.name, expectedRevision: initial.recordRevision,
+    expectedRecordHash: initial.recordHash
+  }).project;
+  for (const key of ["id", "domain", "subdomains", "status", "rating", "notes", "cities", "investors", "financingHistory", "latestValuationUsd100m", "lastUpdatedAt", "createdAt", "documentPath"]) {
+    assert.deepEqual(corrected[key], initial[key], key);
+  }
+  assert.equal(corrected.legalName, initial.name);
+  assert.deepEqual(corrected.aliases, ["CloudWhale AI", initial.name]);
+  assert.equal(fs.readFileSync(attachment, "utf8"), "unchanged binary");
+  assert.match(fs.readFileSync(initial.documentPath, "utf8"), /company_name: "蓝云鲸"/);
+  assert.match(fs.readFileSync(initial.documentPath, "utf8"), /法律主体.*蓝云鲸科技有限公司/);
+  assert.match(fs.readFileSync(initial.documentPath, "utf8"), /保留用户文字/);
+  for (const name of [initial.name, "cloudwhale ai", "CloudWhale-AI"]) {
+    const result = repository.upsertProject({ name });
+    assert.equal(result.project.id, initial.id);
+    assert.equal(result.project.name, "蓝云鲸");
+    assert.equal(result.idempotentReplay, true);
+  }
+  const staleWithId = repository.upsertProject({ projectId: initial.id, name: initial.name });
+  assert.equal(staleWithId.project.name, "蓝云鲸");
+  assert.equal(staleWithId.idempotentReplay, true);
+  assert.throws(() => repository.upsertProject({ projectId: initial.id, name: initial.name, rename: true }), /legalName/);
+  assert.equal(repository.upsertProject({ name: "另一个候选简称", legalName: initial.name }).project.name, "蓝云鲸");
+  assert.equal(repository.listProjects().length, 1);
+  const reverted = repository.upsertProject({ projectId: initial.id, name: initial.name, rename: true, allowLegalName: true }).project;
+  assert.equal(reverted.name, initial.name);
+  assert.ok(reverted.aliases.includes("蓝云鲸"));
+});
+
+test("identity metadata is searchable and projected without claiming document coverage", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const record = repository.upsertProject({
+    name: "星舟科技", legalName: "上海星舟智能科技有限公司", aliases: ["StarBoat AI", "starboat-ai", "星舟科技"]
+  }).project;
+  assert.deepEqual(record.aliases, ["StarBoat AI"]);
+  for (const query of ["星舟", "上海星舟智能", "starboat-ai", "StarBoat AI"]) {
+    const response = repository.queryProjects({ query, fields: ["name", "legalName", "aliases"], limit: 1 });
+    assert.equal(response.total, 1);
+    assert.equal(response.items[0].id, record.id);
+    assert.equal(response.items[0].legalName, record.legalName);
+    assert.deepEqual(response.items[0].aliases, record.aliases);
+    assert.deepEqual(response.searchCoverage.queryFields, ["name", "legalName", "aliases"]);
+    assert.equal(response.searchCoverage.documentContentSearched, false);
+  }
+  const enriched = repository.upsertProject({ projectId: record.id, name: record.name, aliases: ["星舟智能"] }).project;
+  assert.deepEqual(enriched.aliases, ["StarBoat AI", "星舟智能"]);
+  const changedLegal = repository.upsertProject({ projectId: record.id, name: record.name, legalName: "星舟控股有限公司" }).project;
+  assert.ok(changedLegal.aliases.includes(record.legalName));
+  assert.equal(repository.queryProjects({ query: record.legalName }).items[0].id, record.id);
+});
+
+test("identity collisions and stale CAS cannot merge companies or discard reviewed identity metadata", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const a = repository.upsertProject({ name: "青甲科技", aliases: ["A Labs"] }).project;
+  const b = repository.upsertProject({ name: "青乙科技", legalName: "青乙科技有限公司" }).project;
+  for (const input of [
+    { projectId: a.id, name: b.name },
+    { projectId: a.id, name: a.name, aliases: [b.name] },
+    { projectId: a.id, name: a.name, legalName: b.legalName },
+    { name: a.name, aliases: [b.name] },
+    { projectId: "new-id", name: "A Labs" }
+  ]) assert.throws(() => repository.upsertProject(input), error => error.code === "DOMI_PROJECT_CAS_MISMATCH");
+  assert.equal(repository.listProjects().length, 2);
+  assert.deepEqual(repository.getProject(a.id).aliases, ["A Labs"]);
+  const enriched = repository.upsertProject({ projectId: a.id, name: a.name, legalName: "青甲智能有限公司" }).project;
+  assert.notEqual(enriched.recordHash, a.recordHash);
+  assert.throws(() => repository.upsertProject({
+    projectId: a.id, name: a.name, notes: "过期覆盖", expectedRevision: a.recordRevision, expectedRecordHash: a.recordHash
+  }), error => error.code === "DOMI_PROJECT_CAS_MISMATCH");
+  assert.equal(repository.getProject(a.id).notes, "");
+  repository.database.prepare("UPDATE projects SET aliases_json = ? WHERE id = ?").run(JSON.stringify(["A Labs"]), b.id);
+  assert.throws(() => repository.upsertProject({ name: "A Labs" }), /匹配多个项目/);
+  assert.equal(repository.upsertProject({ projectId: a.id, name: a.name, notes: "明确项目的普通更新" }).project.notes, "明确项目的普通更新");
+  assert.throws(() => repository.upsertProject({ projectId: a.id, name: "A Labs", rename: true }), /另一个项目/);
+});
+
+
+test("renaming a legal-shaped old display name does not assert an unverified legal entity", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const old = repository.upsertProject({ name: "旧候选名字有限公司", allowLegalName: true }).project;
+  const renamed = repository.upsertProject({ projectId: old.id, name: "新品牌" }).project;
+  assert.equal(renamed.legalName, "");
+  assert.deepEqual(renamed.aliases, [old.name]);
+  assert.equal(repository.queryProjects({ query: old.name }).items[0].id, old.id);
+  const content = fs.readFileSync(renamed.documentPath, "utf8");
+  assert.doesNotMatch(content, /\| 法律主体 \|/);
+  assert.match(content, /\| 历史名称／别名 \| 旧候选名字有限公司 \|/);
+});
+
+test("project homepage renders legal identity and aliases without breaking Markdown table cells", (t) => {
+  const repository = createRepository(t);
+  t.after(() => repository.close());
+  const project = repository.upsertProject({ name: "表格名称示例", legalName: "Example | Holdings\nLLC", aliases: ["Alias | One", "Alias\nTwo"] }).project;
+  const lines = fs.readFileSync(project.documentPath, "utf8").split("\n");
+  assert.equal(lines.find(line => line.startsWith("| 法律主体 |")), "| 法律主体 | Example \\| Holdings LLC |");
+  assert.equal(lines.find(line => line.startsWith("| 历史名称／别名 |")), "| 历史名称／别名 | Alias \\| One、Alias Two |");
+  const separator = lines.indexOf("| --- | --- |");
+  assert.equal(lines[separator + 1].startsWith("| 法律主体 |"), true);
+  assert.equal(lines[separator + 2].startsWith("| 历史名称／别名 |"), true);
+  assert.equal(lines[separator + 3].startsWith("| 领域 |"), true);
 });
