@@ -187,7 +187,7 @@ test("process narration is removed instead of paraphrased", () => {
   assert.doesNotMatch(allRules, /宁可让笔记"丑"一点/);
 });
 
-test("management interview titles use the project-side leader instead of a generated topic", () => {
+test("startup title rules agree across the template, editorial gate and PLAUD route", () => {
   const plaudWorkflow = fs.readFileSync(
     path.join(
       __dirname,
@@ -199,15 +199,17 @@ test("management interview titles use the project-side leader instead of a gener
     ),
     "utf8"
   );
-  const exactTitle = "20260115-示例科技（ExampleTech）-联创 张某";
-  assert.match(deliveryRules, /\*\*管理层访谈\*\*/);
-  assert.match(deliveryRules, /联合创始人／共同创始人`统一缩写为`联创/);
-  assert.match(deliveryRules, /联合创始人兼CTO.*优先使用创始人身份/s);
-  assert.match(deliveryRules, new RegExp(exactTitle));
-  assert.match(editorialStandard, new RegExp(exactTitle));
-  assert.match(plaudWorkflow, new RegExp(exactTitle));
-  assert.match(deliveryRules, /不得用模型自行提炼的主题覆盖已确认的管理层访谈身份/);
-  assert.match(plaudWorkflow, /不得再用模型提炼的技术主题覆盖/);
+  const templateTitle = investmentStructure.match(/^#### (.+)$/m)?.[1];
+  assert.equal(templateTitle, "[YYYYMMDD]-[项目规范名]-[所属赛道]");
+  assert.ok(deliveryRules.includes(`${templateTitle}.md`));
+  for (const rules of [skill, editorialStandard, plaudWorkflow]) {
+    assert.ok(rules.includes(templateTitle.replace(/[\[\]]/g, "")));
+    assert.doesNotMatch(rules, /管理层访谈身份优先|核心受访者短角色|管理层角色 姓名/);
+  }
+  assert.match(deliveryRules, /包括管理层访谈、创始人访谈、标准项目访谈和BP交流/);
+  assert.match(deliveryRules, /除用户本轮明确指定其他标题外/);
+  assert.match(deliveryRules, /不猜测、不用处理当天日期代替会议日期/);
+  assert.match(deliveryRules, /\*\*非项目会议（模式B）\*\*/);
 });
 
 test("progressive disclosure keeps the entrypoint small and routes conservatively", () => {

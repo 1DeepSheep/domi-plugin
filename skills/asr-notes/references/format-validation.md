@@ -26,7 +26,7 @@ node <plugin-root>/scripts/notes-format.cjs check --input <最终纪要.md> --pr
 最小示例：
 
 ```markdown
-#### 20260901-示例科技-创始人 张某
+#### 20260901-示例科技-具身智能
 参会人：示例科技张某，投资团队李某
 #### 一、团队背景
 - 团队事实。
