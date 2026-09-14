@@ -104,7 +104,7 @@ node "$DOMI_REPO" config get
 
 项目根目录不包含日期、评级或进展状态。多子领域只用主子领域定位目录，SQLite 保留全部子领域。领域和主子领域都未知时使用 `3.项目库/_未分类/<项目名称>/`，禁止重复 `_未分类/_未分类`。
 
-公司主体名、文档标题和物理归档目录是三个不同字段：`projects.name` 与 `项目主页.md` 的 `company_name` 只能是规范主体名；纪要／研究文档可以使用 `YYYYMMDD-主体-主题-评级` 标题。同步旧工作区时，日期型目录名只能进入名称审核，不能直接创建 canonical 项目或生成新的项目 ID。
+项目简称、文档标题和物理归档目录是三个不同字段：`projects.name` 与 `项目主页.md` 的 `company_name` 使用已确认的品牌／项目简称，工商全称与别名单独保存在 `legalName`、`aliases`；命名依据与查重遵循[项目命名规则](project-names.md)。创业公司纪要使用 `YYYYMMDD-项目名-所属赛道`，评级保留在独立快评。同步旧工作区时，日期型目录名或未经确认的工商全称只能进入名称审核，不能直接创建 canonical 项目或生成新的项目 ID。
 
 `项目主页.md` 是项目的快速决策入口：首屏展示项目名称、领域／进展／评级、打开本地项目目录、投资摘要和项目概览；frontmatter 内的 schema、项目 ID 与同步字段由客户端默认隐藏。关联材料默认突出纪要、快评、深度研究、BP／Datapack 与 IC 材料。PLAUD 文字稿、录音和底层证据只保留在 `原始材料/`，不在项目主页常用材料中展示。
 
@@ -172,7 +172,9 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 
 ```json
 {
-  "name": "公司名",
+  "name": "项目品牌简称",
+  "legalName": "已核实的工商全称",
+  "aliases": ["已确认的英文名或旧名"],
   "domain": "AI",
   "subdomains": ["Agent"],
   "status": "已交流",
