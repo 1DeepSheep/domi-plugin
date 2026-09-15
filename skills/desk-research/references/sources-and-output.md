@@ -93,7 +93,7 @@
 
 - **先内部后外部**：开工先用 `investment-mgmt` 查本地 SQLite／Markdown，接续而非重复。飞书已连接且当前实体明确时，按知识外挂契约使用 `lark-base`／`lark-drive`／`lark-wiki`／`lark-doc` 做窄范围只读参考；无命中、歧义、权限或网络失败直接继续，不阻塞公开源研究，也不列为未完成。只读命中不得触发创建、编辑或发布。
 - **网页正文抓取**：需要把某篇长文/网页转成可分析文本时，用 `baoyu-url-to-markdown`；本地 PDF/研报用 `pdf` skill 提取。
-- **SPA 站点用 CDP 渲染索引页**：标的官网/产品站多为 JS 渲染，静态抓取首页常只回一句 slogan、漏掉绝大部分内容；要枚举其产出，用 CDP 渲染 /blog、/news、/benchmarks、/changelog 等**索引页**（本次实测：UniPat 首页静态抓取几乎空，CDP 渲染 /blog+/benchmarks 才拿到全部 7 项工作）。这是「公众号必须 CDP」（§3）的通用化。
+- **SPA 站点用 CDP 渲染索引页**：标的官网/产品站多为 JS 渲染，静态抓取首页常只回一句 slogan、漏掉绝大部分内容；要枚举其产出，用 CDP 渲染 /blog、/news、/benchmarks、/changelog 等**索引页**（本次实测：匿名项目乙 首页静态抓取几乎空，CDP 渲染 /blog+/benchmarks 才拿到全部 7 项工作）。这是「公众号必须 CDP」（§3）的通用化。
 - **深度编排**：depth=deep 时优先让 `deep-research` / `product-deep-research` 做 fan-out 检索与校验，本 skill 负责把结果套进框架并落库。子报告不是事实库：先抽取其 Claim Ledger、回溯最上游来源、折叠同源转载、解决跨模块冲突，再吸收进投资结论。
 
 ## 7. 取数纪律

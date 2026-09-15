@@ -5,7 +5,7 @@
 **各板块专属整理规则（重要）：**
 
 - **团队背景**：每位核心人员（创始人、CTO 及其他合伙人级关键成员）单独成块呈现：
-  - **加粗人名作为标题**，括号内可附中文姓名 / 职位说明，例如：`**Dr. David Zhen Yin（尹振，Founder & CEO）**`
+  - **加粗人名作为标题**，括号内可附中文姓名 / 职位说明，例如：`**Dr. Casey Moubing Lin（林某丙，Founder & CEO）**`
   - 标题下用 bullet point 列表组织该成员的全部信息，**每条 bullet 单独一行**（每条 bullet 的换行由 Markdown 列表语法天然保证）
   - 固定内部顺序按`founder-profile-format.md`执行：
     - 学历直接写成`本科／硕士／博士：时间，学校，专业`一级bullet，不再包在“学历：”父bullet下；在校创业等能力证据作为对应学历的二级bullet
