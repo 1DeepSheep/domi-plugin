@@ -633,19 +633,19 @@ async function withLoopbackNoProxy(callback) {
 async function connectToDevToolsWithRetry(connect, endpoint, options = {}) {
   const timeoutMs = Math.max(500, Number(options.timeoutMs) || 10000);
   const pauseImpl = options.pause || pause;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Math.min(Date.now() + timeoutMs, Number(options.deadlineAt) || Infinity);
   let attempt = 0;
   let lastError;
   while (Date.now() < deadline) {
     try {
-      return await withLoopbackNoProxy(() => connect(endpoint));
+      return await beforeDeadline(() => withLoopbackNoProxy(() => connect(endpoint, { timeout: Math.max(1, deadline - Date.now()) })), deadline, timeoutMs);
     } catch (error) {
       lastError = error;
       if (!/ECONNREFUSED|ECONNRESET|WebSocket error|socket hang up/i.test(String(error?.message || error))) {
         throw error;
       }
       attempt += 1;
-      await pauseImpl(Math.min(100 * attempt, 500));
+      await beforeDeadline(() => pauseImpl(Math.min(100 * attempt, 500, Math.max(1, deadline - Date.now()))), deadline, timeoutMs);
     }
   }
   throw lastError || new Error('Timed out while connecting to the PLAUD browser session.');
@@ -660,12 +660,14 @@ async function navigatePlaudWithRetry(page, url = PLAUD_LOGIN_URL, options = {})
   const attempts = Math.min(Math.max(Number(options.attempts) || 3, 1), 5);
   const pauseImpl = options.pause || pause;
   let lastError;
+  const deadlineAt = Number(options.deadlineAt) || Infinity;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    assertBeforeDeadline(deadlineAt);
     try {
-      await page.goto(url, {
-        waitUntil: options.waitUntil || 'commit',
-        timeout: Number(options.timeout) || 30000,
-      });
+      const timeout = Math.max(1, Math.min(Number(options.timeout) || 30000, deadlineAt - Date.now()));
+      await beforeDeadline(() => page.goto(url, {
+        waitUntil: options.waitUntil || 'commit', timeout,
+      }), Math.min(deadlineAt, Date.now() + timeout), timeout);
       return;
     } catch (error) {
       lastError = error;
@@ -676,7 +678,7 @@ async function navigatePlaudWithRetry(page, url = PLAUD_LOGIN_URL, options = {})
       ) {
         throw error;
       }
-      await pauseImpl(400 * (attempt + 1));
+      await beforeDeadline(() => pauseImpl(Math.min(400 * (attempt + 1), Math.max(1, deadlineAt - Date.now()))), deadlineAt);
     }
   }
   throw lastError || new Error('PLAUD 页面暂时无法连接。');
@@ -714,6 +716,7 @@ async function waitForPriorManagedShutdown(profileDir, executable, options = {})
   const deadline = Math.min(
     marker.safeUntil || startedAt,
     startedAt + MAX_PRIOR_SHUTDOWN_WAIT_MS,
+    Number(options.deadlineAt) || Infinity,
   );
   while (now() < deadline) {
     if (!listPids(profileDir, executable).length) {
@@ -785,8 +788,10 @@ async function launchManagedBrowser(profileDir, options = {}) {
   let browser = null;
   let child = null;
   let stderr = '';
+  const deadlineAt = Number(options.deadlineAt) || Infinity;
 
   try {
+    assertBeforeDeadline(deadlineAt);
     // A timed-out parent process may have been terminated before PlaudClient.close()
     // could stop its dedicated browser. The profile lock is acquired by the caller
     // before launch, so removing exact-profile orphans here cannot interrupt another
@@ -795,8 +800,11 @@ async function launchManagedBrowser(profileDir, options = {}) {
       pause: options.pause,
       listPids: options.listPids,
       now: options.now,
+      deadlineAt,
     });
+    assertBeforeDeadline(deadlineAt);
     await terminate(profileDir, null);
+    assertBeforeDeadline(deadlineAt);
     clearManagedShutdownMarker(profileDir);
     // This is a dedicated managed profile. Tab restoration is never useful,
     // even after a normal exit, and can race with CDP initialization. Remove
@@ -830,10 +838,10 @@ async function launchManagedBrowser(profileDir, options = {}) {
         reject(new Error(`${spec.label} stopped before PLAUD login was ready (${reason})${details}`));
       });
     });
-    const endpoint = await Promise.race([waitForEndpoint(profileDir), exitedBeforeReady]);
-    browser = await connectToDevToolsWithRetry(connect, endpoint);
+    const endpoint = await beforeDeadline(() => Promise.race([waitForEndpoint(profileDir, Math.max(1, Math.min(10000, deadlineAt - Date.now()))), exitedBeforeReady]), deadlineAt);
+    browser = await connectToDevToolsWithRetry(connect, endpoint, { deadlineAt });
     const context = browser.contexts()[0];
-    if (!context) throw new Error(`${spec.label} did not create a usable PLAUD context.`);
+    if (!context) throw plaudError('PLAUD_BROWSER_UNAVAILABLE', `${spec.label} did not create a usable PLAUD context.`, { retryable: true });
     return {
       browser,
       context,
@@ -842,6 +850,7 @@ async function launchManagedBrowser(profileDir, options = {}) {
       browserLabel: spec.label,
     };
   } catch (error) {
+    if (!error.code) Object.assign(error, { code: 'PLAUD_BROWSER_UNAVAILABLE', retryable: true });
     let shutdownMarked = false;
     let terminated = false;
     if (browser || child) {
@@ -972,7 +981,7 @@ function plaudApiError(label, response) {
     ? String(rawApiStatus)
     : '';
   const apiStatus = /^[A-Za-z0-9_.-]{1,32}$/.test(apiStatusText) ? apiStatusText : null;
-  return new Error(`${label}: HTTP ${httpStatus}${apiStatus ? `; API status ${apiStatus}` : ''}`);
+  return Object.assign(new Error(`${label}: HTTP ${httpStatus}${apiStatus ? `; API status ${apiStatus}` : ''}`), { httpStatus, status: httpStatus, ...(apiStatus ? { apiStatus } : {}) });
 }
 
 function loadState() {
@@ -990,9 +999,66 @@ function saveState(state) {
   fs.chmodSync(STATE_FILE, 0o600);
 }
 
-async function pageShowsPlaudLogin(page) {
+function plaudError(code, message, details = {}) {
+  const error = new Error(`${code}: ${message}`);
+  return Object.assign(error, { code }, details);
+}
+
+function requestTimeoutError(timeoutMs) {
+  return plaudError('PLAUD_NETWORK_TIMEOUT', `PLAUD 接口读取超时（${Math.max(1, Math.ceil(timeoutMs / 1000))} 秒）。`, { retryable: true });
+}
+
+function boundedDeadline(client, options = {}, fallbackMs = 30000, now = Date.now) {
+  const timeoutMs = Math.max(1, Number(options.timeoutMs) || fallbackMs);
+  return Math.min(now() + timeoutMs, Number(options.deadlineAt) || Infinity,
+    Number(client?.operationDeadlineAt) || Infinity);
+}
+
+function assertBeforeDeadline(deadlineAt, timeoutMs = 30000) {
+  if (Date.now() >= deadlineAt) throw requestTimeoutError(timeoutMs);
+}
+
+// The renderer may stop responding before its own AbortController timer runs.
+// Keep the deadline in Node too; late completion cannot resume the API loop.
+async function beforeDeadline(operation, deadlineAt, timeoutMs = 30000) {
+  assertBeforeDeadline(deadlineAt, timeoutMs);
+  if (!Number.isFinite(deadlineAt)) return operation();
+  let timer;
   try {
-    return Boolean(await page.evaluate(() => {
+    return await Promise.race([
+      Promise.resolve().then(() => {
+        assertBeforeDeadline(deadlineAt, timeoutMs);
+        return operation();
+      }),
+      new Promise((_, reject) => {
+        const expire = () => {
+          const remaining = deadlineAt - Date.now();
+          if (remaining > 0) timer = setTimeout(expire, remaining);
+          else reject(requestTimeoutError(timeoutMs));
+        };
+        timer = setTimeout(expire, Math.max(1, deadlineAt - Date.now()));
+      }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+function transientReadError(error) {
+  if (error?.code && ['PLAUD_AUTH_REQUIRED', 'PLAUD_UNAUTHORIZED', 'PLAUD_ACCESS_DENIED', 'PLAUD_RATE_LIMITED'].includes(error.code)) return false;
+  if (['PLAUD_READ_TRANSIENT', 'PLAUD_NETWORK_TIMEOUT', 'PLAUD_SESSION_PROBE_INCOMPLETE'].includes(error?.code)) return true;
+  return /Failed to fetch|fetch failed|PLAUD_NETWORK_TIMEOUT|PLAUD_SESSION_PROBE_INCOMPLETE|timed?\s*out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ENETUNREACH|socket hang up|ERR_CONNECTION|ERR_NETWORK|Target page, context or browser has been closed|Execution context was destroyed|HTTP 5\d\d/i.test(String(error?.message || error));
+}
+
+function retryAfterMilliseconds(value) {
+  if (value == null || value === '') return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const date = Date.parse(String(value));
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+async function pageShowsPlaudLogin(page, options = {}) {
+  try {
+    return Boolean(await beforeDeadline(() => page.evaluate(() => {
       const pathname = String(window.location?.pathname || '').toLowerCase();
       if (/\/(?:login|sign-in|signin|auth)(?:\/|$)/.test(pathname)) return true;
       if (document.querySelector('input[type="password"]')) return true;
@@ -1001,7 +1067,7 @@ async function pageShowsPlaudLogin(page) {
       const hasLoginControl = Array.from(document.querySelectorAll('button,a,[role="button"]'))
         .some((element) => /(?:登录|登入|log\s*in|sign\s*in)/i.test(String(element.textContent || '')));
       return hasLoginCopy && hasLoginControl;
-    }));
+    }), boundedDeadline(null, options, 2000), options.timeoutMs || 2000));
   } catch {
     return false;
   }
@@ -1009,14 +1075,15 @@ async function pageShowsPlaudLogin(page) {
 
 async function waitForPlaudAuthorization(client, options = {}) {
   const attempts = client.headless ? 2 : 1;
-  const totalTimeoutMs = Math.max(1000, Number(client.loginTimeoutMs) || 12000);
+  const totalTimeoutMs = Math.max(1000, Number(client.loginTimeoutMs) || 30000);
   const attemptTimeoutMs = Math.max(
     1000,
     Number(options.attemptTimeoutMs) || totalTimeoutMs,
   );
   const now = options.now || Date.now;
-  const pauseImpl = options.pause || ((delay) => client.page.waitForTimeout(delay));
-  const totalDeadline = now() + totalTimeoutMs;
+  const pauseImpl = options.pause || pause;
+  const totalDeadline = Math.min(now() + totalTimeoutMs, Number(options.deadlineAt) || Infinity,
+    Number(client.operationDeadlineAt) || Infinity);
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     // A cold PLAUD page may need more than half of the authorization budget.
@@ -1025,32 +1092,33 @@ async function waitForPlaudAuthorization(client, options = {}) {
     const deadline = Math.min(totalDeadline, now() + attemptTimeoutMs);
     while (!client.authorization && now() < deadline) {
       if (client.page.isClosed()) {
-        throw new Error(`${client.browserLabel} PLAUD login window was closed.`);
+        throw plaudError('PLAUD_BROWSER_UNAVAILABLE', `${client.browserLabel} PLAUD login window was closed.`, { retryable: true });
       }
       await pauseImpl(Math.min(500, Math.max(1, deadline - now())));
     }
-    if (client.authorization) return true;
-    if (await pageShowsPlaudLogin(client.page)) {
-      throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${client.browserLabel}.`);
+    if (client.authorization && now() < totalDeadline) return true;
+    if (await pageShowsPlaudLogin(client.page, { timeoutMs: Math.max(1, Math.min(1000, totalDeadline - now())) })) {
+      throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD account sign-in is required in ${client.browserLabel}.`, { retryable: false });
     }
     if (attempt + 1 < attempts && now() < totalDeadline) {
       try {
-        await client.page.reload({
+        await beforeDeadline(() => client.page.reload({
           waitUntil: 'commit',
           timeout: Math.max(1, totalDeadline - now()),
-        });
+        }), Date.now() + Math.max(1, totalDeadline - now()));
       } catch (error) {
         if (!isTransientPlaudNavigationError(error)) throw error;
         if (now() >= totalDeadline) break;
         await navigatePlaudWithRetry(client.page, PLAUD_LOGIN_URL, {
           attempts: 1,
           timeout: Math.max(1, totalDeadline - now()),
+          deadlineAt: Date.now() + Math.max(1, totalDeadline - now()),
         });
       }
     }
     if (now() >= totalDeadline) break;
   }
-  throw new Error('PLAUD_SESSION_PROBE_INCOMPLETE: PLAUD account page opened, but its authorization request was not observed.');
+  throw plaudError('PLAUD_SESSION_PROBE_INCOMPLETE', 'PLAUD account page opened, but its authorization request was not observed.', { retryable: true });
 }
 
 class PlaudClient {
@@ -1062,8 +1130,13 @@ class PlaudClient {
       || (options.profileDirFactory ? options.profileDirFactory() : managedProfileDir(this.browserKind));
     this.headless = options.headless !== false;
     this.loginTimeoutMs = Number(options.loginTimeoutMs)
-      || (this.headless ? 12000 : 10 * 60 * 1000);
+      || (this.headless ? 30000 : 10 * 60 * 1000);
     this.apiTimeoutMs = Math.max(1000, Number(options.apiTimeoutMs) || 15000);
+    this.readTimeoutMs = Math.max(1000, Number(options.readTimeoutMs) || 30000);
+    this.operationDeadlineAt = Number(options.operationDeadlineAt) || null;
+    this.apiCooldownUntil = 0;
+    this.authorizationRefreshPromise = null;
+    this.rejectedAuthorization = null;
     this.context = null;
     this.browser = null;
     this.browserProcess = null;
@@ -1074,10 +1147,11 @@ class PlaudClient {
     this.authorization = null;
     this.headers = {};
     this.launchBrowser = options.launchBrowser
-      || ((profileDir) => launchManagedBrowser(profileDir, {
+      || ((profileDir, launchOptions = {}) => launchManagedBrowser(profileDir, {
         browserKind: this.browserKind,
         headless: this.headless,
         url: PLAUD_LOGIN_URL,
+        deadlineAt: launchOptions.deadlineAt,
       }));
     this.terminateBrowser = options.terminateBrowser
       || ((profileDir, browserProcess, terminateOptions = {}) =>
@@ -1086,17 +1160,21 @@ class PlaudClient {
 
   async init() {
     try {
-      this.sessionLock = await acquireManagedSessionLock(this.profileDir);
-      const launched = await this.launchBrowser(this.profileDir);
+      const deadlineAt = Number(this.operationDeadlineAt) || Infinity;
+      assertBeforeDeadline(deadlineAt);
+      this.sessionLock = await acquireManagedSessionLock(this.profileDir, { timeoutMs: Math.max(1, Math.min(30000, deadlineAt - Date.now())) });
+      assertBeforeDeadline(deadlineAt);
+      const launched = await this.launchBrowser(this.profileDir, { deadlineAt });
       this.browser = launched.browser;
       this.context = launched.context;
       this.browserProcess = launched.process || null;
+      assertBeforeDeadline(deadlineAt);
       this.context.on('request', (req) => {
         if (!isPlaudApiUrl(req.url())) return;
         const origin = plaudApiOrigin(req.url());
         if (origin) this.apiBase = origin;
         const headers = req.headers();
-        if (headers.authorization) {
+        if (headers.authorization && headers.authorization !== this.rejectedAuthorization) {
           const pathname = new URL(req.url()).pathname;
           if (!this.authorization || pathname.startsWith('/file/') || pathname.startsWith('/ai/')) {
             this.authorization = headers.authorization;
@@ -1109,16 +1187,17 @@ class PlaudClient {
           }
         }
       });
-      const compacted = await compactManagedPages(this.context);
+      const compacted = await beforeDeadline(() => compactManagedPages(this.context), deadlineAt);
       this.page = compacted.page;
       await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, {
         attempts: this.headless ? 2 : 3,
-        timeout: this.headless ? 12000 : 30000,
+        timeout: this.headless ? 15000 : 30000,
+        deadlineAt,
       });
-      await waitForPlaudAuthorization(this);
+      await waitForPlaudAuthorization(this, { deadlineAt });
       let runtimeApiBase = null;
       try {
-        runtimeApiBase = await this.page.evaluate(() => {
+        runtimeApiBase = await beforeDeadline(() => this.page.evaluate(() => {
           try {
             return window._prefetch && typeof window._prefetch.getUserApiDomain === 'function'
               ? window._prefetch.getUserApiDomain()
@@ -1126,13 +1205,14 @@ class PlaudClient {
           } catch {
             return null;
           }
-        });
+        }), Math.min(deadlineAt, Date.now() + 2000));
       } catch {
         // PLAUD may still be replacing its login route while the authorization
         // deadline expires. The missing authorization below is the actionable
         // result; a transient execution-context error must not hide it.
       }
       if (runtimeApiBase) this.apiBase = runtimeApiBase;
+      assertBeforeDeadline(deadlineAt);
       return this;
     } catch (error) {
       await this.close();
@@ -1145,24 +1225,40 @@ class PlaudClient {
     return identity ? crypto.createHash('sha256').update(identity).digest('hex').slice(0, 12) : '';
   }
 
-  async refreshAuthorizationAfterUnauthorized() {
-    if (await pageShowsPlaudLogin(this.page)) {
-      throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${this.browserLabel}.`);
+  async refreshAuthorizationAfterUnauthorized(options = {}) {
+    const deadlineAt = boundedDeadline(this, options, this.loginTimeoutMs || 30000);
+    assertBeforeDeadline(deadlineAt);
+    if (!this.authorizationRefreshPromise) {
+      const refresh = this.refreshAuthorizationOnce({ deadlineAt });
+      const shared = refresh.finally(() => {
+        if (this.authorizationRefreshPromise === shared) this.authorizationRefreshPromise = null;
+      });
+      this.authorizationRefreshPromise = shared;
     }
+    const shared = this.authorizationRefreshPromise;
+    return beforeDeadline(() => shared, deadlineAt);
+  }
+
+  async refreshAuthorizationOnce({ deadlineAt }) {
+    if (await pageShowsPlaudLogin(this.page, { deadlineAt })) {
+      throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD account sign-in is required in ${this.browserLabel}.`, { retryable: false });
+    }
+    assertBeforeDeadline(deadlineAt);
+    this.rejectedAuthorization = this.authorization;
     this.authorization = null;
     delete this.headers.authorization;
     try {
-      await this.page.reload({ waitUntil: 'commit', timeout: 12000 });
-    } catch (error) {
-      if (!isTransientPlaudNavigationError(error)) throw error;
-      await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, {
-        attempts: 2,
-        timeout: 12000,
-      });
-    }
-    await waitForPlaudAuthorization(this, {
-      attemptTimeoutMs: Math.max(1000, Math.min(this.loginTimeoutMs, 12000)),
-    });
+      try {
+        await beforeDeadline(() => this.page.reload({ waitUntil: 'commit', timeout: Math.min(15000, Math.max(1, deadlineAt - Date.now())) }), deadlineAt);
+      } catch (error) {
+        assertBeforeDeadline(deadlineAt);
+        if (!isTransientPlaudNavigationError(error)) throw error;
+        await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, { attempts: 2, timeout: 15000, deadlineAt });
+      }
+      assertBeforeDeadline(deadlineAt);
+      await waitForPlaudAuthorization(this, { deadlineAt });
+      assertBeforeDeadline(deadlineAt);
+    } finally { this.rejectedAuthorization = null; }
   }
 
   close() {
@@ -1226,50 +1322,32 @@ class PlaudClient {
   async apiOnce(pathname, options = {}) {
     const method = options.method || 'GET';
     const data = options.data;
-    const timeoutMs = Math.max(1, Math.min(this.apiTimeoutMs, Number(options.timeoutMs) || this.apiTimeoutMs));
+    const deadlineAt = boundedDeadline(this, options, this.apiTimeoutMs || 15000);
+    const timeoutMs = Math.max(1, Math.min(this.apiTimeoutMs || 15000, deadlineAt - Date.now()));
+    const attemptDeadline = Math.min(deadlineAt, Date.now() + timeoutMs);
     const url = pathname.startsWith('http') ? pathname : `${this.apiBase}${pathname}`;
-    const headers = {
-      accept: 'application/json, text/plain, */*',
-      ...this.headers,
-      ...(options.headers || {}),
-      'x-request-id': Math.random().toString(36).slice(2),
-    };
-    if (data) {
-      headers['content-type'] = headers['content-type'] || 'application/json;charset=UTF-8';
-    }
+    const headers = { accept: 'application/json, text/plain, */*', ...this.headers,
+      ...(options.headers || {}), 'x-request-id': Math.random().toString(36).slice(2) };
+    if (data) headers['content-type'] = headers['content-type'] || 'application/json;charset=UTF-8';
     try {
-      return await this.page.evaluate(
+      return await beforeDeadline(() => this.page.evaluate(
         async ({ url, method, headers, data, timeoutMs }) => {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
           try {
-            const res = await fetch(url, {
-              method,
-              headers,
-              body: data ? JSON.stringify(data) : undefined,
-              signal: controller.signal,
-            });
+            const res = await fetch(url, { method, headers, body: data ? JSON.stringify(data) : undefined, signal: controller.signal });
             const text = await res.text();
             let body = text;
-            try {
-              body = JSON.parse(text);
-            } catch {}
-            return { status: res.status, body };
+            try { body = JSON.parse(text); } catch {}
+            return { status: res.status, body, retryAfter: res.headers?.get('retry-after') || null };
           } catch (error) {
-            if (error && error.name === 'AbortError') {
-              throw new Error(`PLAUD API request timed out after ${timeoutMs} ms`);
-            }
+            if (error && error.name === 'AbortError') throw new Error(`PLAUD API request timed out after ${timeoutMs} ms`);
             throw error;
-          } finally {
-            clearTimeout(timer);
-          }
-        },
-        { url, method, headers, data, timeoutMs }
-      );
+          } finally { clearTimeout(timer); }
+        }, { url, method, headers, data, timeoutMs }
+      ), attemptDeadline, timeoutMs);
     } catch (error) {
-      if (/PLAUD API request timed out/i.test(error instanceof Error ? error.message : String(error))) {
-        throw new Error(`PLAUD_NETWORK_TIMEOUT: PLAUD 接口读取超时（${Math.ceil(this.apiTimeoutMs / 1000)} 秒）。`);
-      }
+      if (/PLAUD API request timed out/i.test(String(error?.message || error))) throw requestTimeoutError(timeoutMs);
       throw error;
     }
   }
@@ -1277,32 +1355,58 @@ class PlaudClient {
   async api(pathname, options = {}) {
     const method = String(options.method || 'GET').toUpperCase();
     const readOnly = method === 'GET' || method === 'HEAD';
-    let response = await this.apiOnce(pathname, options);
-
-    if (response?.status === 401) {
-      if (await pageShowsPlaudLogin(this.page)) {
-        throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${this.browserLabel}.`);
+    const deadlineAt = boundedDeadline(this, options, readOnly ? this.readTimeoutMs || 30000 : this.apiTimeoutMs || 15000);
+    const pauseImpl = this.readRetryPause || pause;
+    let readFailures = 0;
+    let refreshed = false;
+    for (;;) {
+      assertBeforeDeadline(deadlineAt);
+      if (readOnly && this.authorizationRefreshPromise) await beforeDeadline(() => this.authorizationRefreshPromise, deadlineAt);
+      const retryAfterMs = Number(this.apiCooldownUntil) - Date.now();
+      if (retryAfterMs > 0) {
+        throw plaudError('PLAUD_RATE_LIMITED', 'PLAUD 服务仍在限流等待时间内；请稍后自动重试，无需重新登录。',
+          { httpStatus: 429, status: 429, retryable: true, retryAfterMs });
       }
-      if (!readOnly) {
-        throw new Error('PLAUD_UNAUTHORIZED: PLAUD 拒绝了本次写入；domi 未重放该操作，请先重新验证连接。');
+      const authorizationAtRequest = this.authorization;
+      let response;
+      try {
+        response = await beforeDeadline(() => this.apiOnce(pathname, { ...options, method, deadlineAt }), deadlineAt);
+        assertBeforeDeadline(deadlineAt);
+        if (readOnly && response?.status >= 500 && response.status <= 599) {
+          throw plaudError('PLAUD_READ_TRANSIENT', `PLAUD read failed: HTTP ${response.status}`, { retryable: true, httpStatus: response.status, status: response.status });
+        }
+      } catch (error) {
+        if (!readOnly || !transientReadError(error)) throw error;
+        if (!error.code) Object.assign(error, { code: 'PLAUD_READ_TRANSIENT', retryable: true });
+        if (++readFailures >= 3) throw error;
+        assertBeforeDeadline(deadlineAt);
+        await beforeDeadline(() => pauseImpl(Math.min(250 * readFailures, Math.max(1, deadlineAt - Date.now()))), deadlineAt);
+        continue;
       }
-      await this.refreshAuthorizationAfterUnauthorized();
-      response = await this.apiOnce(pathname, { ...options, method });
       if (response?.status === 401) {
-        throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD session was rejected after a silent refresh in ${this.browserLabel}.`);
+        if (!readOnly) throw plaudError('PLAUD_UNAUTHORIZED', 'PLAUD 拒绝了本次写入；domi 未重放该操作，请先重新验证连接。', { httpStatus: 401, status: 401, retryable: false });
+        // Another in-flight read may have established a service cooldown.
+        // Re-enter its guard before any renewal can reload the remote page.
+        if (Number(this.apiCooldownUntil) > Date.now()) continue;
+        if (refreshed) throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD session was rejected after a silent refresh in ${this.browserLabel}.`, { httpStatus: 401, status: 401, retryable: false });
+        // A concurrent read may have already refreshed the rejected token.
+        if (!this.authorization || this.authorization === authorizationAtRequest) await this.refreshAuthorizationAfterUnauthorized({ deadlineAt });
+        refreshed = true;
+        continue;
       }
-    }
-
-    if (response?.status === 403) {
-      if (await pageShowsPlaudLogin(this.page)) {
-        throw new Error(`PLAUD_AUTH_REQUIRED: PLAUD account sign-in is required in ${this.browserLabel}.`);
+      if (response?.status === 403) {
+        if (await pageShowsPlaudLogin(this.page, { deadlineAt })) throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD account sign-in is required in ${this.browserLabel}.`, { httpStatus: 403, status: 403, retryable: false });
+        assertBeforeDeadline(deadlineAt);
+        throw plaudError('PLAUD_ACCESS_DENIED', 'PLAUD 暂时拒绝了本次访问；这不代表登录已失效。', { httpStatus: 403, status: 403, retryable: false });
       }
-      throw new Error('PLAUD_ACCESS_DENIED: PLAUD 暂时拒绝了本次访问；这不代表登录已失效。');
+      if (response?.status === 429) {
+        const retryAfterMs = retryAfterMilliseconds(response.retryAfter) ?? 30000;
+        this.apiCooldownUntil = Math.max(Number(this.apiCooldownUntil) || 0, Date.now() + retryAfterMs);
+        throw plaudError('PLAUD_RATE_LIMITED', 'PLAUD 服务暂时限流；请稍后自动重试，无需重新登录。',
+          { httpStatus: 429, status: 429, retryable: true, retryAfterMs: Math.max(0, this.apiCooldownUntil - Date.now()) });
+      }
+      return response;
     }
-    if (response?.status === 429) {
-      throw new Error('PLAUD_RATE_LIMITED: PLAUD 服务暂时限流；请稍后自动重试，无需重新登录。');
-    }
-    return response;
   }
 
   async getUploadPresignedUrl({ filesize, fileType }) {
@@ -1551,33 +1655,34 @@ class PlaudClient {
     }
   }
 
-  async listFiles({ limit = 20, skip = 0, sortBy = 'edit_time', desc = true, isTrash = 0 } = {}) {
+  async listFiles({ limit = 20, skip = 0, sortBy = 'edit_time', desc = true, isTrash = 0, ...options } = {}) {
     const query = `?skip=${skip}&limit=${limit}&is_trash=${isTrash}&sort_by=${sortBy}&is_desc=${desc ? 'true' : 'false'}`;
-    const res = await this.api(`/file/simple/web${query}`);
+    const res = await this.api(`/file/simple/web${query}`, options);
     if (res.status !== 200 || !res.body || res.body.status !== 0) {
       throw plaudApiError('List files failed', res);
     }
+    if (!Array.isArray(res.body.data_file_list)) throw plaudError('PLAUD_RESPONSE_INVALID', 'PLAUD file list has an unsupported structure.', { retryable: false, httpStatus: res.status });
     return res.body.data_file_list;
   }
 
   async getFileDetail(fileId, options = {}) {
-    const res = await this.api(`/file/detail/${fileId}`, { timeoutMs: options.timeoutMs });
+    const res = await this.api(`/file/detail/${fileId}`, options);
     if (res.status !== 200 || !res.body || res.body.status !== 0) {
       throw plaudApiError('Get file detail failed', res);
     }
     return res.body.data;
   }
 
-  async listTags() {
-    const res = await this.api('/filetag/');
+  async listTags(options = {}) {
+    const res = await this.api('/filetag/', options);
     if (res.status !== 200 || !res.body || res.body.status !== 0) {
       throw plaudApiError('List tags failed', res);
     }
     return res.body.data_filetag_list || [];
   }
 
-  async getFileTaskStatus() {
-    const res = await this.api('/ai/file-task-status');
+  async getFileTaskStatus(options = {}) {
+    const res = await this.api('/ai/file-task-status', options);
     if (res.status !== 200 || !res.body || res.body.status !== 0) {
       throw plaudApiError('Get file task status failed', res);
     }
@@ -1708,14 +1813,9 @@ class PlaudClient {
 
   async downloadTranscript(fileId, outDir, options = {}) {
     const timeoutMs = Math.max(1, Math.min(this.apiTimeoutMs || 15000, Number(options.timeoutMs) || this.apiTimeoutMs || 15000));
-    const deadline = Date.now() + timeoutMs;
-    let detailTimer;
-    let detail;
-    try {
-      detail = await Promise.race([this.getFileDetail(fileId, { timeoutMs }), new Promise((_, reject) => {
-        detailTimer = setTimeout(() => reject(new Error('PLAUD_NETWORK_TIMEOUT: Transcript detail read timed out')), timeoutMs);
-      })]);
-    } finally { clearTimeout(detailTimer); }
+    const deadline = boundedDeadline(this, options, timeoutMs);
+    const detail = await beforeDeadline(() => this.getFileDetail(fileId, { timeoutMs, deadlineAt: deadline }), deadline, timeoutMs);
+    assertBeforeDeadline(deadline, timeoutMs);
     const transcriptMeta = detail.content_list.find((x) => x.data_type === 'transaction');
     if (!transcriptMeta) {
       const error = new Error(`Transcript not found for file ${fileId}`);
@@ -1731,7 +1831,7 @@ class PlaudClient {
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        reject(new Error('PLAUD_NETWORK_TIMEOUT: Transcript download timed out'));
+        reject(plaudError('PLAUD_NETWORK_TIMEOUT', 'Transcript download timed out', { retryable: true }));
       }, remaining);
     });
     let rawText;
@@ -1742,6 +1842,7 @@ class PlaudClient {
         return resp.text();
       })()]);
     } finally { clearTimeout(timer); }
+    assertBeforeDeadline(deadline, timeoutMs);
     let items;
     try { items = JSON.parse(rawText); } catch {
       const error = new Error('PLAUD_TRANSCRIPT_INVALID: Transcript response is not complete valid JSON');

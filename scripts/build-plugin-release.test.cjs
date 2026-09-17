@@ -65,4 +65,4 @@ console.log("domi plugin release build tests passed.");
 const publishWorkflow = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "publish-plugin.yml"), "utf8");
 // Older clients may rewrite brand metadata and move directories without
 // updating material indexes when a renamed project is edited.
-assert.match(publishWorkflow, /--min-client-version "7\.0\.6"/);
+assert.match(publishWorkflow, /--min-client-version "7\.0\.12"/);
