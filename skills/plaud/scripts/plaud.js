@@ -69,6 +69,9 @@ function usage() {
 
 function safeErrorMessage(error) {
   let message = error && error.message ? String(error.message) : String(error);
+  if (error?.code === 'PLAUD_BROWSER_UNAVAILABLE' || message.includes('PLAUD_BROWSER_UNAVAILABLE')) {
+    return 'PLAUD 专用浏览器暂时不可用。请重新同步；domi 会清理旧连接后自动重试。';
+  }
   if (/browserType\.connectOverCDP|WebSocket error:[\s\S]*ECONNREFUSED|connect ECONNREFUSED 127\.0\.0\.1/i.test(message)) {
     return 'PLAUD 专用浏览器未能建立本机连接。请重新同步；domi 会清理旧连接后自动重试。';
   }
@@ -338,7 +341,8 @@ function doctor(requestedBrowser) {
 }
 
 function isTransientClientInitializationError(error) {
-  return /PLAUD_SESSION_PROBE_INCOMPLETE|page\.(?:goto|reload)|connectOverCDP|WebSocket error|Protocol error.*(?:Page|Target)|Not attached to an active page|Target page, context or browser has been closed|Execution context was destroyed|ECONNREFUSED|ECONNRESET|ERR_CONNECTION_(?:CLOSED|RESET|REFUSED)|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|socket hang up/i
+  if (error?.code === 'PLAUD_BROWSER_UNAVAILABLE') return true;
+  return /PLAUD_NETWORK_TIMEOUT|PLAUD_SESSION_PROBE_INCOMPLETE|page\.(?:goto|reload)|connectOverCDP|WebSocket error|Protocol error.*(?:Page|Target)|Not attached to an active page|Target page, context or browser has been closed|Execution context was destroyed|ECONNREFUSED|ECONNRESET|ERR_CONNECTION_(?:CLOSED|RESET|REFUSED)|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|socket hang up/i
     .test(error instanceof Error ? error.message : String(error));
 }
 
@@ -362,8 +366,9 @@ async function withClient(callback, options = {}) {
       lastError = error;
       await candidate.close().catch(() => {});
       if (activeClient === candidate) activeClient = null;
-      if (!isTransientClientInitializationError(error) || attempt + 1 >= attempts) throw error;
-      await pause(500 * (attempt + 1));
+      if (!isTransientClientInitializationError(error) || attempt + 1 >= attempts
+        || (options.operationDeadlineAt && Date.now() >= options.operationDeadlineAt)) throw error;
+      await pause(Math.min(500 * (attempt + 1), options.operationDeadlineAt ? Math.max(1, options.operationDeadlineAt - Date.now()) : Infinity));
     }
   }
   if (!client) throw lastError || new Error('PLAUD 会话初始化失败。');
@@ -510,11 +515,13 @@ const GENERATION_STAGES = new Set([
 ]);
 
 function isTransientTranscriptRead(error) {
-  return /Failed to fetch|fetch failed|PLAUD_NETWORK_TIMEOUT|timed?\s*out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ENETUNREACH|socket hang up|ERR_CONNECTION|ERR_NETWORK|Target page, context or browser has been closed|Execution context was destroyed|HTTP 5\d\d|download failed: 5\d\d/i.test(String(error?.message || error));
+  if (['PLAUD_AUTH_REQUIRED', 'PLAUD_UNAUTHORIZED', 'PLAUD_ACCESS_DENIED', 'PLAUD_RATE_LIMITED'].includes(error?.code)) return false;
+  if (['PLAUD_READ_TRANSIENT', 'PLAUD_NETWORK_TIMEOUT', 'PLAUD_SESSION_PROBE_INCOMPLETE'].includes(error?.code)) return true;
+  return /Failed to fetch|fetch failed|PLAUD_NETWORK_TIMEOUT|PLAUD_READ_TRANSIENT|PLAUD_SESSION_PROBE_INCOMPLETE|timed?\s*out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ENETUNREACH|socket hang up|ERR_CONNECTION|ERR_NETWORK|Target page, context or browser has been closed|Execution context was destroyed|HTTP 5\d\d|download failed: 5\d\d/i.test(String(error?.message || error));
 }
 
 function syncErrorCode(error, fallback) {
-  if (['PLAUD_TRANSCRIPT_EMPTY', 'PLAUD_TRANSCRIPT_INVALID'].includes(error?.code)) return error.code;
+  if (typeof error?.code === 'string' && /^PLAUD_[A-Z_]+$/.test(error.code)) return error.code;
   const message = String(error?.message || error);
   if (/PLAUD_AUTH_REQUIRED|PLAUD_UNAUTHORIZED|HTTP 401/.test(message)) return 'PLAUD_AUTH_REQUIRED';
   if (/PLAUD_ACCESS_DENIED|HTTP 403/.test(message)) return 'PLAUD_ACCESS_DENIED';
@@ -618,16 +625,31 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
           'PLAUD_AUTH_REQUIRED', 'PLAUD_ACCESS_DENIED'].includes(record.errorCode)))
       && (!readOnly || record.stage !== 'uploaded' || record.generationRequestedAt
         || record.generationAttemptId || record.generationAcceptedAt
-        || (record.syncOutcome === 'retryable' && ['PLAUD_READ_TRANSIENT', 'PLAUD_TRANSCRIPT_EMPTY', 'PLAUD_RATE_LIMITED'].includes(record.errorCode))))
+        || (record.syncOutcome === 'retryable' && ['PLAUD_READ_TRANSIENT', 'PLAUD_NETWORK_TIMEOUT', 'PLAUD_SESSION_PROBE_INCOMPLETE', 'PLAUD_TRANSCRIPT_EMPTY', 'PLAUD_RATE_LIMITED'].includes(record.errorCode))))
     .sort((a, b) => String(a.syncCheckedAt || '').localeCompare(String(b.syncCheckedAt || '')));
   const results = [];
   let submitted = 0;
-  const result = await runWithClient(async client => {
+  let callbackStarted = false;
+  const syncWithClient = async client => {
+    callbackStarted = true;
     const candidates = new Map();
+    const deadline = now() + timeoutSec * 1000;
+    let discovery = { complete: true };
     // Recovery deliberately does not list recent files: an acknowledged or
     // uncertain request remains recoverable after falling outside that page.
     if (!readOnly) {
-      const files = await client.listFiles({ limit: Math.max(count * 10, 100) });
+      let files;
+      try {
+        // Reserve part of a short sync for known-ID recovery after list errors.
+        files = await client.listFiles({ limit: Math.max(count * 10, 100), timeoutMs: Math.max(1, Math.min(30000, (deadline - now()) / 2)) });
+      } catch (error) {
+        const errorCode = syncErrorCode(error, isTransientTranscriptRead(error) ? 'PLAUD_READ_TRANSIENT' : 'PLAUD_REMOTE_READ_FAILED');
+        const retryable = isTransientTranscriptRead(error) || errorCode === 'PLAUD_RATE_LIMITED';
+        if (!retryable) throw error;
+        discovery = { complete: false, errorCode, retryable: true, error: safeErrorMessage(error),
+          ...(Number.isFinite(error.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {}) };
+        files = [];
+      }
       for (const file of files) {
         const info = safePendingFile(file);
         if (!info.fileId) continue;
@@ -640,7 +662,7 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
     for (const record of local) if (!candidates.has(record.fileId)) candidates.set(record.fileId, record);
     const selected = [...candidates.values()].slice(0, count);
     const remaining = new Map(selected.map(info => [info.fileId, { info, readFailures: 0 }]));
-    const deadline = now() + timeoutSec * 1000;
+    const canSubmit = !readOnly && discovery.complete;
     do {
       for (const [fileId, entry] of [...remaining.entries()]) {
         if (now() >= deadline) break;
@@ -666,7 +688,7 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
           record = updateSyncRecord(fileId, { ...syncFileInfo(entry.info), stage: 'transcript_ready',
             transcriptPath: transcript.mdPath, transcriptRawPath: transcript.rawPath,
             outputDir: record?.outputDir || outDir, fileName: transcript.fileName || entry.info.fileName,
-            syncCheckedAt: new Date().toISOString(), syncOutcome: 'ready', retryable: false, error: null, errorCode: null });
+            syncCheckedAt: new Date().toISOString(), syncOutcome: 'ready', retryable: false, error: null, errorCode: null, retryAfterMs: null });
           results.push(syncResult(record, 'ready', '', '', { reused: !entry.submitted, source: entry.submitted ? 'generated' : 'recovered' }));
           remaining.delete(fileId);
         } catch (error) {
@@ -674,7 +696,7 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
           const notReady = error?.code === 'PLAUD_TRANSCRIPT_NOT_READY' || message.includes('Transcript not found');
           if (notReady) {
             entry.readFailures = 0;
-            if (!readOnly && now() < deadline && !entry.info.remoteProcessing && !error.remoteProcessing) {
+            if (canSubmit && now() < deadline && !entry.info.remoteProcessing && !error.remoteProcessing) {
               ensurePlaudSyncEnabled();
               const claim = claimGeneration(entry.info, outDir, { retryKnownRejection: true });
               if (claim) {
@@ -702,7 +724,7 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
             }
             record = loadState().records[fileId] || entry.info;
             const rejected = hasKnownGenerationRejection(record);
-            const notSubmitted = readOnly && maySubmitGeneration(record);
+            const notSubmitted = !canSubmit && maySubmitGeneration(record);
             entry.last = syncResult(record, rejected ? 'failed' : 'waiting',
               rejected ? 'PLAUD_GENERATION_REJECTED' : notSubmitted ? 'PLAUD_GENERATION_NOT_SUBMITTED' : 'PLAUD_TRANSCRIPT_PENDING',
               rejected ? record.generationRejection.message : notSubmitted
@@ -717,11 +739,12 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
           } else {
             entry.readFailures += 1;
             const explicitCode = syncErrorCode(error, '');
-            const transient = !explicitCode && isTransientTranscriptRead(error);
+            const transient = (!explicitCode || ['PLAUD_NETWORK_TIMEOUT', 'PLAUD_READ_TRANSIENT', 'PLAUD_SESSION_PROBE_INCOMPLETE'].includes(explicitCode)) && isTransientTranscriptRead(error);
             const code = explicitCode || (transient ? 'PLAUD_READ_TRANSIENT' : 'PLAUD_TRANSCRIPT_READ_FAILED');
             record = updateSyncRecord(fileId, { ...syncFileInfo(entry.info), stage: record?.stage || 'uploaded',
               syncCheckedAt: new Date().toISOString(), syncOutcome: transient || ['PLAUD_RATE_LIMITED', 'PLAUD_TRANSCRIPT_EMPTY'].includes(code) ? 'retryable' : 'failed',
-              retryable: transient || ['PLAUD_RATE_LIMITED', 'PLAUD_TRANSCRIPT_EMPTY'].includes(code), error: message, errorCode: code });
+              retryable: transient || ['PLAUD_RATE_LIMITED', 'PLAUD_TRANSCRIPT_EMPTY'].includes(code), error: message, errorCode: code,
+              retryAfterMs: Number.isFinite(error.retryAfterMs) ? error.retryAfterMs : null });
             entry.last = syncResult(record, transient || ['PLAUD_RATE_LIMITED', 'PLAUD_TRANSCRIPT_EMPTY'].includes(code) ? 'retryable' : 'failed', code, message);
             // Retry only reads, with a bounded consecutive-failure budget.
             // Authentication/permission/rate limits are immediately actionable.
@@ -744,8 +767,28 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
         syncOutcome: last.outcome, retryable: last.retryable, error: last.error, errorCode: last.errorCode });
       results.push(syncResult(saved, last.outcome, last.errorCode, last.error));
     }
-    return { requested: count, found: selected.length, submitted, results };
-  }, plaudCommandClientOptions(readOnly ? 'recover-pending' : 'sync-pending'));
+    return { requested: count, found: selected.length, submitted, results, discovery,
+      ...(!discovery.complete ? { ok: false, status: 'failed', submissionStarted: false,
+        error: discovery.error, errorCode: discovery.errorCode, errorStage: 'discovery', retryable: true,
+        ...(Number.isFinite(discovery.retryAfterMs) ? { retryAfterMs: discovery.retryAfterMs } : {}) } : {}) };
+  };
+  let result;
+  try {
+    result = await runWithClient(syncWithClient, plaudCommandClientOptions(readOnly ? 'recover-pending' : 'sync-pending'));
+  } catch (error) {
+    // Only initialization is provably before every possible generation POST.
+    // Once the callback starts, exceptions must retain their uncertain outcome.
+    if (callbackStarted) throw error;
+    const transient = isTransientClientInitializationError(error) || isTransientTranscriptRead(error);
+    const errorCode = syncErrorCode(error, transient ? 'PLAUD_BROWSER_UNAVAILABLE' : 'PLAUD_INITIALIZATION_FAILED');
+    const retryable = transient || errorCode === 'PLAUD_RATE_LIMITED';
+    const discovery = { complete: false, errorCode, retryable, error: safeErrorMessage(error),
+      ...(Number.isFinite(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {}) };
+    result = { requested: count, found: 0, submitted: 0, results: [], discovery,
+      ok: false, status: 'failed', submissionStarted: false, error: discovery.error,
+      errorCode, errorStage: 'initialization', retryable,
+      ...(Number.isFinite(discovery.retryAfterMs) ? { retryAfterMs: discovery.retryAfterMs } : {}) };
+  }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const manifestPath = path.join(outDir, `domi-plaud-manifest-${timestamp}-${crypto.randomUUID().slice(0, 8)}.json`);
   const manifest = { schema: PLAUD_SYNC_CAPABILITIES.schema, generatedAt: new Date().toISOString(),
@@ -1622,7 +1665,11 @@ async function main() {
 if (require.main === module) {
   installSignalCleanup();
   main().catch((error) => {
-    printJson({ ok: false, error: safeErrorMessage(error) });
+    printJson({ ok: false, error: safeErrorMessage(error),
+      ...(typeof error?.code === 'string' && /^PLAUD_[A-Z_]+$/.test(error.code) ? { errorCode: error.code, code: error.code } : {}),
+      ...(Number.isInteger(error?.httpStatus) ? { httpStatus: error.httpStatus, status: error.httpStatus } : {}),
+      ...(Number.isFinite(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {}),
+      ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}) });
     process.exitCode = 1;
   });
 }

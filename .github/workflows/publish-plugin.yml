@@ -100,7 +100,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --commit "$GITHUB_SHA" \
             --tag "${{ steps.metadata.outputs.tag }}" \
-            --min-client-version "7.0.6"
+            --min-client-version "7.0.12"
 
       - name: Publish immutable plugin release
         env:

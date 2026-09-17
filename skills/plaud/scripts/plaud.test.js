@@ -839,6 +839,32 @@ test('PLAUD API requests abort independently instead of waiting for the parent t
   }
 });
 
+test('browser startup failures are typed and public errors omit captured stderr', async () => {
+  const child = new EventEmitter();
+  child.stderr = new EventEmitter();
+  let terminated = 0;
+  await assert.rejects(launchManagedBrowser(path.join(sandbox, 'failed-startup'), {
+    browserKind: 'tabbit', browserExecutable: '/Applications/Tabbit.app/Contents/MacOS/Tabbit',
+    spawnProcess: () => {
+      setImmediate(() => {
+        child.stderr.emit('data', 'synthetic-private-launch-diagnostic');
+        child.emit('close', 1, null);
+      });
+      return child;
+    },
+    waitForDevToolsEndpoint: async () => new Promise(() => {}),
+    terminateBrowser: async () => { terminated++; },
+  }), error => {
+    assert.equal(error.code, 'PLAUD_BROWSER_UNAVAILABLE');
+    assert.equal(error.retryable, true);
+    assert.match(error.message, /stopped before PLAUD login/);
+    assert.equal(__test.safeErrorMessage(error).includes('synthetic-private-launch-diagnostic'), false);
+    assert.equal(__test.isTransientClientInitializationError(error), true);
+    return true;
+  });
+  assert.equal(terminated, 2);
+});
+
 test('PLAUD silently refreshes the same profile and retries one read after HTTP 401', async () => {
   const client = Object.create(PlaudClient.prototype);
   client.browserLabel = 'Tabbit';
@@ -1656,6 +1682,229 @@ function runSync(fake, options = {}) {
       withClientImpl: async callback => callback(fake), ...options,
     });
 }
+
+function recoveryApiClient() {
+  const client = Object.create(PlaudClient.prototype);
+  Object.assign(client, { apiBase: 'https://api.invalid', headers: { authorization: 'fixture-old' },
+    authorization: 'fixture-old', browserLabel: 'Fixture browser', headless: true,
+    apiTimeoutMs: 1000, readTimeoutMs: 2000, loginTimeoutMs: 30000,
+    readRetryPause: async () => {} });
+  client.page = { evaluate: async () => false, isClosed: () => false,
+    reload: async () => { client.authorization = 'fixture-new'; client.headers.authorization = 'fixture-new'; } };
+  return client;
+}
+
+test('PLAUD retries only safe reads after network and service failures under the same deadline', async () => {
+  for (const method of ['GET', 'HEAD']) {
+    const client = recoveryApiClient();
+    const deadlines = [];
+    client.apiOnce = async (_path, options) => {
+      deadlines.push(options.deadlineAt);
+      if (deadlines.length === 1) throw new Error('page.evaluate: TypeError: Failed to fetch');
+      return { status: deadlines.length === 2 ? 503 : 200, body: {} };
+    };
+    const deadlineAt = Date.now() + 500;
+    assert.equal((await client.api('/file/fixture', { method, deadlineAt })).status, 200);
+    assert.deepEqual(deadlines, [deadlineAt, deadlineAt, deadlineAt]);
+  }
+  const failing = recoveryApiClient();
+  let attempts = 0;
+  failing.apiOnce = async () => { attempts++; throw new Error('Failed to fetch'); };
+  await assert.rejects(failing.api('/file/fixture'), error => error.code === 'PLAUD_READ_TRANSIENT' && error.retryable);
+  assert.equal(attempts, 3);
+  for (const failure of ['network', 503, 401]) {
+    const client = recoveryApiClient();
+    let requests = 0, reloads = 0;
+    client.page.reload = async () => { reloads++; };
+    client.apiOnce = async () => {
+      requests++;
+      if (failure === 'network') throw new Error('Failed to fetch');
+      return { status: failure, body: {} };
+    };
+    const result = client.api('/ai/transsumm/fixture', { method: 'POST' });
+    if (failure === 503) assert.equal((await result).status, 503);
+    else await assert.rejects(result);
+    assert.equal(requests, 1);
+    assert.equal(reloads, 0);
+  }
+});
+
+test('concurrent unauthorized reads share one refresh and stale responses do not reload again', async () => {
+  const client = recoveryApiClient();
+  let reloads = 0, initialRequests = 0, releaseInitial;
+  const initialBarrier = new Promise(resolve => { releaseInitial = resolve; });
+  client.page.reload = async () => {
+    reloads++;
+    client.authorization = 'fixture-new';
+    client.headers.authorization = 'fixture-new';
+  };
+  client.apiOnce = async () => {
+    if (client.authorization === 'fixture-new') return { status: 200, body: {} };
+    initialRequests++;
+    if (initialRequests === 3) releaseInitial();
+    await initialBarrier;
+    return { status: 401, body: {} };
+  };
+  assert.deepEqual((await Promise.all([1, 2, 3].map(id => client.api(`/file/${id}`)))).map(r => r.status), [200, 200, 200]);
+  assert.equal(reloads, 1);
+
+  const delayed = recoveryApiClient();
+  let lateResponse;
+  const late = new Promise(resolve => { lateResponse = resolve; });
+  let delayedReloads = 0;
+  delayed.page.reload = async () => { delayedReloads++; delayed.authorization = 'fixture-new'; };
+  delayed.apiOnce = async pathname => delayed.authorization === 'fixture-new'
+    ? { status: 200, body: {} } : pathname === '/late' ? late : { status: 401, body: {} };
+  const lateRead = delayed.api('/late');
+  assert.equal((await delayed.api('/first')).status, 200);
+  lateResponse({ status: 401, body: {} });
+  assert.equal((await lateRead).status, 200);
+  assert.equal(delayedReloads, 1);
+});
+
+test('Node bounds a stalled renderer and late responses cannot refresh after the operation deadline', async () => {
+  const client = recoveryApiClient();
+  let resolveEvaluation, evaluations = 0, reloads = 0;
+  client.page.evaluate = async () => { evaluations++; return new Promise(resolve => { resolveEvaluation = resolve; }); };
+  client.page.reload = async () => { reloads++; };
+  client.operationDeadlineAt = Date.now() + 25;
+  const started = Date.now();
+  await assert.rejects(client.api('/file/fixture'), error => error.code === 'PLAUD_NETWORK_TIMEOUT');
+  assert.ok(Date.now() - started < 1000);
+  resolveEvaluation({ status: 401, body: {} });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(evaluations, 1);
+  assert.equal(reloads, 0);
+
+  const refreshing = recoveryApiClient();
+  let rejectReload, navigations = 0;
+  refreshing.apiOnce = async () => ({ status: 401, body: {} });
+  refreshing.page.reload = async () => new Promise((_, reject) => { rejectReload = reject; });
+  refreshing.page.goto = async () => { navigations++; };
+  await assert.rejects(refreshing.api('/file/fixture', { deadlineAt: Date.now() + 25 }), /PLAUD_NETWORK_TIMEOUT/);
+  rejectReload(new Error('page.goto: net::ERR_CONNECTION_RESET'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(navigations, 0);
+  assert.equal(refreshing.authorizationRefreshPromise, null);
+});
+
+test('expired operations never launch a browser or start a request and rate limits keep retry metadata', async () => {
+  let launches = 0;
+  const client = new PlaudClient({ browserKind: 'chrome', profileDir: path.join(sandbox, 'never-launched'),
+    operationDeadlineAt: Date.now() - 1, launchBrowser: async () => { launches++; } });
+  await assert.rejects(client.init(), /PLAUD_NETWORK_TIMEOUT/);
+  assert.equal(launches, 0);
+  assert.equal(fs.existsSync(managedSessionLockPath(client.profileDir)), false);
+  client.page = { evaluate: async () => { throw new Error('must not evaluate'); } };
+  await assert.rejects(client.api('/file/fixture'), /PLAUD_NETWORK_TIMEOUT/);
+  const limited = recoveryApiClient();
+  let requests = 0;
+  limited.apiOnce = async () => { requests++; return { status: 429, body: {}, retryAfter: '12' }; };
+  await assert.rejects(limited.api('/file/fixture'), error => error.code === 'PLAUD_RATE_LIMITED'
+    && error.httpStatus === 429 && error.status === 429 && error.retryable && error.retryAfterMs > 11000 && error.retryAfterMs <= 12000);
+  for (const method of ['GET', 'POST']) {
+    await assert.rejects(limited.api('/file/next-fixture', { method }), error => error.code === 'PLAUD_RATE_LIMITED'
+      && error.retryAfterMs > 11000 && error.retryAfterMs <= 12000);
+  }
+  assert.equal(requests, 1);
+  const concurrent = recoveryApiClient();
+  let releaseSuccess;
+  const success = new Promise(resolve => { releaseSuccess = resolve; });
+  concurrent.apiOnce = async pathname => pathname === '/limited'
+    ? { status: 429, body: {}, retryAfter: '12' } : success;
+  const alreadySent = concurrent.api('/in-flight');
+  await assert.rejects(concurrent.api('/limited'), /PLAUD_RATE_LIMITED/);
+  releaseSuccess({ status: 200, body: {} });
+  assert.equal((await alreadySent).status, 200);
+  const unauthorized = recoveryApiClient();
+  let releaseUnauthorized, reloads = 0;
+  const pendingUnauthorized = new Promise(resolve => { releaseUnauthorized = resolve; });
+  unauthorized.apiOnce = async pathname => pathname === '/limited'
+    ? { status: 429, body: {}, retryAfter: '12' } : pendingUnauthorized;
+  unauthorized.page.reload = async () => { reloads++; };
+  const rejectedRead = unauthorized.api('/in-flight');
+  await assert.rejects(unauthorized.api('/limited'), /PLAUD_RATE_LIMITED/);
+  releaseUnauthorized({ status: 401, body: {} });
+  await assert.rejects(rejectedRead, /PLAUD_RATE_LIMITED/);
+  assert.equal(reloads, 0);
+});
+
+test('the default headless probe admits slow renewal while an operation deadline stops it', async () => {
+  const client = new PlaudClient({ browserKind: 'chrome', profileDir: path.join(sandbox, 'fake-cold-profile') });
+  assert.equal(client.loginTimeoutMs, 30000);
+  client.page = { isClosed: () => false, evaluate: async () => false,
+    reload: async () => { throw new Error('must not restart slow renewal'); } };
+  let clock = 0;
+  assert.equal(await waitForPlaudAuthorization(client, { now: () => clock,
+    pause: async ms => { clock += ms; if (clock >= 16000) client.authorization = 'fixture'; } }), true);
+  assert.equal(clock, 16000);
+  clock = 0;
+  client.authorization = null;
+  client.operationDeadlineAt = 5000;
+  await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+    pause: async ms => { clock += ms; } }), /PLAUD_SESSION_PROBE_INCOMPLETE/);
+  assert.equal(clock, 5000);
+});
+
+test('failed list discovery recovers known IDs but reports incomplete sync and never submits', async () => {
+  resetSyncRecords({ 'known-ready': { fileId: 'known-ready', fileName: 'Fixture recording', stage: 'generating', generationRequestedAt: 'fixture' },
+    'known-unsubmitted': { fileId: 'known-unsubmitted', stage: 'uploaded' } });
+  let submitted = 0;
+  const result = await runSync({
+    listFiles: async () => { throw Object.assign(new Error('PLAUD_RATE_LIMITED: retry later'), { code: 'PLAUD_RATE_LIMITED', retryAfterMs: 12000 }); },
+    downloadTranscript: async (id, dir) => {
+      if (id === 'known-ready') return transcriptResult(id, 'Fixture recording', dir);
+      throw pendingTranscript();
+    },
+    generateFile: async () => { submitted++; },
+  });
+  assert.equal(result.discovery.complete, false);
+  assert.equal(result.discovery.errorCode, 'PLAUD_RATE_LIMITED');
+  assert.equal(result.discovery.retryAfterMs, 12000);
+  assert.equal(result.submissionStarted, false);
+  assert.equal(result.submitted, 0);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'failed');
+  assert.equal(submitted, 0);
+  assert.equal(result.results.find(row => row.fileId === 'known-ready').outcome, 'ready');
+  assert.equal(result.results.find(row => row.fileId === 'known-unsubmitted').errorCode, 'PLAUD_GENERATION_NOT_SUBMITTED');
+  assert.equal(__test.loadState().records['known-unsubmitted'].generationAttemptId, undefined);
+  resetSyncRecords();
+  const empty = await runSync({ listFiles: async () => { throw Object.assign(new Error('Fixture read unavailable'), { code: 'PLAUD_READ_TRANSIENT' }); } });
+  assert.equal(empty.results.length, 0);
+  assert.equal(empty.discovery.complete, false);
+  assert.equal(empty.ok, false);
+  await assert.rejects(runSync({ listFiles: async () => { throw Object.assign(new Error('Sign in'), { code: 'PLAUD_AUTH_REQUIRED' }); } }), /Sign in/);
+});
+
+test('only failures before the sync callback prove that no generation was submitted', async () => {
+  resetSyncRecords();
+  for (const [code, retryable] of [['PLAUD_SESSION_PROBE_INCOMPLETE', true], ['PLAUD_AUTH_REQUIRED', false]]) {
+    const result = await runSync({}, { withClientImpl: async () => {
+      throw Object.assign(new Error(code), { code });
+    } });
+    assert.equal(result.discovery.complete, false);
+    assert.equal(result.discovery.errorCode, code);
+    assert.equal(result.discovery.retryable, retryable);
+    assert.equal(result.submissionStarted, false);
+    assert.equal(result.submitted, 0);
+    assert.equal(result.errorStage, 'initialization');
+    assert.equal(result.ok, false);
+  }
+  let posts = 0;
+  const afterCallbackError = new Error('Fixture cleanup failed after callback');
+  const fake = { listFiles: async () => [{ id: 'fixture-posted' }],
+    generateFile: async () => { posts++; },
+    downloadTranscript: async (id, dir) => {
+      if (!posts) throw pendingTranscript();
+      return transcriptResult(id, 'Fixture recording', dir);
+    } };
+  await assert.rejects(runSync(fake, { withClientImpl: async callback => {
+    await callback(fake);
+    throw afterCallbackError;
+  } }), error => error === afterCallbackError && error.submissionStarted === undefined);
+  assert.equal(posts, 1);
+});
 
 test('sync records a durable claim before POST, retries transient reads, and reuses the exact artifact', async () => {
   resetSyncRecords();
