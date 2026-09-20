@@ -1090,13 +1090,15 @@ async function waitForPlaudAuthorization(client, options = {}) {
     // Let it finish before reloading; a reload restarts its pending renewal.
     // Explicit shorter probes may retry, but navigation shares the same budget.
     const deadline = Math.min(totalDeadline, now() + attemptTimeoutMs);
-    while (!client.authorization && now() < deadline) {
+    while (!(client.authorization && client.recordingAuthorizationReady) && now() < deadline) {
+      if (client.recordingAuthorizationError) throw client.recordingAuthorizationError;
       if (client.page.isClosed()) {
         throw plaudError('PLAUD_BROWSER_UNAVAILABLE', `${client.browserLabel} PLAUD login window was closed.`, { retryable: true });
       }
       await pauseImpl(Math.min(500, Math.max(1, deadline - now())));
     }
-    if (client.authorization && now() < totalDeadline) return true;
+    if (client.recordingAuthorizationError) throw client.recordingAuthorizationError;
+    if (client.authorization && client.recordingAuthorizationReady && now() < totalDeadline) return true;
     if (await pageShowsPlaudLogin(client.page, { timeoutMs: Math.max(1, Math.min(1000, totalDeadline - now())) })) {
       throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD account sign-in is required in ${client.browserLabel}.`, { retryable: false });
     }
@@ -1118,7 +1120,7 @@ async function waitForPlaudAuthorization(client, options = {}) {
     }
     if (now() >= totalDeadline) break;
   }
-  throw plaudError('PLAUD_SESSION_PROBE_INCOMPLETE', 'PLAUD account page opened, but its authorization request was not observed.', { retryable: true });
+  throw plaudError('PLAUD_SESSION_PROBE_INCOMPLETE', 'PLAUD account page opened, but a successful recording-list authorization response was not observed.', { retryable: true });
 }
 
 class PlaudClient {
@@ -1136,7 +1138,14 @@ class PlaudClient {
     this.operationDeadlineAt = Number(options.operationDeadlineAt) || null;
     this.apiCooldownUntil = 0;
     this.authorizationRefreshPromise = null;
-    this.rejectedAuthorization = null;
+    this.recordingAuthorizationReady = false;
+    this.recordingAuthorizationError = null;
+    this.recordingCredentialEpoch = 0;
+    this.recordingCredentialRevision = 0;
+    this.recordingRequestSequence = 0;
+    this.acceptedRecordingRequestSequence = 0;
+    this.recordingRequests = new WeakMap();
+    this.apiRequestPrefix = crypto.randomBytes(8).toString('hex');
     this.context = null;
     this.browser = null;
     this.browserProcess = null;
@@ -1169,23 +1178,10 @@ class PlaudClient {
       this.context = launched.context;
       this.browserProcess = launched.process || null;
       assertBeforeDeadline(deadlineAt);
-      this.context.on('request', (req) => {
-        if (!isPlaudApiUrl(req.url())) return;
-        const origin = plaudApiOrigin(req.url());
-        if (origin) this.apiBase = origin;
-        const headers = req.headers();
-        if (headers.authorization && headers.authorization !== this.rejectedAuthorization) {
-          const pathname = new URL(req.url()).pathname;
-          if (!this.authorization || pathname.startsWith('/file/') || pathname.startsWith('/ai/')) {
-            this.authorization = headers.authorization;
-            this.headers.authorization = headers.authorization;
-          }
-        }
-        for (const key of CAPTURED_HEADER_KEYS) {
-          if (headers[key] && !this.headers[key]) {
-            this.headers[key] = headers[key];
-          }
-        }
+      this.context.on('request', (req) => this.observeRecordingRequest(req));
+      this.context.on('response', (response) => {
+        // Event listeners must not surface response bodies or unhandled failures.
+        this.observeRecordingResponse(response).catch(() => {});
       });
       const compacted = await beforeDeadline(() => compactManagedPages(this.context), deadlineAt);
       this.page = compacted.page;
@@ -1195,29 +1191,66 @@ class PlaudClient {
         deadlineAt,
       });
       await waitForPlaudAuthorization(this, { deadlineAt });
-      let runtimeApiBase = null;
-      try {
-        runtimeApiBase = await beforeDeadline(() => this.page.evaluate(() => {
-          try {
-            return window._prefetch && typeof window._prefetch.getUserApiDomain === 'function'
-              ? window._prefetch.getUserApiDomain()
-              : null;
-          } catch {
-            return null;
-          }
-        }), Math.min(deadlineAt, Date.now() + 2000));
-      } catch {
-        // PLAUD may still be replacing its login route while the authorization
-        // deadline expires. The missing authorization below is the actionable
-        // result; a transient execution-context error must not hide it.
-      }
-      if (runtimeApiBase) this.apiBase = runtimeApiBase;
       assertBeforeDeadline(deadlineAt);
       return this;
     } catch (error) {
       await this.close();
       throw error;
     }
+  }
+
+  observeRecordingRequest(request) {
+    if (!isPlaudApiUrl(request.url()) || request.method() !== 'GET'
+      || new URL(request.url()).pathname !== '/file/simple/web') return;
+    const headers = request.headers();
+    // Our own fetches must never establish their own authentication readiness.
+    if (!headers.authorization || (this.apiRequestPrefix
+      && String(headers['x-request-id'] || '').startsWith(this.apiRequestPrefix))) return;
+    const snapshot = { authorization: headers.authorization };
+    for (const key of CAPTURED_HEADER_KEYS) {
+      if (headers[key]) snapshot[key] = headers[key];
+    }
+    this.recordingRequests.set(request, { headers: snapshot, origin: plaudApiOrigin(request.url()),
+      epoch: this.recordingCredentialEpoch, sequence: ++this.recordingRequestSequence });
+  }
+
+  async observeRecordingResponse(response) {
+    const request = response.request();
+    const candidate = this.recordingRequests.get(request);
+    this.recordingRequests.delete(request);
+    if (!candidate || this.closePromise || candidate.epoch !== this.recordingCredentialEpoch) return;
+    if (response.status() === 429) {
+      const retryAfterMs = retryAfterMilliseconds(response.headers()['retry-after']) ?? 30000;
+      this.apiCooldownUntil = Math.max(Number(this.apiCooldownUntil) || 0, Date.now() + retryAfterMs);
+      this.recordingAuthorizationError = plaudError('PLAUD_RATE_LIMITED',
+        'PLAUD 服务暂时限流；请稍后自动重试，无需重新登录。',
+        { httpStatus: 429, status: 429, retryable: true, retryAfterMs: Math.max(0, this.apiCooldownUntil - Date.now()) });
+      return;
+    }
+    // Service cooldown applies to every request in this session, including an
+    // older in-flight request that completes after a newer credential succeeds.
+    if (candidate.sequence < this.acceptedRecordingRequestSequence) return;
+    if (response.status() === 403) {
+      this.recordingAuthorizationError = plaudError('PLAUD_ACCESS_DENIED',
+        'PLAUD 暂时拒绝了本次访问；这不代表登录已失效。', { httpStatus: 403, status: 403, retryable: false });
+      return;
+    }
+    if (response.status() !== 200) return;
+    const deadlineAt = boundedDeadline(this, {}, this.apiTimeoutMs || 15000);
+    const body = await beforeDeadline(() => response.json(), deadlineAt);
+    if (body?.status !== 0 || !Array.isArray(body.data_file_list)
+      || this.closePromise || candidate.epoch !== this.recordingCredentialEpoch
+      || candidate.sequence < this.acceptedRecordingRequestSequence) return;
+    assertBeforeDeadline(deadlineAt);
+    // A successful native recording response proves this exact credential,
+    // origin and header context. Generic account requests cannot overwrite it.
+    this.headers = candidate.headers;
+    this.authorization = candidate.headers.authorization;
+    this.apiBase = candidate.origin;
+    this.recordingAuthorizationReady = true;
+    this.recordingAuthorizationError = null;
+    this.acceptedRecordingRequestSequence = candidate.sequence;
+    this.recordingCredentialRevision += 1;
   }
 
   accountFingerprint() {
@@ -1244,21 +1277,21 @@ class PlaudClient {
       throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD account sign-in is required in ${this.browserLabel}.`, { retryable: false });
     }
     assertBeforeDeadline(deadlineAt);
-    this.rejectedAuthorization = this.authorization;
     this.authorization = null;
-    delete this.headers.authorization;
+    this.headers = {};
+    this.recordingAuthorizationReady = false;
+    this.recordingAuthorizationError = null;
+    this.recordingCredentialEpoch = (this.recordingCredentialEpoch || 0) + 1;
     try {
-      try {
-        await beforeDeadline(() => this.page.reload({ waitUntil: 'commit', timeout: Math.min(15000, Math.max(1, deadlineAt - Date.now())) }), deadlineAt);
-      } catch (error) {
-        assertBeforeDeadline(deadlineAt);
-        if (!isTransientPlaudNavigationError(error)) throw error;
-        await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, { attempts: 2, timeout: 15000, deadlineAt });
-      }
+      await beforeDeadline(() => this.page.reload({ waitUntil: 'commit', timeout: Math.min(15000, Math.max(1, deadlineAt - Date.now())) }), deadlineAt);
+    } catch (error) {
       assertBeforeDeadline(deadlineAt);
-      await waitForPlaudAuthorization(this, { deadlineAt });
-      assertBeforeDeadline(deadlineAt);
-    } finally { this.rejectedAuthorization = null; }
+      if (!isTransientPlaudNavigationError(error)) throw error;
+      await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, { attempts: 2, timeout: 15000, deadlineAt });
+    }
+    assertBeforeDeadline(deadlineAt);
+    await waitForPlaudAuthorization(this, { deadlineAt });
+    assertBeforeDeadline(deadlineAt);
   }
 
   close() {
@@ -1326,8 +1359,10 @@ class PlaudClient {
     const timeoutMs = Math.max(1, Math.min(this.apiTimeoutMs || 15000, deadlineAt - Date.now()));
     const attemptDeadline = Math.min(deadlineAt, Date.now() + timeoutMs);
     const url = pathname.startsWith('http') ? pathname : `${this.apiBase}${pathname}`;
+    if (!this.apiRequestPrefix) this.apiRequestPrefix = crypto.randomBytes(8).toString('hex');
+    const requestId = this.apiRequestPrefix + crypto.randomBytes(8).toString('hex');
     const headers = { accept: 'application/json, text/plain, */*', ...this.headers,
-      ...(options.headers || {}), 'x-request-id': Math.random().toString(36).slice(2) };
+      ...(options.headers || {}), 'x-request-id': requestId };
     if (data) headers['content-type'] = headers['content-type'] || 'application/json;charset=UTF-8';
     try {
       return await beforeDeadline(() => this.page.evaluate(
@@ -1368,6 +1403,7 @@ class PlaudClient {
           { httpStatus: 429, status: 429, retryable: true, retryAfterMs });
       }
       const authorizationAtRequest = this.authorization;
+      const credentialRevisionAtRequest = this.recordingCredentialRevision;
       let response;
       try {
         response = await beforeDeadline(() => this.apiOnce(pathname, { ...options, method, deadlineAt }), deadlineAt);
@@ -1383,14 +1419,26 @@ class PlaudClient {
         await beforeDeadline(() => pauseImpl(Math.min(250 * readFailures, Math.max(1, deadlineAt - Date.now()))), deadlineAt);
         continue;
       }
-      if (response?.status === 401) {
+      const contextMismatch = response?.status === 200 && String(response.body?.status) === '-3901';
+      if (response?.status === 401 || contextMismatch) {
+        const contextError = () => plaudError('PLAUD_AUTH_CONTEXT_MISMATCH',
+          'PLAUD recording authorization context was rejected; no write was replayed.',
+          { httpStatus: 200, status: 200, apiStatus: -3901, retryable: false });
+        if (contextMismatch && (!readOnly || refreshed)) throw contextError();
         if (!readOnly) throw plaudError('PLAUD_UNAUTHORIZED', 'PLAUD 拒绝了本次写入；domi 未重放该操作，请先重新验证连接。', { httpStatus: 401, status: 401, retryable: false });
         // Another in-flight read may have established a service cooldown.
         // Re-enter its guard before any renewal can reload the remote page.
         if (Number(this.apiCooldownUntil) > Date.now()) continue;
         if (refreshed) throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD session was rejected after a silent refresh in ${this.browserLabel}.`, { httpStatus: 401, status: 401, retryable: false });
         // A concurrent read may have already refreshed the rejected token.
-        if (!this.authorization || this.authorization === authorizationAtRequest) await this.refreshAuthorizationAfterUnauthorized({ deadlineAt });
+        if (!this.recordingAuthorizationReady || (this.authorization === authorizationAtRequest
+          && this.recordingCredentialRevision === credentialRevisionAtRequest)) {
+          try { await this.refreshAuthorizationAfterUnauthorized({ deadlineAt }); }
+          catch (error) {
+            if (contextMismatch && error?.code === 'PLAUD_SESSION_PROBE_INCOMPLETE') throw contextError();
+            throw error;
+          }
+        }
         refreshed = true;
         continue;
       }
