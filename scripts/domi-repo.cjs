@@ -10,6 +10,9 @@ const { installQueryVersion, queryRecords } = require("./repository-query.cjs");
 const { checkNotesFormat } = require("./notes-format.cjs");
 const { normalizedProjectName, assertProjectBrandName, projectNameAliases } = require("./project-name-policy.cjs");
 
+const { refreshRepositoryIndustryOverviews, repairProjectHomepage, projectMaterialLinks, refreshProjectMaterials } = require("./industry-overview.cjs");
+const CANONICAL_PROJECT_TAXONOMY = require("./investment-taxonomy.json");
+
 const SCHEMA_VERSION = 7;
 const PERSON_INTERACTION_NAME_PATTERN = /(?:交流|纪要|会议|访谈|沟通|会面|电话|路演|聊天)/i;
 const PERSON_RESEARCH_NAME_PATTERN = /(?:研究|调研|人物画像|背景|背调|资料|分析|profile)/i;
@@ -551,6 +554,25 @@ class DomiRepository {
         }
       }
     }
+    writeManagedMarkdown(filePath, this.projectPageContent(project, id, filePath));
+    this.refreshProjectHomepageMaterials(id);
+    return filePath;
+  }
+
+  refreshProjectHomepageMaterials(id) {
+    try {
+      const project = this.getProject(id);
+      if (!project || path.basename(project.documentPath || "") !== "项目主页.md" || !fs.existsSync(project.documentPath)) {
+        return { ok: false, updated: false, conflicts: [], warnings: [{ code: "material_homepage_missing", message: "规范项目主页尚不可用，原资料已保存，材料链接尚未同步。" }] };
+      }
+      this.lastProjectMaterialsRefresh = refreshProjectMaterials(this, id, project.documentPath);
+    } catch (error) {
+      this.lastProjectMaterialsRefresh = { ok: false, updated: false, conflicts: [], warnings: [{ code: "material_links_refresh_failed", message: error.message }] };
+    }
+    return this.lastProjectMaterialsRefresh;
+  }
+
+  projectPageContent(project, id, filePath = this.projectDocumentPath(project)) {
     const latestValuation = project.latestValuationUsd100m === null
       ? "未填写"
       : `${project.latestValuationUsd100m} 亿美元`;
@@ -570,7 +592,7 @@ subdomains: ${yamlValue(stringList(project.subdomains))}
 status: ${yamlValue(project.status || "待交流")}
 rating: ${yamlValue(project.rating || "")}
 latest_valuation_usd_100m: ${project.latestValuationUsd100m ?? "null"}
-last_updated_at: ${yamlValue(new Date(project.lastUpdatedAt).toISOString())}
+last_updated_at: ${yamlValue(project.lastUpdatedAt ? new Date(project.lastUpdatedAt).toISOString() : "")}
 ---
 
 # ${project.name}
@@ -607,8 +629,16 @@ ${project.financingHistory || "暂无历史融资信息。"}
 - [在 Finder 中查看项目全部材料](domi-folder:current)
 - 会议纪要、投资快评、深度研究、BP / Datapack 与 IC 材料均保留在项目目录中。
 `;
-    writeManagedMarkdown(filePath, block);
-    return filePath;
+    return block;
+  }
+
+  repairProjectHomepage(request = {}) {
+    const result = repairProjectHomepage(this, request, {
+      fallbackPath: row => this.projectDocumentPath(this.mapProject(row)),
+      render: (row, target) => `<!-- domi:managed:start -->\n${this.projectPageContent(this.mapProject(row), row.id, target)}\n<!-- domi:managed:end -->`
+    });
+    this.refreshProjectHomepageMaterials(result.projectId);
+    return { ...result, industryOverviews: this.maintainIndustryOverviews() };
   }
 
   upsertProject(input) {
@@ -815,6 +845,7 @@ ${project.financingHistory || "暂无历史融资信息。"}
         ok: true,
         action: existing ? "updated" : "created",
         idempotentReplay,
+        industryOverviews: this.maintainIndustryOverviews(),
         storageReceipt: {
           backend: "local",
           projectId: id,
@@ -1209,7 +1240,20 @@ ${event.action || "继续关注。"}
       .map((row) => this.getNews(row.event_id));
   }
 
+  refreshIndustryOverviews() {
+    return refreshRepositoryIndustryOverviews(this, CANONICAL_PROJECT_TAXONOMY);
+  }
+
+  maintainIndustryOverviews() {
+    try {
+      const { entries, ...receipt } = this.refreshIndustryOverviews();
+      return receipt;
+    }
+    catch (error) { return { ok: false, entries: [], conflicts: [], warnings: [{ code: "overview_refresh_failed", message: error.message }] }; }
+  }
+
   createDocument(input) {
+    if (input.sourceFile) return require("./repository-attachment.cjs").importProjectAttachment(this, input);
     const ownerType = ["project", "person", "news", "industry"].includes(input.ownerType)
       ? input.ownerType
       : "project";
@@ -1308,9 +1352,12 @@ ${event.action || "继续关注。"}
         WHERE id = ?
       `).run(JSON.stringify(documents), now, ownerId);
     }
+    const homepageRefresh = ownerType === "project" ? this.refreshProjectHomepageMaterials(ownerId) : undefined;
     return {
       ok: true,
+      ...(homepageRefresh ? { homepageRefresh } : {}),
       document: { id, ownerType, ownerId, kind, title, path: filePath, uri: pathToFileURL(filePath).href },
+      ...(["project", "industry"].includes(ownerType) ? { industryOverviews: this.maintainIndustryOverviews() } : {}),
       storageReceipt: {
         backend: "local",
         documentUri: pathToFileURL(filePath).href,
@@ -1365,10 +1412,14 @@ function main() {
         ok: fs.existsSync(repository.databasePath) && fs.existsSync(repository.libraryDir),
         ...repository.summary()
       };
+    } else if (resource === "industry" && action === "refresh") {
+      result = repository.refreshIndustryOverviews();
     } else if (resource === "project" && ["list", "search"].includes(action)) {
       result = { ok: true, ...repository.queryProjects(queryFlags(flags)) };
     } else if (resource === "project" && action === "get") {
       result = { ok: true, project: repository.getProject(flags.id || positional[2]) };
+    } else if (resource === "project" && action === "repair-home") {
+      result = repository.repairProjectHomepage({ id: flags.id || positional[2], ...(flags["expected-updated-at"] ? { expectedUpdatedAt: flags["expected-updated-at"] } : {}) });
     } else if (resource === "project" && action === "upsert") {
       result = repository.upsertProject(readPayload(flags));
     } else if (resource === "person" && ["list", "search"].includes(action)) {

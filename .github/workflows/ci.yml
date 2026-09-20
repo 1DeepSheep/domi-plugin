@@ -39,6 +39,7 @@ jobs:
       - name: Validate plugin package
         run: |
           node scripts/domi-repo.test.cjs
+          node --test scripts/industry-overview.test.cjs scripts/repository-attachment.test.cjs
           node scripts/domi-workflow.test.cjs
           node scripts/notes-format.test.cjs
           node scripts/notes-coverage.test.cjs
