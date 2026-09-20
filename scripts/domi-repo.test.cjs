@@ -892,3 +892,165 @@ test("project homepage renders legal identity and aliases without breaking Markd
   assert.equal(lines[separator + 2].startsWith("| 历史名称／别名 |"), true);
   assert.equal(lines[separator + 3].startsWith("| 领域 |"), true);
 });
+
+test("project and document writes maintain all industry overviews without changing canonical business fields", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-overview-write-"));
+  const repository = new DomiRepository({ libraryDir: path.join(root, "library"), databasePath: path.join(root, "repo.sqlite") });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const first = repository.upsertProject({ name: "数据服务", domain: "AI", subdomains: ["AI数据", "Agent"], notes: "业务定位：提供可追溯训练数据\n关键进展：公司称正在客户试点", status: "深度跟踪", rating: "A", lastUpdatedAt: "2026-02-01" });
+  assert.equal(first.industryOverviews.ok, true);
+  assert.equal(first.industryOverviews.entries, undefined, "automatic writes return a compact receipt");
+  const filePath = path.join(repository.libraryDir, "1.行业研究", "AI", "AI数据", "行业速览.md");
+  assert.match(fs.readFileSync(filePath, "utf8"), /数据服务/);
+  const before = repository.getProject(first.project.id);
+  const doc = repository.createDocument({ ownerType: "project", ownerId: before.id, kind: "研究", title: "客户进度", content: "# 客户进度\n资料日期：2026-03-01\n\n## 关键进展\n客户确认已验收第一批数据，后续订单仍待签署。\n" });
+  assert.equal(doc.industryOverviews.ok, true);
+  assert.match(fs.readFileSync(filePath, "utf8"), /客户确认已验收第一批数据，后续订单仍待签署/);
+  const after = repository.getProject(before.id);
+  assert.equal(after.lastUpdatedAt, before.lastUpdatedAt); assert.equal(after.rating, "A"); assert.equal(after.status, "深度跟踪");
+  const full = repository.refreshIndustryOverviews();
+  const taxonomy = require("./investment-taxonomy.json");
+  assert.equal(full.entries.length, Object.entries(taxonomy).reduce((sum, [, subs]) => sum + 1 + subs.length, 0));
+  assert.equal(full.updated, 0);
+});
+
+test("industry refresh respects confirmed custom subdomains and live writer leases", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-overview-custom-"));
+  const repository = new DomiRepository({ libraryDir: path.join(root, "library"), databasePath: path.join(root, "repo.sqlite") });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  repository.database.exec("CREATE TABLE custom_taxonomy(parent_domain TEXT, name TEXT)");
+  repository.database.prepare("INSERT INTO custom_taxonomy VALUES (?, ?)").run("AI", "经确认的新子行业");
+  const result = repository.refreshIndustryOverviews();
+  assert.ok(result.entries.some(entry => entry.domain === "AI" && entry.subdomain === "经确认的新子行业"));
+  const suffix = crypto.createHash("sha256").update(path.resolve(repository.libraryDir)).digest("hex").slice(0, 16);
+  const lock = path.join(root, `.domi-industry-${suffix}.lock`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "other-owner" }));
+  const busy = repository.refreshIndustryOverviews();
+  assert.equal(busy.ok, false); assert.equal(busy.warnings[0].code, "overview_refresh_busy");
+  assert.ok(fs.existsSync(lock), "a live owner's lease is never removed");
+});
+
+test("repair-home preserves historical source bytes and business fields while creating one linked canonical homepage", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-repair-home-"));
+  const repository = new DomiRepository({ libraryDir: path.join(root, "library"), databasePath: path.join(root, "repo.sqlite") });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const saved = repository.upsertProject({ name: "历史项目", domain: "AI", subdomains: ["AI数据"], notes: "业务定位：数据服务", rating: "A", status: "已交流", lastUpdatedAt: "2025-01-02" });
+  const home = saved.project.documentPath;
+  const legacy = path.join(path.dirname(home), "研究", "历史快评.md");
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  const original = '# 历史快评\n\n公司称已获得首单，仍待客户核验。\n';
+  fs.writeFileSync(legacy, original); fs.unlinkSync(home);
+  repository.database.prepare("UPDATE projects SET document_path=? WHERE id=?").run(legacy, saved.project.id);
+  const before = repository.database.prepare("SELECT * FROM projects WHERE id=?").get(saved.project.id);
+  const result = repository.repairProjectHomepage({ id: saved.project.id, expectedUpdatedAt: before.updated_at });
+  assert.equal(result.repaired, true); assert.equal(result.documentPath, home);
+  assert.equal(result.preservedSource.sha256, crypto.createHash('sha256').update(original).digest('hex'));
+  assert.equal(fs.readFileSync(legacy, 'utf8'), original);
+  const content = fs.readFileSync(home, 'utf8');
+  assert.match(content, /保留的历史材料/);
+  assert.match(content, /%E5%8E%86%E5%8F%B2%E5%BF%AB%E8%AF%84.md/);
+  const after = repository.database.prepare("SELECT * FROM projects WHERE id=?").get(saved.project.id);
+  for (const field of Object.keys(before).filter(field => !['document_path', 'updated_at', 'revision'].includes(field))) assert.deepEqual(after[field], before[field], field);
+  const replay = repository.repairProjectHomepage({ id: saved.project.id });
+  assert.equal(replay.repaired, false);
+  assert.equal(repository.database.prepare("SELECT COUNT(*) AS n FROM documents WHERE owner_id=? AND path=?").get(saved.project.id, legacy).n, 1);
+  assert.equal(fs.readFileSync(home, 'utf8'), content);
+});
+
+test("repair-home handles empty bindings but refuses stale revisions and unrelated existing homepages", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-repair-empty-"));
+  const repository = new DomiRepository({ libraryDir: path.join(root, "library"), databasePath: path.join(root, "repo.sqlite") });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const saved = repository.upsertProject({ name: "缺主页项目", domain: "半导体", subdomains: ["算力芯片"], lastUpdatedAt: null });
+  fs.unlinkSync(saved.project.documentPath);
+  repository.database.prepare("UPDATE projects SET document_path='',last_updated_at=NULL WHERE id=?").run(saved.project.id);
+  assert.throws(() => repository.repairProjectHomepage({ id: saved.project.id, expectedUpdatedAt: 1 }), /项目已变化/);
+  fs.writeFileSync(saved.project.documentPath, '# 人工文档，没有可验证实体ID\n');
+  assert.throws(() => repository.repairProjectHomepage({ id: saved.project.id }), /实体标识不匹配/);
+  assert.equal(fs.readFileSync(saved.project.documentPath, 'utf8'), '# 人工文档，没有可验证实体ID\n');
+  fs.unlinkSync(saved.project.documentPath);
+  const repaired = repository.repairProjectHomepage({ id: saved.project.id });
+  assert.equal(repaired.repaired, true);
+  assert.equal(repository.getProject(saved.project.id).lastUpdatedAt, null);
+  assert.match(fs.readFileSync(repaired.documentPath, 'utf8'), /最后更新.*未填写/);
+});
+
+test("indexed project materials appear on the canonical home while transcripts remain in original materials", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "domi-material-links-"));
+  const repository = new DomiRepository({ libraryDir: path.join(root, "library"), databasePath: path.join(root, "repo.sqlite") });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const saved = repository.upsertProject({ name: "材料项目", domain: "AI", subdomains: ["Agent"], lastUpdatedAt: "2025-01-01" });
+  const before = repository.getProject(saved.project.id);
+  const research = repository.createDocument({ ownerType: 'project', ownerId: saved.project.id, kind: '研究', title: '业务研究', content: '# 业务研究\n\n关键进展：已发首版。' });
+  repository.createDocument({ ownerType: 'project', ownerId: saved.project.id, kind: '原始文字稿', title: '录音逐字稿', content: '# 原始稿\n我猜可能吧。' });
+  const home = fs.readFileSync(saved.project.documentPath, 'utf8');
+  assert.match(home, /\[业务研究\]/); assert.doesNotMatch(home, /\[录音逐字稿\]/);
+  const href = home.match(/\[业务研究\]\(([^)]+)\)/)[1];
+  assert.equal(path.resolve(path.dirname(saved.project.documentPath), decodeURIComponent(href)), research.document.path);
+  assert.equal(repository.getProject(saved.project.id).lastUpdatedAt, before.lastUpdatedAt);
+});
+
+test("attachment and document indexing preserve every byte of edited project text and use an outer materials block", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'domi-preserve-home-'));
+  const repository = new DomiRepository({ libraryDir: path.join(root, 'library'), databasePath: path.join(root, 'repo.sqlite') });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const saved = repository.upsertProject({ name: '保留人工摘要', domain: 'AI', subdomains: ['AI数据'], notes: '数据库旧摘要', lastUpdatedAt: '2024-01-01' });
+  const home = saved.project.documentPath;
+  const manual = fs.readFileSync(home, 'utf8').replace('数据库旧摘要', '人工修改后的投资摘要，必须保留。') + '\n\n人工尾注  保留空格。\n';
+  fs.writeFileSync(home, manual);
+  const source = path.join(root, 'BP.pdf'); fs.writeFileSync(source, '%PDF fixture');
+  repository.createDocument({ ownerType: 'project', ownerId: saved.project.id, kind: 'BP', title: '新BP', sourceFile: source });
+  const afterAttachment = fs.readFileSync(home, 'utf8');
+  assert.ok(afterAttachment.startsWith(manual), 'attachment indexing cannot regenerate existing body');
+  assert.ok(afterAttachment.indexOf('<!-- domi:project-materials:v1') > afterAttachment.indexOf('<!-- domi:managed:end -->'));
+  repository.createDocument({ ownerType: 'project', ownerId: saved.project.id, kind: '研究', title: '补充研究', content: '# 研究\n投资判断：保留待核。' });
+  const afterDocument = fs.readFileSync(home, 'utf8');
+  assert.ok(afterDocument.startsWith(manual), 'document indexing cannot regenerate existing body');
+  assert.match(afterDocument, /\[新BP\]/); assert.match(afterDocument, /\[补充研究\]/);
+  assert.equal((afterDocument.match(/<!-- domi:project-materials:v1/g) || []).length, 1);
+  assert.equal(repository.getProject(saved.project.id).lastUpdatedAt, saved.project.lastUpdatedAt);
+});
+
+test("edited or nested material blocks are preserved with a conflict candidate instead of overwritten", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'domi-material-conflict-'));
+  const repository = new DomiRepository({ libraryDir: path.join(root, 'library'), databasePath: path.join(root, 'repo.sqlite') });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const saved = repository.upsertProject({ name: '材料冲突', domain: 'AI', subdomains: ['Agent'] });
+  repository.createDocument({ ownerType: 'project', ownerId: saved.project.id, kind: '研究', title: '初始研究', content: '# 研究\n' });
+  const home = saved.project.documentPath;
+  const manual = fs.readFileSync(home, 'utf8').replace('## 项目材料', '## 我的项目材料（人工编辑）');
+  fs.writeFileSync(home, manual);
+  const archived = repository.createDocument({ ownerType: 'project', ownerId: saved.project.id, kind: '研究', title: '新研究', content: '# 新研究\n' });
+  assert.equal(fs.readFileSync(home, 'utf8'), manual);
+  assert.equal(archived.ok, true);
+  assert.equal(archived.homepageRefresh.ok, false);
+  assert.equal(archived.homepageRefresh.conflicts.length, 1);
+  const warning = archived.homepageRefresh.warnings.find(item => item.code === 'material_links_conflict');
+  assert.ok(warning); assert.match(fs.readFileSync(warning.candidatePath, 'utf8'), /新研究/);
+});
+
+test("repair-home partial temp write failure leaves no canonical target or duplicate source index", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'domi-repair-partial-'));
+  const repository = new DomiRepository({ libraryDir: path.join(root, 'library'), databasePath: path.join(root, 'repo.sqlite') });
+  t.after(() => { repository.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const saved = repository.upsertProject({ name: '修复失败夹具', domain: 'AI', subdomains: ['AI数据'] });
+  const home = saved.project.documentPath, source = path.join(path.dirname(home), '旧研究.md');
+  const content = '# 原文\n绝不能丢失。\n'; fs.writeFileSync(source, content); fs.unlinkSync(home);
+  repository.database.prepare('UPDATE projects SET document_path=? WHERE id=?').run(source, saved.project.id);
+  const originalWrite = fs.writeFileSync;
+  fs.writeFileSync = function(target, value, options) {
+    if (String(target).startsWith(`${home}.tmp-`)) {
+      originalWrite.call(fs, target, String(value).slice(0, 200), options);
+      throw Object.assign(new Error('synthetic partial write'), { code: 'EIO' });
+    }
+    return originalWrite.apply(fs, arguments);
+  };
+  try { assert.throws(() => repository.repairProjectHomepage({ id: saved.project.id }), /synthetic partial write/); }
+  finally { fs.writeFileSync = originalWrite; }
+  assert.equal(fs.existsSync(home), false);
+  assert.equal(fs.readdirSync(path.dirname(home)).some(name => name.startsWith('项目主页.md.tmp-')), false);
+  assert.equal(fs.readFileSync(source, 'utf8'), content);
+  assert.equal(repository.getProject(saved.project.id).documentPath, source);
+  assert.equal(repository.database.prepare('SELECT COUNT(*) n FROM documents WHERE owner_id=?').get(saved.project.id).n, 0);
+  assert.equal(repository.repairProjectHomepage({ id: saved.project.id }).repaired, true, 'retry after failed temp write is safe');
+});

@@ -146,6 +146,21 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 - 一个单集只有一个 `canonicalDocumentId` 和一份可编辑主纪要；其他入口只保存引用。
 - 播客归档不得暗中新建项目，也不自动新增评级或改变投资状态。
 
+## 行业速览（本地主库）
+
+`industry refresh` 按客户端共用的分类词表和已确认的自定义子行业生成 `1.行业研究/行业速览.md` 总索引，以及各一级／子行业目录下的 `行业速览.md`。本地阅读与 domi 打开同一份 Markdown；公司名使用相对链接指向唯一项目主页。跨子行业只引用同一主档，不复制公司目录。
+
+```bash
+node "$DOMI_REPO" industry refresh
+```
+
+- 上部展示本库实际覆盖、方向分布、已有行业研究摘要与资料缺口；本库样本不冒充全市场份额或竞争排名。下部固定五列：公司／方向、关键业务进展、融资／估值、投资判断、跟进／资料日期。仅摘录现有项目字段与已索引 Markdown，不自动生成评级，不以文件数量冒充业务进展。
+- 先补项目 `notes` 中的业务定位、关键进展和投资判断，以及融资、跟进字段；新增研究与纪要通过 `document create` 归档。项目更新与相关文档归档会自动刷新速览；外部编辑后可再执行 `industry refresh`。生成只写内容发生变化的页面，不修改项目日期。
+- 人工行业判断放在 `domi:industry-overview` 注释边界之外，自动刷新保留原文。已有研究不被替换。若人工编辑了自动维护区，哈希检查会保留原页并生成隐藏的更新候选，回执 `conflicts` 列出两份路径；必须核对后合并，不能直接覆盖冲突。
+- 缺失或实体不匹配的项目主页只显示公司名与“主页待关联”，回执 `warnings` 指明缺口；不得把不可用链接、空行业或待补字段算作研究已完成。未知分类保留待确认，不从目录名创建新公司。
+- 旧记录把研究／快评／转写绑定为 `document_path`，或项目缺主页时，先核对唯一项目与历史材料，再调用 `project repair-home --id <稳定ID> --expected-updated-at <回读updatedAt>`。此命令在原项目根目录建立规范主页，把旧材料保留原位并登记索引、记录 SHA-256 和主页链接；不改变 `lastUpdatedAt`、入库时间、评级或状态，仅推进存储并发版本。目标主页实体不明、原文档丢失或并发变化时停止；不能用普通 upsert 覆盖历史研究文档。修复回执的原文哈希、规范主页和索引均应回读验证。
+- 日期取实际项目业务字段，不取文件修改时间。融资保留原有轮次、投前／投后口径和进行中状态；公司陈述与内部判断不升级为已核验事实。
+
 ## 本地主库的飞书知识外挂
 
 本节只适用于 `repositoryBackend=local`。只读参考与外部写入分开处理：
@@ -172,3 +187,7 @@ node "$DOMI_REPO" document create --json-file /tmp/document.json
 选中对象以 `project get --id`／`person get --id` 读取完整对象；多个对象用 `project batch`／`person batch`，stdin `{ "ids": ["..."], "fields": ["..."] }`（省略 fields 取完整对象，一批最多 200）。核对 missingIds，判断、写作和 QA 仍完整读取必需原始文档。索引日期 createdAt 是真实系统入库时间；不能以 updatedAt 替代。
 
 多阶段入库必须执行 [程序化交接工具](../domi-router/references/programmatic-tools.md) 的 `finalize`；单次 upsert 的旧版 managed 字段仅是兼容局部回执。只有 `domi.storage-receipt.v1` 的真实记录、规范文档、归档材料回读和语义 QA 全部通过，才对客户端报告整体完成。旧飞书仍走既有真实回读，不得调用本地 finalize 冒充验证。
+
+### 已有原始附件
+
+`document create` 可用 `sourceFile` 导入明确提供的项目原件；必须有 `ownerType=project`、`ownerId`、`kind`、`title`，可选 `originalName`。原件复制到既有项目的 `原始材料/` 并登记索引，返回 `document.sha256` 与真实路径；相同内容幂等跳过，同名不同内容保留版本。不得与 `content/contentFile` 混用，不把 PDF、PPTX、XLSX 当 Markdown 文本传入。导入不会删除来源；任何来源整理均在目标哈希、索引与主页回读验证后按用户范围单独执行。
