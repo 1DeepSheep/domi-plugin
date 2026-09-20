@@ -69,6 +69,9 @@ function usage() {
 
 function safeErrorMessage(error) {
   let message = error && error.message ? String(error.message) : String(error);
+  if (error?.code === 'PLAUD_AUTH_CONTEXT_MISMATCH' || message.includes('PLAUD_AUTH_CONTEXT_MISMATCH')) {
+    return 'PLAUD_AUTH_CONTEXT_MISMATCH: PLAUD 录音接口未接受当前认证上下文。请稍后重新检查连接；本次未重放写入操作。';
+  }
   if (error?.code === 'PLAUD_BROWSER_UNAVAILABLE' || message.includes('PLAUD_BROWSER_UNAVAILABLE')) {
     return 'PLAUD 专用浏览器暂时不可用。请重新同步；domi 会清理旧连接后自动重试。';
   }
@@ -183,7 +186,7 @@ function sleep(ms) {
 }
 
 function knownGenerationRejection(message) {
-  return /^(?:Generate file failed: HTTP (?:4\d\d(?:;|$)|200; API status )|PLAUD_(?:AUTH_REQUIRED|UNAUTHORIZED|ACCESS_DENIED|RATE_LIMITED)\b)/.test(message);
+  return /^(?:Generate file failed: HTTP (?:4\d\d(?:;|$)|200; API status )|PLAUD_(?:AUTH_REQUIRED|AUTH_CONTEXT_MISMATCH|UNAUTHORIZED|ACCESS_DENIED|RATE_LIMITED)\b)/.test(message);
 }
 
 function loadState() {
@@ -515,7 +518,7 @@ const GENERATION_STAGES = new Set([
 ]);
 
 function isTransientTranscriptRead(error) {
-  if (['PLAUD_AUTH_REQUIRED', 'PLAUD_UNAUTHORIZED', 'PLAUD_ACCESS_DENIED', 'PLAUD_RATE_LIMITED'].includes(error?.code)) return false;
+  if (['PLAUD_AUTH_REQUIRED', 'PLAUD_AUTH_CONTEXT_MISMATCH', 'PLAUD_UNAUTHORIZED', 'PLAUD_ACCESS_DENIED', 'PLAUD_RATE_LIMITED'].includes(error?.code)) return false;
   if (['PLAUD_READ_TRANSIENT', 'PLAUD_NETWORK_TIMEOUT', 'PLAUD_SESSION_PROBE_INCOMPLETE'].includes(error?.code)) return true;
   return /Failed to fetch|fetch failed|PLAUD_NETWORK_TIMEOUT|PLAUD_READ_TRANSIENT|PLAUD_SESSION_PROBE_INCOMPLETE|timed?\s*out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ENETUNREACH|socket hang up|ERR_CONNECTION|ERR_NETWORK|Target page, context or browser has been closed|Execution context was destroyed|HTTP 5\d\d|download failed: 5\d\d/i.test(String(error?.message || error));
 }
@@ -1668,6 +1671,7 @@ if (require.main === module) {
     printJson({ ok: false, error: safeErrorMessage(error),
       ...(typeof error?.code === 'string' && /^PLAUD_[A-Z_]+$/.test(error.code) ? { errorCode: error.code, code: error.code } : {}),
       ...(Number.isInteger(error?.httpStatus) ? { httpStatus: error.httpStatus, status: error.httpStatus } : {}),
+      ...(Number.isSafeInteger(error?.apiStatus) ? { apiStatus: error.apiStatus } : {}),
       ...(Number.isFinite(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {}),
       ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}) });
     process.exitCode = 1;

@@ -51,6 +51,11 @@ const {
   withLoopbackNoProxy,
 } = require('../vendor/plaud-cli/src/plaud.js');
 
+function markRecordingAuthorization(client, value) {
+  client.authorization = value;
+  client.recordingAuthorizationReady = true;
+}
+
 function makeAudio(name, content = 'synthetic-audio-for-wrapper-tests') {
   const audioPath = path.join(sandbox, name);
   fs.writeFileSync(audioPath, content, { mode: 0o600 });
@@ -606,7 +611,7 @@ test('PLAUD lets an eight-second cold session finish within the full authorizati
     now: () => clock,
     pause: async (delay) => {
       clock += delay;
-      if (clock - navigationStartedAt >= 8000) client.authorization = 'fixture';
+      if (clock - navigationStartedAt >= 8000) markRecordingAuthorization(client, 'fixture');
     },
   });
   assert.equal(connected, true);
@@ -657,7 +662,7 @@ test('PLAUD preserves the longer visible-login budget without a background reloa
     now: () => clock,
     pause: async (delay) => {
       clock += delay;
-      if (clock >= 16000) client.authorization = 'fixture';
+      if (clock >= 16000) markRecordingAuthorization(client, 'fixture');
     },
   }), true);
   assert.equal(clock, 16000);
@@ -676,7 +681,7 @@ test('PLAUD can reload within an explicitly shortened probe without asking the u
       evaluate: async () => false,
       reload: async () => {
         reloads += 1;
-        client.authorization = 'ok';
+        markRecordingAuthorization(client, 'ok');
       },
     },
   };
@@ -870,7 +875,7 @@ test('PLAUD silently refreshes the same profile and retries one read after HTTP 
   client.browserLabel = 'Tabbit';
   client.headless = true;
   client.loginTimeoutMs = 12000;
-  client.authorization = 'old';
+  markRecordingAuthorization(client, 'old');
   client.headers = { authorization: 'old' };
   let reloads = 0;
   client.page = {
@@ -878,7 +883,7 @@ test('PLAUD silently refreshes the same profile and retries one read after HTTP 
     evaluate: async () => false,
     reload: async () => {
       reloads += 1;
-      client.authorization = 'new';
+      markRecordingAuthorization(client, 'new');
       client.headers.authorization = 'new';
     },
     waitForTimeout: async () => {},
@@ -901,13 +906,13 @@ test('PLAUD asks for login only after a read remains unauthorized after silent r
   client.browserLabel = 'Google Chrome';
   client.headless = true;
   client.loginTimeoutMs = 12000;
-  client.authorization = 'old';
+  markRecordingAuthorization(client, 'old');
   client.headers = { authorization: 'old' };
   client.page = {
     isClosed: () => false,
     evaluate: async () => false,
     reload: async () => {
-      client.authorization = 'new';
+      markRecordingAuthorization(client, 'new');
       client.headers.authorization = 'new';
     },
     waitForTimeout: async () => {},
@@ -1686,13 +1691,241 @@ function runSync(fake, options = {}) {
 function recoveryApiClient() {
   const client = Object.create(PlaudClient.prototype);
   Object.assign(client, { apiBase: 'https://api.invalid', headers: { authorization: 'fixture-old' },
-    authorization: 'fixture-old', browserLabel: 'Fixture browser', headless: true,
+    authorization: 'fixture-old', recordingAuthorizationReady: true, browserLabel: 'Fixture browser', headless: true,
     apiTimeoutMs: 1000, readTimeoutMs: 2000, loginTimeoutMs: 30000,
     readRetryPause: async () => {} });
   client.page = { evaluate: async () => false, isClosed: () => false,
-    reload: async () => { client.authorization = 'fixture-new'; client.headers.authorization = 'fixture-new'; } };
+    reload: async () => { markRecordingAuthorization(client, 'fixture-new'); client.headers.authorization = 'fixture-new'; } };
   return client;
 }
+
+function recordingRequest(headers = {}, pathname = '/file/simple/web', origin = 'https://api-euc1.plaud.ai') {
+  return { url: () => `${origin}${pathname}`, method: () => 'GET',
+    headers: () => ({ authorization: 'recording', 'app-platform': 'web', ...headers }) };
+}
+
+function recordingResponse(request, body = { status: 0, data_file_list: [] }, status = 200) {
+  return { request: () => request, status: () => status, headers: () => ({ 'retry-after': '10' }), json: async () => body };
+}
+
+function recordingClient() {
+  return new PlaudClient({ browserKind: 'chrome', profileDir: path.join(sandbox, 'recording-fixture'),
+    terminateBrowser: async () => {} });
+}
+
+test('real init waits for a successful native recording response and adopts its complete context', async () => {
+  const context = new EventEmitter();
+  let navigated, finishRecording;
+  const navigation = new Promise(resolve => { navigated = resolve; });
+  const recording = new Promise(resolve => { finishRecording = resolve; });
+  const page = { isClosed: () => false, evaluate: async () => null,
+    goto: async () => {
+      context.emit('request', recordingRequest({ authorization: 'account',
+        'x-device-id': 'old-device', 'x-pld-tag': 'old-tag' }, '/user/me', 'https://api.plaud.ai'));
+      navigated();
+      void recording.then(() => {
+        const request = recordingRequest({ 'x-device-id': 'recording-device', 'x-pld-user': 'recording-user' });
+        context.emit('request', request);
+        context.emit('response', recordingResponse(request));
+      });
+    } };
+  context.pages = () => [page];
+  context.close = async () => {};
+  const client = new PlaudClient({ browserKind: 'chrome', profileDir: path.join(sandbox, 'native-init-fixture'),
+    launchBrowser: async () => ({ context }), terminateBrowser: async () => {},
+    operationDeadlineAt: Date.now() + 3000 });
+  let completed = false;
+  const initialization = client.init().then(() => { completed = true; });
+  try {
+    await navigation;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(completed, false);
+    assert.equal(client.authorization, null);
+    finishRecording();
+    await initialization;
+    assert.equal(client.recordingAuthorizationReady, true);
+    assert.equal(client.apiBase, 'https://api-euc1.plaud.ai');
+    assert.deepEqual(client.headers, { authorization: 'recording', 'app-platform': 'web',
+      'x-device-id': 'recording-device', 'x-pld-user': 'recording-user' });
+  } finally { finishRecording(); await initialization.catch(() => {}); await client.close(); }
+});
+
+test('recording readiness ignores generic credentials, rejected responses and expired sessions', async () => {
+  const client = recordingClient();
+  client.page = { isClosed: () => false, evaluate: async () => false };
+  client.authorization = 'unverified';
+  let clock = 0;
+  client.operationDeadlineAt = 1000;
+  await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+    pause: async ms => { clock += ms; } }), error => error.code === 'PLAUD_SESSION_PROBE_INCOMPLETE');
+  assert.equal(clock, 1000);
+  client.operationDeadlineAt = null;
+  for (const response of [recordingResponse(recordingRequest(), { status: -3901 }),
+    recordingResponse(recordingRequest(), {}, 401), recordingResponse(recordingRequest(), { status: 0 })]) {
+    client.observeRecordingRequest(response.request());
+    await client.observeRecordingResponse(response);
+    assert.equal(client.recordingAuthorizationReady, false);
+  }
+  client.page.evaluate = async () => true;
+  clock = 0;
+  client.operationDeadlineAt = 1000;
+  await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+    pause: async ms => { clock += ms; } }), error => error.code === 'PLAUD_AUTH_REQUIRED');
+});
+
+test('failed or delayed client replays cannot promote themselves to recording readiness', async () => {
+  for (const body of [{ status: -3901 }, { status: 0, data_file_list: [] }]) {
+    const client = recordingClient();
+    client.headers = { authorization: 'unverified' };
+    let request;
+    client.page = { evaluate: async (_fn, args) => {
+      request = recordingRequest(args.headers);
+      client.observeRecordingRequest(request);
+      await client.observeRecordingResponse(recordingResponse(request, body));
+      return { status: 200, body };
+    } };
+    await client.apiOnce('/file/simple/web');
+    // Also model the request event arriving after the evaluation has settled.
+    client.observeRecordingRequest(request);
+    await client.observeRecordingResponse(recordingResponse(request));
+    assert.equal(client.authorization, null);
+    assert.equal(client.recordingAuthorizationReady, false);
+  }
+});
+
+test('older native responses cannot replace a newer or refreshed recording context', async () => {
+  const client = recordingClient();
+  const older = recordingRequest({ authorization: 'old' });
+  const newer = recordingRequest({ authorization: 'new' }, '/file/simple/web', 'https://api.plaud.ai');
+  client.observeRecordingRequest(older);
+  client.observeRecordingRequest(newer);
+  await client.observeRecordingResponse(recordingResponse(newer));
+  await client.observeRecordingResponse(recordingResponse(older));
+  assert.equal(client.authorization, 'new');
+  assert.equal(client.apiBase, 'https://api.plaud.ai');
+  const stale = recordingRequest({ authorization: 'stale' });
+  client.observeRecordingRequest(stale);
+  client.recordingCredentialEpoch++;
+  client.recordingAuthorizationReady = false;
+  await client.observeRecordingResponse(recordingResponse(stale));
+  assert.equal(client.recordingAuthorizationReady, false);
+  assert.equal(client.authorization, 'new');
+  client.operationDeadlineAt = Date.now() - 1;
+  const expired = recordingRequest();
+  client.observeRecordingRequest(expired);
+  await assert.rejects(client.observeRecordingResponse(recordingResponse(expired)), /PLAUD_NETWORK_TIMEOUT/);
+  assert.equal(client.recordingAuthorizationReady, false);
+});
+
+test('business token-context rejection permits one proven read recovery and never replays writes', async () => {
+  for (const succeeds of [true, false]) {
+    const client = recordingClient();
+    let requests = 0, reloads = 0;
+    client.page = { isClosed: () => false, evaluate: async () => false, reload: async () => {
+      reloads++;
+      const request = recordingRequest();
+      client.observeRecordingRequest(request);
+      await client.observeRecordingResponse(recordingResponse(request));
+    } };
+    client.apiOnce = async () => ({ status: 200, body: ++requests === 2 && succeeds
+      ? { status: 0, data_file_list: [] } : { status: -3901, msg: 'synthetic-private-server-message' } });
+    if (succeeds) assert.deepEqual(await client.listFiles(), []);
+    else await assert.rejects(client.listFiles(), error => error.code === 'PLAUD_AUTH_CONTEXT_MISMATCH'
+      && error.apiStatus === -3901 && error.retryable === false
+      && !__test.safeErrorMessage(error).includes('synthetic-private-server-message'));
+    assert.equal(requests, 2);
+    assert.equal(reloads, 1);
+  }
+  const client = recordingClient();
+  let requests = 0;
+  client.apiOnce = async () => { requests++; return { status: 200, body: { status: -3901 } }; };
+  client.page = { reload: async () => { throw new Error('writes must not renew or replay'); } };
+  await assert.rejects(client.api('/ai/transsumm/synthetic', { method: 'POST' }),
+    error => error.code === 'PLAUD_AUTH_CONTEXT_MISMATCH' && error.retryable === false);
+  assert.equal(requests, 1);
+  client.apiOnce = async () => { requests++; return { status: 200, body: { status: -1234 } }; };
+  await assert.rejects(client.listFiles(), /API status -1234/);
+  assert.equal(requests, 2);
+});
+
+test('native recording access refusals keep their precise code and service cooldown', async () => {
+  for (const status of [403, 429]) {
+    const client = recordingClient();
+    const request = recordingRequest();
+    client.observeRecordingRequest(request);
+    await client.observeRecordingResponse(recordingResponse(request, {}, status));
+    await assert.rejects(waitForPlaudAuthorization(client), error => error.code ===
+      (status === 429 ? 'PLAUD_RATE_LIMITED' : 'PLAUD_ACCESS_DENIED') && error.httpStatus === status);
+    if (status === 429) {
+      let requests = 0;
+      client.apiOnce = async () => { requests++; };
+      await assert.rejects(client.listFiles(), error => error.code === 'PLAUD_RATE_LIMITED' && error.retryAfterMs > 9000);
+      assert.equal(requests, 0);
+    }
+  }
+});
+
+test('concurrent token-context failures share a native refresh and incomplete renewal never replays the read', async () => {
+  const client = recordingClient();
+  let initialRequests = 0, reloads = 0, releaseInitial;
+  const initial = new Promise(resolve => { releaseInitial = resolve; });
+  client.page = { isClosed: () => false, evaluate: async () => false, reload: async () => {
+    reloads++;
+    const request = recordingRequest();
+    client.observeRecordingRequest(request);
+    await client.observeRecordingResponse(recordingResponse(request));
+  } };
+  client.apiOnce = async () => {
+    if (client.recordingAuthorizationReady) return { status: 200, body: { status: 0, data_file_list: [] } };
+    if (++initialRequests === 3) releaseInitial();
+    await initial;
+    return { status: 200, body: { status: -3901 } };
+  };
+  assert.deepEqual(await Promise.all([client.listFiles(), client.listFiles(), client.listFiles()]), [[], [], []]);
+  assert.equal(initialRequests, 3);
+  assert.equal(reloads, 1);
+
+  const incomplete = recordingClient();
+  let reads = 0, refreshes = 0;
+  incomplete.apiOnce = async () => { reads++; return { status: 200, body: { status: -3901 } }; };
+  incomplete.refreshAuthorizationAfterUnauthorized = async () => {
+    refreshes++;
+    throw Object.assign(new Error('Synthetic incomplete recording probe'), { code: 'PLAUD_SESSION_PROBE_INCOMPLETE' });
+  };
+  await assert.rejects(incomplete.listFiles(), error => error.code === 'PLAUD_AUTH_CONTEXT_MISMATCH'
+    && error.apiStatus === -3901 && error.retryable === false);
+  assert.equal(reads, 1);
+  assert.equal(refreshes, 1);
+});
+
+test('a late native rate limit applies after a newer credential succeeds but not across refresh epochs', async () => {
+  const client = recordingClient();
+  const older = recordingRequest({ authorization: 'old' });
+  const newer = recordingRequest({ authorization: 'new' });
+  client.observeRecordingRequest(older);
+  client.observeRecordingRequest(newer);
+  await client.observeRecordingResponse(recordingResponse(newer));
+  const limited = recordingResponse(older, {}, 429);
+  limited.headers = () => ({ 'retry-after': '60' });
+  await client.observeRecordingResponse(limited);
+  assert.equal(client.recordingAuthorizationReady, true);
+  assert.equal(client.authorization, 'new');
+  let requests = 0;
+  client.apiOnce = async () => { requests++; };
+  for (const method of ['GET', 'POST']) {
+    await assert.rejects(client.api('/file/simple/web', { method }), error => error.code === 'PLAUD_RATE_LIMITED'
+      && error.retryAfterMs > 59000 && error.retryAfterMs <= 60000);
+  }
+  assert.equal(requests, 0);
+
+  const refreshed = recordingClient();
+  const stale = recordingRequest();
+  refreshed.observeRecordingRequest(stale);
+  refreshed.recordingCredentialEpoch++;
+  await refreshed.observeRecordingResponse(recordingResponse(stale, {}, 429));
+  assert.equal(refreshed.apiCooldownUntil, 0);
+  assert.equal(refreshed.recordingAuthorizationError, null);
+});
 
 test('PLAUD retries only safe reads after network and service failures under the same deadline', async () => {
   for (const method of ['GET', 'HEAD']) {
@@ -1735,7 +1968,7 @@ test('concurrent unauthorized reads share one refresh and stale responses do not
   const initialBarrier = new Promise(resolve => { releaseInitial = resolve; });
   client.page.reload = async () => {
     reloads++;
-    client.authorization = 'fixture-new';
+    markRecordingAuthorization(client, 'fixture-new');
     client.headers.authorization = 'fixture-new';
   };
   client.apiOnce = async () => {
@@ -1752,7 +1985,7 @@ test('concurrent unauthorized reads share one refresh and stale responses do not
   let lateResponse;
   const late = new Promise(resolve => { lateResponse = resolve; });
   let delayedReloads = 0;
-  delayed.page.reload = async () => { delayedReloads++; delayed.authorization = 'fixture-new'; };
+  delayed.page.reload = async () => { delayedReloads++; markRecordingAuthorization(delayed, 'fixture-new'); };
   delayed.apiOnce = async pathname => delayed.authorization === 'fixture-new'
     ? { status: 200, body: {} } : pathname === '/late' ? late : { status: 401, body: {} };
   const lateRead = delayed.api('/late');
@@ -1836,7 +2069,7 @@ test('the default headless probe admits slow renewal while an operation deadline
     reload: async () => { throw new Error('must not restart slow renewal'); } };
   let clock = 0;
   assert.equal(await waitForPlaudAuthorization(client, { now: () => clock,
-    pause: async ms => { clock += ms; if (clock >= 16000) client.authorization = 'fixture'; } }), true);
+    pause: async ms => { clock += ms; if (clock >= 16000) markRecordingAuthorization(client, 'fixture'); } }), true);
   assert.equal(clock, 16000);
   clock = 0;
   client.authorization = null;
@@ -2225,8 +2458,8 @@ test('an unvisited new candidate stays unsubmitted and a later explicit sync can
   assert.equal(explicit.results[0].outcome, 'ready');
 });
 
-test('explicit HTTP authentication, access and rate rejection are retryable only by a later explicit submission', async () => {
-  for (const prefix of ['PLAUD_AUTH_REQUIRED', 'PLAUD_UNAUTHORIZED', 'PLAUD_ACCESS_DENIED', 'PLAUD_RATE_LIMITED']) {
+test('explicit authentication, access and rate rejection are retryable only by a later explicit submission', async () => {
+  for (const prefix of ['PLAUD_AUTH_REQUIRED', 'PLAUD_AUTH_CONTEXT_MISMATCH', 'PLAUD_UNAUTHORIZED', 'PLAUD_ACCESS_DENIED', 'PLAUD_RATE_LIMITED']) {
     resetSyncRecords();
     let posts = 0;
     const result = await runSync({ listFiles: async () => [{ id: 'known-http-rejection' }],
