@@ -105,6 +105,225 @@ function makeNotesQuality(fileId, notesPath) {
 
 test.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
+const contextAccountScope = 'c'.repeat(64);
+function contextFixture(id, stage = 'transcript_ready') {
+  const transcriptPath = path.join(sandbox, `${id}-context-source.md`);
+  fs.writeFileSync(transcriptPath, '讨论产品试点与推理成本。\n', { mode: 0o600 });
+  __test.updateRecord(__test.loadState(), id, { stage, transcriptPath, fileName: '合成录音', duration: 600 });
+  const store = __test.meetingContextStore();
+  const prepared = store.prepare(id, { accountScope: contextAccountScope });
+  const input = { accountScope: contextAccountScope, submissionId: `submit-${id}`, sourceTurnId: `turn-${id}`,
+    expectedRecordRevision: prepared.recordRevision, expectedTranscriptSha256: prepared.transcript.sha256,
+    contextStatus: 'provided', conversationType: '行业交流', projectName: '', participants: ['用户确认的参会者'],
+    userContext: '本次讨论产品试点。', extraContext: '保留技术机制。', rawAnswer: '参会者：用户确认的参会者；行业交流。' };
+  return { id, store, prepared, input, transcriptPath };
+}
+
+test('meeting context preparation is local and read-only, with no implicit skip or trusted legacy recall', () => {
+  const fixture = contextFixture('context-prepare');
+  __test.updateRecord(__test.loadState(), fixture.id, { recallSummary: '旧提示', updatedAt: 'synthetic' });
+  const before = fs.readFileSync(__test.STATE_FILE);
+  const prepared = fixture.store.prepare(fixture.id, { accountScope: contextAccountScope });
+  assert.equal(prepared.disposition, 'needs_input');
+  assert.equal(prepared.stage, 'transcript_ready');
+  assert.equal(prepared.recallSummary, '旧提示');
+  assert.equal(prepared.recallSummaryVerified, false);
+  assert.equal(prepared.context.contextStatus, '');
+  assert.equal(prepared.recordRevision, fixture.prepared.recordRevision, 'recall and queue timestamps do not invalidate the form');
+  assert.equal(prepared.transcript.sha256, __test.sha256File(fixture.transcriptPath));
+  assert.ok(before.equals(fs.readFileSync(__test.STATE_FILE)));
+  assert.throws(() => fixture.store.prepare('missing-context', { accountScope: contextAccountScope }), { code: 'PLAUD_CONTEXT_RECORD_NOT_FOUND' });
+});
+
+test('meeting context submit atomically preserves the original answer, exact source and user-confirmed fields', () => {
+  const { id, store, input } = contextFixture('context-submit');
+  const result = store.submit(id, input);
+  assert.equal(result.stage, 'context_ready');
+  assert.equal(result.disposition, 'ready');
+  assert.equal(result.reused, false);
+  assert.deepEqual(result.context.participants, input.participants);
+  assert.equal(result.context.rawAnswer, input.rawAnswer);
+  assert.equal(result.context.sourceTurnId, input.sourceTurnId);
+  const original = JSON.parse(fs.readFileSync(result.contextPath));
+  assert.equal(original.rawAnswer, input.rawAnswer);
+  assert.equal(original.sourceTurnId, input.sourceTurnId);
+  assert.equal(original.fileId, id);
+  assert.equal(original.accountScope, contextAccountScope);
+  assert.equal(original.transcript.sha256, input.expectedTranscriptSha256);
+  assert.equal(fs.statSync(result.contextPath).mode & 0o777, 0o600);
+  const before = fs.readFileSync(__test.STATE_FILE);
+  assert.equal(store.submit(id, input).reused, true);
+  assert.ok(before.equals(fs.readFileSync(__test.STATE_FILE)), 'duplicate delivery performs no second state write');
+  const restored = store.prepare(id, { accountScope: contextAccountScope });
+  assert.equal(restored.contextPath, result.contextPath);
+  assert.equal(restored.context.rawAnswer, input.rawAnswer, 'a fresh client resumes the verified full answer, not a reconstructed summary');
+  assert.equal(restored.context.sourceTurnId, input.sourceTurnId);
+  assert.equal(restored.recordRevision, result.recordRevision, 'response-only original answer fields do not change revision hashing');
+  assert.throws(() => store.submit(id, { ...input, rawAnswer: 'different answer' }), { code: 'PLAUD_CONTEXT_SUBMISSION_CONFLICT' });
+  assert.throws(() => store.submit(id, { ...input, submissionId: 'different-submit' }), { code: 'PLAUD_CONTEXT_STAGE_CONFLICT' });
+});
+
+test('an explicit skip is supported, while partial input counts as provided and identifiers cannot be inferred', () => {
+  const skipped = contextFixture('context-skipped');
+  const input = { ...skipped.input, contextStatus: 'skipped', conversationType: '', participants: [], userContext: '', extraContext: '', rawAnswer: '直接处理' };
+  assert.equal(skipped.store.submit(skipped.id, input).context.contextStatus, 'skipped');
+  const partial = contextFixture('context-partial');
+  const result = partial.store.submit(partial.id, { ...partial.input, conversationType: '', participants: '只有这一条用户输入，不能按逗号猜测', extraContext: '' });
+  assert.equal(result.context.contextStatus, 'provided');
+  assert.deepEqual(result.context.participants, ['只有这一条用户输入，不能按逗号猜测']);
+  const invalid = contextFixture('context-invalid');
+  for (const bad of [{ contextStatus: '' }, { rawAnswer: '' }, { sourceTurnId: '' }, { accountScope: '' }]) {
+    assert.throws(() => invalid.store.submit(invalid.id, { ...invalid.input, ...bad }), { code: 'PLAUD_CONTEXT_INPUT_INVALID' });
+  }
+  assert.equal(__test.loadState().records[invalid.id].stage, 'transcript_ready');
+});
+
+test('changed context, source, account, missing transcript and advanced states fail without rollback', () => {
+  const revision = contextFixture('context-revision');
+  __test.updateRecord(__test.loadState(), revision.id, { userContext: 'another user change' });
+  assert.throws(() => revision.store.submit(revision.id, revision.input), { code: 'PLAUD_CONTEXT_REVISION_CONFLICT' });
+  const changed = contextFixture('context-source-changed');
+  fs.appendFileSync(changed.transcriptPath, '新增原文。');
+  assert.throws(() => changed.store.submit(changed.id, changed.input), { code: 'PLAUD_CONTEXT_TRANSCRIPT_CHANGED' });
+  fs.unlinkSync(changed.transcriptPath);
+  assert.throws(() => changed.store.prepare(changed.id, { accountScope: contextAccountScope }), { code: 'PLAUD_CONTEXT_TRANSCRIPT_REQUIRED' });
+  const scope = contextFixture('context-scope');
+  scope.store.submit(scope.id, scope.input);
+  assert.throws(() => scope.store.prepare(scope.id, { accountScope: 'd'.repeat(64) }), { code: 'PLAUD_CONTEXT_SCOPE_MISMATCH' });
+  for (const stage of ['notes_project', 'notes_non_project', 'reviewed', 'documented', 'managed', 'discussion_notes_ready', 'discussion_complete']) {
+    const advanced = contextFixture(`context-advanced-${stage}`);
+    __test.updateRecord(__test.loadState(), advanced.id, { stage });
+    assert.equal(advanced.store.prepare(advanced.id, { accountScope: contextAccountScope }).disposition, 'advanced');
+    assert.throws(() => advanced.store.submit(advanced.id, advanced.input), { code: 'PLAUD_CONTEXT_STAGE_CONFLICT' });
+    assert.equal(__test.loadState().records[advanced.id].stage, stage);
+  }
+});
+
+test('context artifact tampering cannot be hidden by an idempotent submit or bypass notes QA', () => {
+  const fixture = contextFixture('context-artifact');
+  const result = fixture.store.submit(fixture.id, fixture.input);
+  assert.throws(() => __test.mark(fixture.id, 'notes_non_project', fixture.transcriptPath, '{}'), /notes quality requires/);
+  assert.throws(() => __test.mark(fixture.id, 'context_ready', '-', JSON.stringify({ contextReceipt: {} })), /may not override/);
+  fs.appendFileSync(result.contextPath, 'tampered');
+  assert.throws(() => fixture.store.prepare(fixture.id, { accountScope: contextAccountScope }), { code: 'PLAUD_CONTEXT_ARTIFACT_INVALID' });
+  assert.throws(() => fixture.store.submit(fixture.id, fixture.input), { code: 'PLAUD_CONTEXT_ARTIFACT_INVALID' });
+});
+
+test('context commands reject disabled access, invalid local files and corrupted state without leaking inputs', () => {
+  const fixture = contextFixture('context-boundaries');
+  const before = fs.readFileSync(__test.STATE_FILE);
+  const config = fs.readFileSync(process.env.DOMI_CONFIG_PATH);
+  try {
+    fs.writeFileSync(process.env.DOMI_CONFIG_PATH, '{"plaudConnectionMode":"disabled"}');
+    assert.throws(() => fixture.store.prepare(fixture.id, { accountScope: contextAccountScope }), { code: 'PLAUD_DISABLED' });
+    assert.throws(() => fixture.store.submit(fixture.id, fixture.input), { code: 'PLAUD_DISABLED' });
+    assert.ok(before.equals(fs.readFileSync(__test.STATE_FILE)));
+  } finally { fs.writeFileSync(process.env.DOMI_CONFIG_PATH, config); }
+  fs.writeFileSync(fixture.transcriptPath, '');
+  assert.throws(() => fixture.store.prepare(fixture.id, { accountScope: contextAccountScope }), { code: 'PLAUD_CONTEXT_TRANSCRIPT_REQUIRED' });
+  fs.unlinkSync(fixture.transcriptPath);
+  fs.symlinkSync(__test.STATE_FILE, fixture.transcriptPath);
+  assert.throws(() => fixture.store.prepare(fixture.id, { accountScope: contextAccountScope }), { code: 'PLAUD_CONTEXT_TRANSCRIPT_REQUIRED' });
+  try {
+    fs.writeFileSync(__test.STATE_FILE, '{private-original-answer-secret');
+    assert.throws(() => fixture.store.prepare(fixture.id, { accountScope: contextAccountScope }), error => {
+      assert.equal(error.code, 'PLAUD_CONTEXT_STATE_UNAVAILABLE');
+      assert.doesNotMatch(error.message, /private-original-answer|secret/);
+      return true;
+    });
+  } finally { fs.writeFileSync(__test.STATE_FILE, before); }
+});
+
+function submitContextChild(fileId, input, command = 'context-submit') {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath, command, fileId, '-'], { env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', value => { stdout += value; });
+    child.stderr.on('data', value => { stderr += value; });
+    child.on('error', reject);
+    child.on('close', code => {
+      try { resolve({ code, value: JSON.parse(stdout), stderr }); } catch (error) { reject(error); }
+    });
+    child.stdin.end(JSON.stringify(input));
+  });
+}
+
+test('real CLI stdin submits serialize competing windows and replay the same submission exactly once', async () => {
+  const identical = contextFixture('context-concurrent-same');
+  const results = await Promise.all([submitContextChild(identical.id, identical.input), submitContextChild(identical.id, identical.input)]);
+  assert.deepEqual(results.map(item => item.code), [0, 0]);
+  assert.deepEqual(results.map(item => item.value.reused).sort(), [false, true]);
+  assert.equal(results[0].value.contextPath, results[1].value.contextPath);
+  const competing = contextFixture('context-concurrent-different');
+  const other = { ...competing.input, submissionId: 'another-window', rawAnswer: '第二个窗口的回答' };
+  const conflicts = await Promise.all([submitContextChild(competing.id, competing.input), submitContextChild(competing.id, other)]);
+  assert.equal(conflicts.filter(item => item.code === 0).length, 1);
+  assert.equal(conflicts.find(item => item.code !== 0).value.errorCode, 'PLAUD_CONTEXT_STAGE_CONFLICT');
+  assert.equal(__test.loadState().records[competing.id].stage, 'context_ready');
+});
+
+test('explicit scope recovery preserves original artifact and advanced stage, with idempotent replay', () => {
+  const f = contextFixture('context-scope-rebind');
+  const saved = f.store.submit(f.id, f.input);
+  const oldBytes = fs.readFileSync(saved.contextPath);
+  __test.updateRecord(__test.loadState(), f.id, { stage: 'reviewed' });
+  const before = f.store.prepare(f.id, { accountScope: contextAccountScope });
+  const request = { accountScope: 'd'.repeat(64), previousAccountScope: contextAccountScope, confirmed: true,
+    expectedTranscriptSha256: before.transcript.sha256, expectedRecordRevision: before.recordRevision };
+  const result = f.store.rebind(f.id, request);
+  assert.equal(result.stage, 'reviewed');
+  assert.equal(result.context.rawAnswer, f.input.rawAnswer);
+  assert.equal(result.context.sourceTurnId, f.input.sourceTurnId);
+  assert.notEqual(result.contextPath, saved.contextPath);
+  assert.ok(oldBytes.equals(fs.readFileSync(saved.contextPath)), 'the original sidecar is never rewritten');
+  assert.equal(result.scopeRecoveryBinding.previousRecordRevision, before.recordRevision);
+  const stateBytes = fs.readFileSync(__test.STATE_FILE);
+  assert.equal(f.store.rebind(f.id, request).reused, true);
+  assert.ok(stateBytes.equals(fs.readFileSync(__test.STATE_FILE)));
+  assert.throws(() => f.store.prepare(f.id, { accountScope: contextAccountScope }), { code: 'PLAUD_CONTEXT_SCOPE_MISMATCH' });
+  assert.throws(() => f.store.rebind(f.id, { ...request, expectedRecordRevision: 'a'.repeat(64) }), { code: 'PLAUD_CONTEXT_REVISION_CONFLICT' });
+});
+
+test('scope recovery fails closed on missing confirmation, source/revision/scope changes and terminal stages', () => {
+  const f = contextFixture('context-scope-guard');
+  const saved = f.store.submit(f.id, f.input);
+  const request = { accountScope: 'd'.repeat(64), previousAccountScope: contextAccountScope, confirmed: true,
+    expectedTranscriptSha256: saved.transcript.sha256, expectedRecordRevision: saved.recordRevision };
+  const before = fs.readFileSync(__test.STATE_FILE);
+  for (const [patch, code] of [[{ confirmed: false }, 'INPUT_INVALID'], [{ expectedTranscriptSha256: 'e'.repeat(64) }, 'TRANSCRIPT_CHANGED'],
+    [{ expectedRecordRevision: 'e'.repeat(64) }, 'REVISION_CONFLICT'], [{ previousAccountScope: 'e'.repeat(64) }, 'SCOPE_MISMATCH']]) {
+    assert.throws(() => f.store.rebind(f.id, { ...request, ...patch }), { code: `PLAUD_CONTEXT_${code}` });
+    assert.ok(before.equals(fs.readFileSync(__test.STATE_FILE)));
+  }
+  __test.updateRecord(__test.loadState(), f.id, { stage: 'managed' });
+  assert.throws(() => f.store.rebind(f.id, request), { code: 'PLAUD_CONTEXT_STAGE_CONFLICT' });
+  const draft = contextFixture('context-scope-draft');
+  const draftBytes = fs.readFileSync(__test.STATE_FILE);
+  const recovered = draft.store.rebind(draft.id, { ...request, expectedRecordRevision: draft.prepared.recordRevision, expectedTranscriptSha256: draft.prepared.transcript.sha256 });
+  assert.equal(recovered.stage, 'transcript_ready');
+  assert.equal(recovered.contextPath, null);
+  assert.ok(draftBytes.equals(fs.readFileSync(__test.STATE_FILE)), 'draft recovery neither submits context nor advances its queue');
+  const oversized = contextFixture('context-oversized-source');
+  fs.truncateSync(oversized.transcriptPath, 32 * 1024 * 1024 + 1);
+  assert.throws(() => oversized.store.prepare(oversized.id, { accountScope: contextAccountScope }), { code: 'PLAUD_CONTEXT_TRANSCRIPT_REQUIRED' });
+});
+
+test('real CLI scope recovery serializes conflicting scopes and lost-reply replays', async () => {
+  const f = contextFixture('context-scope-concurrent');
+  const saved = f.store.submit(f.id, f.input);
+  const request = { accountScope: 'd'.repeat(64), previousAccountScope: contextAccountScope, confirmed: true,
+    expectedTranscriptSha256: saved.transcript.sha256, expectedRecordRevision: saved.recordRevision };
+  const same = await Promise.all([submitContextChild(f.id, request, 'context-rebind'), submitContextChild(f.id, request, 'context-rebind')]);
+  assert.deepEqual(same.map(item => item.code), [0, 0]);
+  assert.deepEqual(same.map(item => item.value.reused).sort(), [false, true]);
+  const g = contextFixture('context-scope-competing');
+  const next = g.store.submit(g.id, g.input);
+  const concurrent = { ...request, expectedRecordRevision: next.recordRevision, expectedTranscriptSha256: next.transcript.sha256 };
+  const different = await Promise.all([submitContextChild(g.id, concurrent, 'context-rebind'), submitContextChild(g.id, { ...concurrent, accountScope: 'e'.repeat(64) }, 'context-rebind')]);
+  assert.equal(different.filter(item => item.code === 0).length, 1);
+  assert.equal(different.find(item => item.code !== 0).value.errorCode, 'PLAUD_CONTEXT_SCOPE_MISMATCH');
+});
+
 test('PLAUD media tools prefer a validated domi-bundled executable', () => {
   const previous = process.env.DOMI_FFMPEG_PATH;
   const binaryPath = path.join(sandbox, 'ffmpeg');

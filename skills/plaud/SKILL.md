@@ -32,9 +32,11 @@ scripts/plaud.js
 
 ## 账户内已有录音的标准流程
 
+**已验证本地文字稿／客户端会议信息卡片优先**：客户端已经绑定精确 `fileId`，并通过纯本地 `context-prepare` 校验文字稿时，先在同一张卡片展示基于该文字稿的回忆提示和背景填写区。此分支不运行 `doctor`、`connection`、`pending`、浏览器或重新下载，不为询问固定背景问题启动完整 Router／ASR 任务。回忆提示只帮助辨认录音，提及或疑似姓名不等于已确认参会人。用户提交或明确“直接处理”后，由 `context-submit` 原子保存 `provided|skipped`、原始回答和来源 turn；详见 [本地会议信息交接](references/meeting-context.md)。已 `context_ready` 直接复用，后续／完成阶段不得回退。
+
 以下 1–5 步只适用于 PLAUD 账户里已经存在、但尚未生成或整理的录音。若用户明确提供精确本地 `audioPath` 并要求上传／生成，直接走“本地录音上传与转写”分支；不得先运行 `queue`、`pending` 或 `sync-pending`。旧版遗留的 `workflowKind=quick-discussion` 只用于恢复同一既有录音，不得启动新录音。
 
-1. 先运行 `doctor` 检查 Node、用户所选 Chrome／Tabbit 和内置依赖，再运行 `connection` 发起一次只读远端验证；未验证登录时停止并让用户回到 domi 设置完成登录。
+1. 只有确需远端读取、生成或下载时，先运行 `doctor` 检查 Node、用户所选 Chrome／Tabbit 和内置依赖，再运行 `connection` 发起一次只读远端验证；未验证登录时停止并让用户回到 domi 设置完成登录。已校验本地文字稿按上方本地分支继续。
 2. 运行 `queue`，优先恢复之前已生成但尚未完成纪要、评分、文档归档或入库的项目；对 `notes_project`、`reviewed`、`documented` 项先运行 `verify <fileId>` 只读核验审计与文件哈希。
 3. 运行 `pending 100` 查询最近未生成文字稿的录音。
 4. 用户明确要求生成或运行 domi 主工作流时，运行 `sync-pending <count> <outDir> [timeoutSec] [pollSec]`。
@@ -77,6 +79,7 @@ transcribe-local <audioPath> [outDir] [timeoutSec] [pollSec] [title] [--workflow
 - 禁止调用旧版 `plaud pipeline ...`；该流程会自行启动 Codex 并写飞书，不属于 domi 的受控链路。
 - `connection`、`status`、`pending`、`queue`、`verify` 和 `doctor` 是只读操作。
 - `capabilities` 只返回本地命令能力，不访问浏览器或 PLAUD；`recover-pending` 只读取远端并保存已有文字稿，不上传音频或提交生成。
+- `context-prepare`、`context-submit` 只处理当前连接范围内指定 `fileId` 的本地文字稿及背景；客户端主进程须先验证该 ID 属于当前连接的成功列表。缺稿返回 `PLAUD_CONTEXT_TRANSCRIPT_REQUIRED`，不能自动下载。只读准备或关闭卡片不表示用户选择跳过。
 - `login` 只打开 domi 专用浏览器 Profile 并等待用户亲自登录；不得代填账号密码。`logout` 只删除所选 domi 专用 Profile。
 - 除用户明确触发 `login` 外，CLI 必须通过 macOS 的隐藏后台启动模式运行专用浏览器，不得激活 Chrome／Tabbit 的日常窗口；同一专用 Profile 的命令必须串行执行，禁止通过重复启动生成多个 `Plaud Web` 标签页。
 - `sync-pending` 会在 PLAUD 中触发生成。只有用户明确要求生成、同步或运行 domi 主工作流时才能执行。
