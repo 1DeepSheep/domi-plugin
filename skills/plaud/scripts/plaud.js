@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const { artifact, verifyArtifact, evidenceCheck } = require('../../../scripts/domi-workflow.cjs');
+const { createMeetingContextStore } = require('./meeting-context.cjs');
 
 const {
   BROWSER_SPECS,
@@ -58,6 +59,9 @@ function usage() {
   node plaud.js status [limit]
   node plaud.js pending [limit]
   node plaud.js queue
+  node plaud.js context-prepare <fileId> <metadataJson|->
+  node plaud.js context-submit <fileId> <metadataJson|->
+  node plaud.js context-rebind <fileId> <metadataJson|->
   node plaud.js verify <fileId>
   node plaud.js capabilities
   node plaud.js recover-pending [count] [outDir] [timeoutSec] [pollSec]
@@ -1407,6 +1411,7 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
     'transcriptPath',
     'transcriptRawPath',
     'discussionNotesAudit',
+    'contextReceipt',
   ];
   const forbiddenImmutableFields = immutableMarkFields.filter((field) => Object.hasOwn(metadata, field));
   if (forbiddenImmutableFields.length > 0) {
@@ -1621,6 +1626,11 @@ async function main() {
   if (command === 'connection') return connection(args[0]);
   if (command === 'logout') return logout(args[0]);
   if (command === 'queue') return queue();
+  if (command === 'context-prepare' || command === 'context-submit' || command === 'context-rebind') {
+    const input = args[1] === '-' ? fs.readFileSync(0, 'utf8') : args[1];
+    const store = meetingContextStore();
+    return printJson(command === 'context-prepare' ? store.prepare(args[0], input) : command === 'context-rebind' ? store.rebind(args[0], input) : store.submit(args[0], input));
+  }
   if (command === 'verify') {
     if (!args[0]) throw new Error('verify requires fileId');
     return verify(args[0]);
@@ -1665,6 +1675,11 @@ async function main() {
   throw new Error(`Unknown command: ${command}`);
 }
 
+function meetingContextStore() {
+  return createMeetingContextStore({ stateDir: STATE_DIR, loadState, withStateWriteLock,
+    writeStateUnlocked, ensureEnabled: ensurePlaudSyncEnabled });
+}
+
 if (require.main === module) {
   installSignalCleanup();
   main().catch((error) => {
@@ -1691,6 +1706,7 @@ module.exports = {
     fingerprintAudio,
     loadState,
     mark,
+    meetingContextStore,
     parseTranscribeLocalArgs,
     plaudCommandClientOptions,
     isTransientClientInitializationError,

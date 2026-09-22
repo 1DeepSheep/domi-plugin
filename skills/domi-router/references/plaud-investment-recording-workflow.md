@@ -22,7 +22,7 @@
 - 只有用户明确说“同步 PLAUD 并生成文字稿”“同步全部／所有待生成录音”时，才设置 `targetScope=all_pending_sync`。
 - 只有用户明确说“恢复全部未完成录音”时，才设置 `targetScope=all_queue_resume`；全量恢复仍一次只激活一个 `fileId`，该条进入需要用户输入的暂停点或终态后才可选择下一条。`context_pending` 会暂停整个本轮，不能在等待用户回复时抢跑其他录音。
 
-采用 `domi:plaud` 运行 `queue` 后，先把精确 `activeFileId` 写入 `domi.handoff.v1`。`targetScope=single` 时只检查、恢复和更新该条，其他 queue 项即使更早、失败或可恢复也保持不变；不得在单条完成后继续发现或处理新录音。按该条阶段恢复：
+采用 `domi:plaud` 运行 `queue` 后，先把精确 `activeFileId` 写入 `domi.handoff.v1`。原生客户端已经通过本地 `context-prepare/context-submit` 绑定单条录音及背景时，复用其精确 ID／文字稿／`contextPath`，不重复发现 queue、不运行 `doctor/connection`；正式阶段开始时由程序把这些实际产物登记到完整 manifest。仅为展示回忆提示与背景卡片，不提前加载后续 Skill、执行研究或要求模型构建完整阶段计划。`targetScope=single` 时只检查、恢复和更新该条，其他 queue 项即使更早、失败或可恢复也保持不变；不得在单条完成后继续发现或处理新录音。按该条阶段恢复：
 
    - `transcript_ready`：生成回忆提示并询问上下文；
    - `context_pending`：处理用户补充或跳过，不重新生成文字稿；
@@ -54,6 +54,10 @@
 5. 每条必须取得与授权范围一致的 `fileId`、`transcriptPath` 且队列为 `transcript_ready`；范围外结果不得进入下游，出现不一致时停止并报告，不能继续处理其他录音。
 
 ## 三、回忆提示与上下文确认
+
+原生客户端优先在同一张卡片默认展示基于文字稿的有用回忆提示及背景填写区，按 [本地会议信息交接](../../plaud/references/meeting-context.md) 完成准备／提交。已传入可验证 `contextPath` 和 `contextStatus=provided|skipped` 时，读取其中用户原始回答和来源 turn，直接进入第四节；不得再次提问或要求补齐字段。`context_ready` 复用已有背景；高级／终态不得回退。此前置交接不要求先读完整 ASR、投资核验或归档规则，它们在对应正式阶段开始时完整加载。
+
+未提供客户端原生交接时，保留以下对话式流程：
 
 对每条文字稿轻量读取标题、日期、时长、开头、结尾和主题段，生成不超过 150 字的回忆提示。疑似公司或姓名只能写“文字稿疑似提到”。先标记：
 

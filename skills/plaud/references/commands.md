@@ -47,6 +47,8 @@ node <plaud-cli> mark <fileId> <stage> [artifactPath|-] [metadataJson]
 
 ## mark 示例
 
+原生客户端会议信息卡片使用纯本地 `context-prepare <fileId> <JSON|->` 与 `context-submit <fileId> <JSON|->`；重登录后的明确确认使用 `context-rebind <fileId> <JSON|->`，保留阶段与原始回答。`-` 从 stdin 读取 JSON，避免在进程参数中暴露背景原文。完整字段、CAS、幂等和上下文 artifact 合同见 [本地会议信息交接](meeting-context.md)。不要用无条件 `mark context_ready` 代替该接口。
+
 ```bash
 node <plaud-cli> mark FILE_ID notes_project /absolute/path/to/notes.md '{"notesQuality":{"evidenceIndexPath":"/absolute/path/to/evidence-index.json","qaReceiptPath":"/absolute/path/to/qa-receipt.json"},"notesAudit":{"status":"passed","evidenceLedgerComplete":true,"degreeIsolation":true,"claimConsistency":true,"careerLedgerComplete":true,"modelWorkLedgerComplete":true,"attributionConsistency":true,"educationClaimCount":3,"careerClaimCount":8,"modelWorkClaimCount":6,"unresolvedDefinitiveEducationClaims":0,"unresolvedDefinitiveCareerClaims":0,"unresolvedDefinitiveModelWorkClaims":0}}'
 node <plaud-cli> mark FILE_ID notes_non_project /absolute/path/to/notes.md '{"notesQuality":{"evidenceIndexPath":"/absolute/path/to/evidence-index.json","qaReceiptPath":"/absolute/path/to/qa-receipt.json"}}'
@@ -73,7 +75,7 @@ node <plaud-cli> mark FILE_ID failed - '{"error":"reason"}'
 
 ## 恢复规则
 
-- `transcript_ready`：先生成回忆提示并询问对话背景与参会人，不得直接调用 `asr-notes`。
+- `transcript_ready`：先展示文字稿回忆提示并确认背景；客户端卡片可程序化完成，提交后直接从 `context_ready` 进入 `asr-notes`。尚未回答不得直接调用 `asr-notes`。
 - `context_pending`：等待用户补充；用户提供具体信息或表示不知道、跳过、直接处理后，标记为 `context_ready`。
 - `context_ready`：从文字稿和已保存的上下文继续调用 `asr-notes`。
 - `notes_project`：先运行 `verify <fileId>`；通过后从纪要继续调用 `investment-review`，旧记录缺审计时先重做事实审计并重新标记 `notes_project`。

@@ -52,6 +52,8 @@ domi 不提供启动本机麦克风录音的工作流；不得调用 `mac-record
 
 多阶段任务必须使用 [程序化交接与质量工具](references/programmatic-tools.md) 的 `context → artifact → save/inspect → finalize`，不要手写哈希、凭聊天重建状态或自行拼成功回执。模型仍负责意图、实体、授权范围、证据与语义 QA；工具只执行确定性检查。
 
+PLAUD 原生会议信息卡片可在正式模型任务之前，以精确 `fileId`／文字稿哈希收集背景。已有 `contextPath` 和 `contextStatus=provided|skipped` 时直接消费原始背景，不重复提问；只为显示回忆提示不先加载 ASR、研究或归档的完整规则。正式纪要阶段仍按下方无损合同完整登记背景 artifact、读取适用 Skill 并执行全部质量门。
+
 ## 工作流选择
 
 | 用户目标 | 模式与主链路 | 按需读取 |

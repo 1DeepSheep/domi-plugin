@@ -81,10 +81,11 @@ python3 "<本 Skill 目录>/scripts/transcribe_diarized.py" \
 
 **例外**：如果文本开头已有明确的自我介绍（如"大家好我是XX公司的XXX"），且说话人信息从内容中可以完整提取，则无需额外询问。
 
-**domi Router 上下文确认例外**：若上游 `domi-router` 已完成 PLAUD 的对话上下文确认，并传入 `contextStatus=provided` 或 `contextStatus=skipped`，不要再次询问：
+**domi Router／客户端卡片上下文确认例外**：若上游 `domi-router` 或原生客户端已完成 PLAUD 的对话上下文确认，并传入 `contextStatus=provided` 或 `contextStatus=skipped`，不要再次询问。客户端提供 `contextPath` 时须读取绑定当前 `fileId`／文字稿哈希的 `domi.plaud-context.v1` 原始回答及来源 turn，不能只用提示或摘要；部分背景也算 `provided`，不为补齐字段再次追问：
 
 - `provided`：把用户补充的对话类型、目的、参会人姓名、机构和职位作为高优先级上下文，与文字稿交叉核对；有冲突时保留并标记待确认，不要静默覆盖原文。
 - `skipped`：直接执行后续阶段，从文字稿尽力识别说话人；无法确认时在参会人行标注`[说话人信息待补充]`。
+- 回忆提示中“提到／疑似提到”的名字仅为辨认录音的线索，不是已确认参会人；不得把被讨论的人物或 Speaker 标签直接映射为用户未确认的身份。已有本地文字稿不做 PLAUD `doctor/connection` 或重新下载；正式整理的全文、核验、证据与质量门完全保留。
 
 **旧版快速讨论恢复例外**：若上游恢复既有任务，并同时传入 `workflowKind=quick-discussion` 与 `outputProfile=quick_discussion`：
 
