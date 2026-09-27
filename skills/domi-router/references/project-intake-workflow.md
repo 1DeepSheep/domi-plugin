@@ -105,7 +105,7 @@
 
 - 本地主库在查重、taxonomy、评级和完整字段 payload 全部通过后，先回读目标记录，并把写前快照（新项目为 `null`）、`recordRevision`（新项目为 `0`）、`recordHash`（新项目为 `null`）和完整 payload hash 保存进 manifest。provisional `project upsert` 必须把这两个回读值原样作为 `expectedRevision` 与 `expectedRecordHash` 传入；底层会在同一个 SQLite 写事务内 fail-closed 比对。该命令会立即写 SQLite，并创建稳定 `project_id`、项目目录和 `项目主页.md`，因此本工作流把 `storagePhase` 记为 `provisional`，且只把命令回执视作 **provisional upsert**；即使命令返回 `storageReceipt.status=managed`，在文档、原始材料和最终闭环尚未验证前也不得对外报告“已入库／managed”。`update` 必须把旧记录与增量合并成完整 payload 后再 upsert，禁止稀疏 payload 把既有字段清空。
 - provisional 成功后，把回执返回的新 `recordRevision` 与 `recordHash` 原子写入 manifest，作为后续文档归档和 final upsert 的 CAS 基线。这两个值只用于内部并发控制，不得出现在面向用户的研究报告、项目文档或最终回复中。
-- 取得稳定 `project_id` 后，用 `document create` 保存研究、纪要和快评，原始材料进入同一项目的 `原始材料/`。只有用户明确要求创建／编辑飞书文档交付副本时，才另行采用 `feishu-knowledge-extension.md`，且本地归档必须先成功。
+- 取得稳定 `project_id` 后，用 `document create` 保存研究、纪要和快评，原始材料通过 `document create` 进入同一项目的 `原始材料/`，客户端附件原名 `name` 必须作为 `originalName` 传入，并保留在源 artifact 的 `originalName` 字段；真实归档文件不得沿用导入暂存的时间戳编号。只有用户明确要求创建／编辑飞书文档交付副本时，才另行采用 `feishu-knowledge-extension.md`，且本地归档必须先成功。
 - 旧飞书主库严格执行 `legacy-feishu-primary.md` 的项目顺序：Watching List／Wiki 查重 → 唯一 Wiki 文档 → 原有本地材料目录 → 回读 → 最后 Base upsert。不得调用本地 `project upsert`／`document create`。
 
 统一遵守：

@@ -322,3 +322,32 @@ test("IC structural QA checks the five sections but cannot certify their semanti
   f.write("memo.md", titles.slice(0, 4).map(title => `## ${title}\n正文\n`).join("\n"));
   assert.throws(() => icStructureCheck(file), /five canonical/);
 });
+
+test("archive finalization rejects confirmed staging prefixes but preserves numeric user originals", t => {
+  const f = fixture(t);
+  const repository = new DomiRepository({ libraryDir: path.join(f.root, "library"), databasePath: path.join(f.root, "repo.sqlite") });
+  t.after(() => repository.close());
+  const saved = repository.upsertProject({ name: "样例附件", domain: "AI", subdomains: ["AI数据"], status: "待交流" });
+  const project = repository.getProject(saved.storageReceipt.projectId);
+  const originalName = "[BP] 样例附件.pdf", storedName = `1790000000000-0-${originalName}`;
+  const source = artifact({ role: "source_material", originalName, path: f.write(storedName, "sample-original-bytes") });
+  const bad = repository.createDocument({ ownerType: "project", ownerId: project.id, sourceFile: source.path, originalName: storedName, kind: "BP" }).document;
+  const manifest = { schema: "domi.handoff.v1", workflowRunId: "archive-test", workflow: "project-intake", mode: "intake",
+    entity: { type: "project", fingerprint: "synthetic", projectId: project.id, recordRevision: project.recordRevision, recordHash: project.recordHash },
+    repository: { backend: "local" }, authorization: { sourceTurnId: "test-turn", internalWrite: true, externalWrite: false, externalTargets: [] },
+    currentStage: "archive", nextStage: null, completedStages: [],
+    stagePlan: [{ name: "archive", skill: "investment-mgmt", requiredRoles: ["source_material"], ruleBundleSha256: contextBundle({ skill: "investment-mgmt", workflow: "project-intake" }).bundleSha256 }],
+    artifacts: [source], archiveArtifacts: [artifact({ role: "source_material", path: bad.path })] };
+  const manifestPath = f.write("archive-manifest.json", manifest), receiptPath = path.join(f.root, "storage.json");
+  assert.throws(() => finalize(manifestPath, receiptPath, repository), /临时存储编号/);
+  assert.equal(fs.existsSync(receiptPath), false);
+  const clean = repository.createDocument({ ownerType: "project", ownerId: project.id, sourceFile: source.path, originalName, kind: "BP" }).document;
+  manifest.archiveArtifacts = [artifact({ role: "source_material", path: clean.path })];
+  f.write("archive-manifest.json", manifest);
+  assert.equal(finalize(manifestPath, receiptPath, repository).storageReceipt.filesVerified, true);
+  manifest.artifacts.push(artifact({ role: "source_material", originalName: storedName, path: f.write(`numeric-original/${storedName}`, "sample-original-bytes") }));
+  assert.equal(manifest.artifacts[0].sha256, manifest.artifacts[1].sha256);
+  manifest.archiveArtifacts = [artifact({ role: "source_material", path: bad.path })];
+  f.write("numeric-original-manifest.json", manifest);
+  assert.equal(finalize(path.join(f.root, "numeric-original-manifest.json"), path.join(f.root, "numeric-storage.json"), repository).storageReceipt.filesVerified, true);
+});

@@ -1443,6 +1443,8 @@ function main() {
       result = { ok: true, event: repository.getNews(flags.id || positional[2]) };
     } else if (resource === "news" && action === "upsert") {
       result = repository.upsertNews(readPayload(flags));
+    } else if (resource === "document" && action === "repair-attachment-name") {
+      result = require("./attachment-name-repair.cjs").repairAttachmentName(repository, readPayload(flags));
     } else if (resource === "document" && action === "create") {
       result = repository.createDocument(readPayload(flags));
     } else {
@@ -1461,7 +1463,7 @@ if (require.main === module) {
     fail(
       error instanceof Error ? error.message : String(error),
       error?.code || "repository_error",
-      error?.storageReceipt ? { storageReceipt: error.storageReceipt } : {}
+      { ...(error?.storageReceipt ? { storageReceipt: error.storageReceipt } : {}), ...(error?.repairJournalPath ? { repairJournalPath: error.repairJournalPath } : {}) }
     );
   }
 }

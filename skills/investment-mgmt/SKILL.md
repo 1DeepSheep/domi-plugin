@@ -190,4 +190,8 @@ node "$DOMI_REPO" industry refresh
 
 ### 已有原始附件
 
-`document create` 可用 `sourceFile` 导入明确提供的项目原件；必须有 `ownerType=project`、`ownerId`、`kind`、`title`，可选 `originalName`。原件复制到既有项目的 `原始材料/` 并登记索引，返回 `document.sha256` 与真实路径；相同内容幂等跳过，同名不同内容保留版本。不得与 `content/contentFile` 混用，不把 PDF、PPTX、XLSX 当 Markdown 文本传入。导入不会删除来源；任何来源整理均在目标哈希、索引与主页回读验证后按用户范围单独执行。
+`document create` 可用 `sourceFile` 导入明确提供的项目原件；必须有 `ownerType=project`、`ownerId`、`kind`、`title`，客户端附件 JSON 提供了 `name` 时必须原样传入 `originalName=name`，不能用 `basename(path)` 代替。原件复制到既有项目的 `原始材料/` 并登记索引，返回 `document.sha256` 与真实路径；相同内容幂等跳过，同名不同内容保留版本。不得与 `content/contentFile` 混用，不把 PDF、PPTX、XLSX 当 Markdown 文本传入。导入不会删除来源；任何来源整理均在目标哈希、索引与主页回读验证后按用户范围单独执行。
+
+**物理文件名规则**：归档后的真实文件使用用户原始文件名；旧版导入器添加的 `13 位时间戳-序号-` 仅是临时存储标识，不得带入 `原始材料/`，也不能仅隐藏显示名称。以客户端附件 `name` 为准；它即使本身带日期或数字也须保留。没有原名元数据时保留来源真实文件名；即使位于 `attachments/` 或 `原始材料/`，也不能仅凭路径和数字猜测。怀疑旧版存储编号时先从客户端附件记录或用户确认取得原名，再显式传入 `originalName`。优先使用 `document create --json-file <payload>`，禁止手工 `cp` 后漏掉命名、索引和回读检查。同名不同内容保留带内容哈希后缀的独立版本，不覆盖原件。
+
+已存在的错误归档名使用 `document repair-attachment-name --json-file <payload>`：明确 `documentId`、`expectedPath`、`expectedSha256` 和经附件元数据或用户核实的 `originalName`，默认只预览。核对计划后，以同一 payload 加 `dryRun=false`、预览返回的 `expectedPlanHash` 应用。工具同步修复文档索引、项目主页和项目内已登记 Markdown 的精确路径引用，保留业务日期与原文内容；其他资料库 Markdown 引用可通过 `references=[{path,expectedSha256}]` 明确加入。修复有私有备份与回滚日志，冲突停止，不做全库模糊改名；工作流 manifest、客户端任务历史和缓存若持有旧路径，也须另行按其并发保护规则更新并回读。
