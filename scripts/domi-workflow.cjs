@@ -8,6 +8,7 @@ const { pathToFileURL } = require("node:url");
 const { stableJson } = require("../skills/todo/scripts/todo-ledger.js");
 const { acquireProcessLock } = require("./process-lock.cjs");
 const { checkNotesFormat } = require("./notes-format.cjs");
+const { attachmentArchiveName, stripLegacyStoragePrefix } = require("./attachment-names.cjs");
 const { checkNotesCoverage, sourceRefRange, NotesCoverageError } = require("./notes-coverage.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -429,7 +430,15 @@ function finalize(manifestPath, receiptPath, repository) {
   const archived = manifest.archiveArtifacts.map(file => {
     const checked = verifyArtifact(file);
     assert(fs.realpathSync(file.path).startsWith(`${root}${path.sep}`), "Archived material is outside the canonical entity directory");
-    assert(manifest.artifacts.some(source => source.role === file.role && source.sha256 === file.sha256), "Archived material has no matching canonical artifact");
+    const sources = manifest.artifacts.filter(source => source.role === file.role && source.sha256 === file.sha256);
+    assert(sources.length > 0, "Archived material has no matching canonical artifact");
+    const originalNames = sources.filter(source => typeof source.originalName === "string" && source.originalName.length)
+      .map(source => attachmentArchiveName(source.path, { originalName: source.originalName }));
+    const archivedName = path.basename(file.path);
+    // Identical bytes may legitimately have several user-supplied filenames.
+    // An exact authoritative name wins over another source's wrapper heuristic.
+    assert(originalNames.includes(archivedName) || !originalNames.includes(stripLegacyStoragePrefix(archivedName)),
+      "归档附件仍带有已确认的 domi 临时存储编号。请通过 document create 并传入 originalName 归档，再更新 archiveArtifacts；源文件保持不变。");
     return checked;
   });
   if (canonicalDocument) assert(archived.some(file => path.resolve(file.path) === path.resolve(canonicalDocument.path)), "Canonical document is missing from verified archived artifacts");

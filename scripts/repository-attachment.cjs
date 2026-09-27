@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
+const { attachmentArchiveName } = require("./attachment-names.cjs");
 
 const digest = file => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const inside = (root, target) => {
@@ -19,8 +20,7 @@ function importProjectAttachment(repository, input) {
   }
   const source = path.resolve(String(input.sourceFile || ""));
   if (!fs.statSync(source).isFile()) throw new Error("附件来源不是普通文件。");
-  const name = String(input.originalName || path.basename(source));
-  if (!name || name === "." || name === ".." || /[\/\\\x00-\x1f]/.test(name)) throw new Error("附件文件名无效。");
+  const name = attachmentArchiveName(source, { originalName: input.originalName });
   const projectRoot = path.dirname(project.documentPath);
   const libraryRoot = fs.realpathSync(repository.libraryDir);
   if (!inside(libraryRoot, fs.realpathSync(projectRoot))) throw new Error("项目目录越过资料库边界。");
@@ -63,7 +63,8 @@ function importProjectAttachment(repository, input) {
     if (digest(target) !== sha256) throw new Error("附件回读校验失败。");
     const id = existing?.id || `doc_${crypto.createHash("sha256").update(`project:${project.id}:${target}`).digest("hex").slice(0, 16)}`;
     const kind = String(input.kind || "原始材料");
-    const title = String(input.title || name);
+    const suppliedTitle = String(input.title || "");
+    const title = !suppliedTitle || suppliedTitle === path.basename(source) ? name : suppliedTitle;
     if (!existing) repository.database.prepare(
       "INSERT INTO documents (id,owner_type,owner_id,kind,title,path,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)"
     ).run(id, "project", project.id, kind, title, target, Date.now(), Date.now());
