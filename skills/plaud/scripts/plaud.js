@@ -13,6 +13,7 @@ const {
   PlaudClient,
   SIGNAL_SHUTDOWN_BUDGET_MS,
   configuredBrowserKind,
+  diagnosticApiRoute,
   managedProfilePath,
   mediaExecutable,
   removeManagedProfile,
@@ -348,9 +349,36 @@ function doctor(requestedBrowser) {
 }
 
 function isTransientClientInitializationError(error) {
-  if (error?.code === 'PLAUD_BROWSER_UNAVAILABLE') return true;
+  if (['PLAUD_BROWSER_UNAVAILABLE', 'PLAUD_READ_TRANSIENT'].includes(error?.code)) return true;
   return /PLAUD_NETWORK_TIMEOUT|PLAUD_SESSION_PROBE_INCOMPLETE|page\.(?:goto|reload)|connectOverCDP|WebSocket error|Protocol error.*(?:Page|Target)|Not attached to an active page|Target page, context or browser has been closed|Execution context was destroyed|ECONNREFUSED|ECONNRESET|ERR_CONNECTION_(?:CLOSED|RESET|REFUSED)|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|socket hang up/i
     .test(error instanceof Error ? error.message : String(error));
+}
+
+function safeTransportDetails(error) {
+  const errorStage = ['browser-lock', 'browser-start', 'page-navigation', 'recording-authorization']
+    .includes(error?.errorStage) ? error.errorStage : null;
+  const networkErrorCode = typeof error?.networkErrorCode === 'string'
+    && /^ERR_[A-Z0-9_]{1,64}$/.test(error.networkErrorCode) ? error.networkErrorCode : null;
+  const sessionProbe = {};
+  for (const key of ['apiRequests', 'recordingRequests', 'recordingResponses']) {
+    if (Number.isSafeInteger(error?.sessionProbe?.[key]) && error.sessionProbe[key] >= 0) sessionProbe[key] = error.sessionProbe[key];
+  }
+  if (Number.isInteger(error?.sessionProbe?.httpStatus) && error.sessionProbe.httpStatus >= 100
+    && error.sessionProbe.httpStatus <= 599) sessionProbe.httpStatus = error.sessionProbe.httpStatus;
+  if (Number.isSafeInteger(error?.sessionProbe?.apiStatus)) sessionProbe.apiStatus = error.sessionProbe.apiStatus;
+  if (Array.isArray(error?.sessionProbe?.routes) && error.sessionProbe.routes.length) {
+    sessionProbe.routes = error.sessionProbe.routes.slice(0, 8).flatMap(entry => {
+      if (!['GET', 'POST', 'HEAD', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'OTHER'].includes(entry?.method)
+        || typeof entry?.route !== 'string' || !/^\/(?:[a-z0-9]+|\[other\])(?:\/(?:[a-z0-9]+|\[other\])){0,4}$/.test(entry.route)) return [];
+      return [{ method: entry.method, route: diagnosticApiRoute(`https://web.plaud.ai${entry.route}`),
+        ...(Number.isSafeInteger(entry.requests) && entry.requests >= 0 ? { requests: entry.requests } : {}),
+        ...(Number.isInteger(entry.httpStatus) && entry.httpStatus >= 100 && entry.httpStatus <= 599 ? { httpStatus: entry.httpStatus } : {}),
+        ...(Number.isSafeInteger(entry.apiStatus) ? { apiStatus: entry.apiStatus } : {}),
+        ...(typeof entry.networkErrorCode === 'string' && /^ERR_[A-Z0-9_]{1,64}$/.test(entry.networkErrorCode) ? { networkErrorCode: entry.networkErrorCode } : {}) }];
+    });
+  }
+  return { ...(errorStage ? { errorStage } : {}), ...(networkErrorCode ? { networkErrorCode } : {}),
+    ...(Object.keys(sessionProbe).length ? { sessionProbe } : {}) };
 }
 
 async function withClient(callback, options = {}) {
@@ -789,11 +817,16 @@ async function syncPending(count, outDir, timeoutSec, pollSec, options = {}) {
     const transient = isTransientClientInitializationError(error) || isTransientTranscriptRead(error);
     const errorCode = syncErrorCode(error, transient ? 'PLAUD_BROWSER_UNAVAILABLE' : 'PLAUD_INITIALIZATION_FAILED');
     const retryable = transient || errorCode === 'PLAUD_RATE_LIMITED';
+    const transportDetails = safeTransportDetails(error);
     const discovery = { complete: false, errorCode, retryable, error: safeErrorMessage(error),
+      ...transportDetails,
       ...(Number.isFinite(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {}) };
     result = { requested: count, found: 0, submitted: 0, results: [], discovery,
       ok: false, status: 'failed', submissionStarted: false, error: discovery.error,
       errorCode, errorStage: 'initialization', retryable,
+      ...(transportDetails.errorStage ? { initializationStage: transportDetails.errorStage } : {}),
+      ...(transportDetails.networkErrorCode ? { networkErrorCode: transportDetails.networkErrorCode } : {}),
+      ...(transportDetails.sessionProbe ? { sessionProbe: transportDetails.sessionProbe } : {}),
       ...(Number.isFinite(discovery.retryAfterMs) ? { retryAfterMs: discovery.retryAfterMs } : {}) };
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1684,6 +1717,7 @@ if (require.main === module) {
   installSignalCleanup();
   main().catch((error) => {
     printJson({ ok: false, error: safeErrorMessage(error),
+      ...safeTransportDetails(error),
       ...(typeof error?.code === 'string' && /^PLAUD_[A-Z_]+$/.test(error.code) ? { errorCode: error.code, code: error.code } : {}),
       ...(Number.isInteger(error?.httpStatus) ? { httpStatus: error.httpStatus, status: error.httpStatus } : {}),
       ...(Number.isSafeInteger(error?.apiStatus) ? { apiStatus: error.apiStatus } : {}),
@@ -1711,6 +1745,7 @@ module.exports = {
     plaudCommandClientOptions,
     isTransientClientInitializationError,
     safeErrorMessage,
+    safeTransportDetails,
     sha256File,
     transcribeLocal,
     updateRecord,

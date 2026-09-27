@@ -808,6 +808,78 @@ test('PLAUD recognizes an explicit login page without exposing page contents', a
   assert.equal(await pageShowsPlaudLogin({ evaluate: async () => { throw new Error('closed'); } }), false);
 });
 
+test('an explicit PLAUD login route remains recognizable after the probe deadline is exhausted', async () => {
+  let evaluated = 0;
+  const page = { url: () => 'https://web.plaud.ai/login?redirect=fixture',
+    evaluate: async () => { evaluated++; return new Promise(() => {}); }, isClosed: () => false };
+  assert.equal(await pageShowsPlaudLogin(page, { deadlineAt: Date.now() - 1, timeoutMs: 1 }), true);
+  const client = { headless: true, loginTimeoutMs: 1000, browserLabel: 'Fixture browser', page };
+  let clock = 0;
+  await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+    pause: async ms => { clock += ms; } }), error => error.code === 'PLAUD_AUTH_REQUIRED' && error.retryable === false);
+  assert.equal(clock, 1000);
+  assert.equal(evaluated, 0);
+  assert.equal(__test.isTransientClientInitializationError({ code: 'PLAUD_AUTH_REQUIRED', message: 'PLAUD_AUTH_REQUIRED' }), false);
+  assert.equal(await pageShowsPlaudLogin({ url: () => 'https://web.plaud.ai.untrusted.invalid/login', evaluate: async () => false }), false);
+});
+
+test('final local login inspection has time for DOM replies after the native auth budget ends', async () => {
+  for (const loginVisible of [true, false]) {
+    let clock = 0, inspected = 0;
+    const client = { headless: true, loginTimeoutMs: 1000, browserLabel: 'Fixture browser',
+      page: { url: () => 'https://web.plaud.ai/', isClosed: () => false,
+        evaluate: async () => {
+          inspected++;
+          assert.equal(clock, 1000, 'a local diagnostic must not cut the native renewal budget short');
+          await new Promise(resolve => setTimeout(resolve, 30));
+          return loginVisible;
+        },
+        reload: async () => { throw new Error('the exhausted auth budget must not start another remote navigation'); },
+      } };
+    await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+      pause: async ms => { clock += ms; } }), error => error.code ===
+        (loginVisible ? 'PLAUD_AUTH_REQUIRED' : 'PLAUD_SESSION_PROBE_INCOMPLETE'));
+    assert.equal(inspected, 1);
+    assert.equal(clock, 1000);
+  }
+  let clock = 0;
+  const ready = { headless: true, loginTimeoutMs: 1000, browserLabel: 'Fixture browser',
+    page: { isClosed: () => false, evaluate: async () => { throw new Error('proven native readiness must win before inspecting login DOM'); } } };
+  assert.equal(await waitForPlaudAuthorization(ready, { now: () => clock,
+    pause: async ms => { clock += ms; markRecordingAuthorization(ready, 'fixture'); } }), true);
+  assert.equal(clock, 500);
+});
+
+test('final login inspection preserves hard deadlines and newer native recording proof', async () => {
+  for (const deadlineSource of ['client', 'option']) {
+    for (const loginRoute of [false, true]) {
+      let clock = 0, inspected = 0;
+      const client = { headless: true, loginTimeoutMs: 30000, browserLabel: 'Fixture browser',
+        ...(deadlineSource === 'client' ? { operationDeadlineAt: 1000 } : {}),
+        page: { url: () => loginRoute ? 'https://web.plaud.ai/login' : 'https://web.plaud.ai/',
+          isClosed: () => false, evaluate: async () => { inspected++; return true; } } };
+      await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+        ...(deadlineSource === 'option' ? { deadlineAt: 1000 } : {}),
+        pause: async ms => { clock += ms; } }), error => error.code ===
+          (loginRoute ? 'PLAUD_AUTH_REQUIRED' : 'PLAUD_SESSION_PROBE_INCOMPLETE'));
+      assert.equal(clock, 1000);
+      assert.equal(inspected, 0, 'an exhausted hard deadline must not start a DOM round-trip');
+    }
+  }
+  let clock = 0, inspected = 0;
+  const client = { headless: true, loginTimeoutMs: 1000, browserLabel: 'Fixture browser' };
+  client.page = { url: () => 'https://web.plaud.ai/', isClosed: () => false, evaluate: async () => {
+    inspected++;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    markRecordingAuthorization(client, 'fixture');
+    return true;
+  } };
+  assert.equal(await waitForPlaudAuthorization(client, { now: () => clock,
+    pause: async ms => { clock += ms; } }), true);
+  assert.equal(clock, 1000);
+  assert.equal(inspected, 1);
+});
+
 test('PLAUD lets an eight-second cold session finish within the full authorization budget', async () => {
   let clock = 0;
   let navigationStartedAt = 0;
@@ -1987,7 +2059,10 @@ test('recording readiness ignores generic credentials, rejected responses and ex
   }
   client.page.evaluate = async () => true;
   clock = 0;
-  client.operationDeadlineAt = 1000;
+  // This branch tests login classification after a soft auth wait. An expired
+  // hard operation deadline correctly prevents a new DOM round-trip entirely.
+  client.operationDeadlineAt = null;
+  client.loginTimeoutMs = 1000;
   await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
     pause: async ms => { clock += ms; } }), error => error.code === 'PLAUD_AUTH_REQUIRED');
 });
@@ -2082,6 +2157,139 @@ test('native recording access refusals keep their precise code and service coold
       assert.equal(requests, 0);
     }
   }
+});
+
+test('native recording transport failures retain only their machine code and allow startup recovery', async () => {
+  for (const networkErrorCode of ['ERR_CONNECTION_REFUSED', 'ERR_PROXY_CONNECTION_FAILED', 'ERR_TIMED_OUT']) {
+    const client = recordingClient();
+    const request = recordingRequest();
+    request.failure = () => ({ errorText: `net::${networkErrorCode} https://private.invalid/?token=fixture-secret` });
+    client.observeRecordingRequest(request);
+    client.observeRecordingRequestFailure(request);
+    const error = client.recordingAuthorizationError;
+    assert.equal(error.code, networkErrorCode === 'ERR_TIMED_OUT' ? 'PLAUD_NETWORK_TIMEOUT' : 'PLAUD_READ_TRANSIENT');
+    assert.equal(error.errorStage, 'recording-authorization');
+    assert.equal(error.networkErrorCode, networkErrorCode);
+    assert.equal(__test.isTransientClientInitializationError(error), true);
+    assert.doesNotMatch(error.message, /private.invalid|fixture-secret/);
+    await assert.rejects(waitForPlaudAuthorization(client), candidate => candidate === error);
+    const recovered = recordingRequest({ authorization: 'renewed' });
+    client.observeRecordingRequest(recovered);
+    assert.equal(client.recordingAuthorizationError, null);
+    await client.observeRecordingResponse(recordingResponse(recovered));
+    assert.equal(client.recordingAuthorizationReady, true);
+  }
+});
+
+test('canceled, stale and self-issued requests cannot reject native recording readiness', async () => {
+  for (const scenario of ['canceled', 'older', 'epoch', 'self-issued']) {
+    const client = recordingClient();
+    const request = recordingRequest(scenario === 'self-issued' ? { 'x-request-id': `${client.apiRequestPrefix}fixture` } : {});
+    request.failure = () => ({ errorText: scenario === 'canceled' ? 'net::ERR_ABORTED' : 'net::ERR_CONNECTION_RESET' });
+    client.observeRecordingRequest(request);
+    if (scenario === 'older') client.observeRecordingRequest(recordingRequest());
+    if (scenario === 'epoch') client.recordingCredentialEpoch++;
+    client.observeRecordingRequestFailure(request);
+    assert.equal(client.recordingAuthorizationError, null);
+    assert.equal(client.recordingAuthorizationReady, false);
+  }
+});
+
+test('native recording service failures fail promptly but older failures cannot supersede a renewal', async () => {
+  const client = recordingClient();
+  const failed = recordingRequest();
+  client.observeRecordingRequest(failed);
+  await client.observeRecordingResponse(recordingResponse(failed, { msg: 'fixture-private-body' }, 503));
+  await assert.rejects(waitForPlaudAuthorization(client), error => error.code === 'PLAUD_READ_TRANSIENT'
+    && error.httpStatus === 503 && error.errorStage === 'recording-authorization'
+    && !error.message.includes('fixture-private-body'));
+  const older = recordingRequest();
+  const latest = recordingRequest();
+  client.observeRecordingRequest(older);
+  client.observeRecordingRequest(latest);
+  await client.observeRecordingResponse(recordingResponse(older, {}, 502));
+  assert.equal(client.recordingAuthorizationError, null);
+  await client.observeRecordingResponse(recordingResponse(latest));
+  assert.equal(client.recordingAuthorizationReady, true);
+});
+
+test('an older native access refusal cannot reject a newer native recording renewal', async () => {
+  const client = recordingClient();
+  const older = recordingRequest();
+  const current = recordingRequest();
+  client.observeRecordingRequest(older);
+  client.observeRecordingRequest(current);
+  await client.observeRecordingResponse(recordingResponse(older, {}, 403));
+  assert.equal(client.recordingAuthorizationError, null);
+  await client.observeRecordingResponse(recordingResponse(current));
+  assert.equal(client.recordingAuthorizationReady, true);
+});
+
+test('initialization reports its original cause before browser cleanup can block or throw', async () => {
+  let releaseCleanup, notified;
+  const cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+  const notification = new Promise(resolve => { notified = resolve; });
+  const originalError = new Error('Synthetic navigation error');
+  const context = new EventEmitter();
+  const page = { isClosed: () => false, goto: async () => { throw originalError; } };
+  context.pages = () => [page];
+  context.close = async () => cleanup;
+  const client = new PlaudClient({ browserKind: 'chrome', profileDir: path.join(sandbox, 'diagnostic-before-cleanup-fixture'),
+    launchBrowser: async () => ({ context }), terminateBrowser: async () => {},
+    onInitializationError: error => { notified(error); throw new Error('Synthetic diagnostic failure'); } });
+  let finished = false;
+  const initialized = client.init().finally(() => { finished = true; });
+  try {
+    const error = await notification;
+    assert.equal(error, originalError);
+    assert.equal(error.errorStage, 'page-navigation');
+    assert.equal(finished, false);
+    releaseCleanup();
+    await assert.rejects(initialized, candidate => candidate === originalError);
+  } finally { releaseCleanup(); await initialized.catch(() => {}); }
+});
+
+test('initialization retains safe navigation diagnostics after exact-profile cleanup', async () => {
+  const context = new EventEmitter();
+  const page = { isClosed: () => false, goto: async () => { throw new Error('page.goto: net::ERR_PROXY_CONNECTION_FAILED at https://private.invalid/?token=fixture-secret'); } };
+  context.pages = () => [page];
+  context.close = async () => {};
+  let closed = 0;
+  const client = new PlaudClient({ browserKind: 'chrome', profileDir: path.join(sandbox, 'navigation-failure-fixture'),
+    launchBrowser: async () => ({ context }), terminateBrowser: async () => { closed++; },
+    operationDeadlineAt: Date.now() + 3000 });
+  await assert.rejects(client.init(), error => {
+    assert.deepEqual(__test.safeTransportDetails(error), { errorStage: 'page-navigation', networkErrorCode: 'ERR_PROXY_CONNECTION_FAILED',
+      sessionProbe: { apiRequests: 0, recordingRequests: 0, recordingResponses: 0 } });
+    return true;
+  });
+  assert.equal(closed, 1);
+  assert.equal(fs.existsSync(managedSessionLockPath(client.profileDir)), false);
+  assert.deepEqual(__test.safeTransportDetails({ errorStage: 'https://private.invalid', networkErrorCode: 'ERR_FAILED cookie=fixture-secret' }), {});
+  assert.deepEqual(__test.safeTransportDetails({ sessionProbe: { apiRequests: 3, recordingRequests: 1,
+    recordingResponses: 1, httpStatus: 200, apiStatus: -3901, authorization: 'fixture', url: 'https://private.invalid' } }),
+  { sessionProbe: { apiRequests: 3, recordingRequests: 1, recordingResponses: 1, httpStatus: 200, apiStatus: -3901 } });
+});
+
+test('bootstrap API diagnostics expose bounded route families, never identifiers or query credentials', async () => {
+  const client = recordingClient();
+  const request = recordingRequest({}, '/user/me?token=fixture-secret');
+  client.observeRecordingRequest(request);
+  await client.observeRecordingResponse(recordingResponse(request, {}, 401));
+  const failure = recordingRequest({}, '/auth/refresh/private-user-123?secret=fixture-secret');
+  failure.failure = () => ({ errorText: 'net::ERR_CONNECTION_RESET https://private.invalid/fixture-secret' });
+  client.observeRecordingRequest(failure);
+  client.observeRecordingRequestFailure(failure);
+  const details = __test.safeTransportDetails({ sessionProbe: client.sessionProbe });
+  assert.deepEqual(details.sessionProbe.routes, [
+    { method: 'GET', route: '/user/me', requests: 1, httpStatus: 401 },
+    { method: 'GET', route: '/auth/refresh/[other]', requests: 1, networkErrorCode: 'ERR_CONNECTION_RESET' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(details), /private-user|fixture-secret|private.invalid|authorization/);
+  assert.equal(client.recordingAuthorizationError, null);
+  assert.equal(client.recordingAuthorizationReady, false);
+  const untrusted = __test.safeTransportDetails({ sessionProbe: { routes: [{ method: 'GET', route: '/user/secret123', cookie: 'fixture' }] } });
+  assert.deepEqual(untrusted.sessionProbe.routes, [{ method: 'GET', route: '/user/[other]' }]);
 });
 
 test('concurrent token-context failures share a native refresh and incomplete renewal never replays the read', async () => {
@@ -2356,6 +2564,20 @@ test('only failures before the sync callback prove that no generation was submit
     throw afterCallbackError;
   } }), error => error === afterCallbackError && error.submissionStarted === undefined);
   assert.equal(posts, 1);
+});
+
+test('sync retains safe startup phase diagnostics without claiming any generation was submitted', async () => {
+  resetSyncRecords();
+  const result = await runSync({}, { withClientImpl: async () => {
+    throw Object.assign(new Error('Fixture network failure'), { code: 'PLAUD_READ_TRANSIENT',
+      errorStage: 'recording-authorization', networkErrorCode: 'ERR_CONNECTION_RESET' });
+  } });
+  assert.equal(result.errorStage, 'initialization');
+  assert.equal(result.initializationStage, 'recording-authorization');
+  assert.equal(result.networkErrorCode, 'ERR_CONNECTION_RESET');
+  assert.equal(result.discovery.errorStage, 'recording-authorization');
+  assert.equal(result.submissionStarted, false);
+  assert.equal(result.submitted, 0);
 });
 
 test('sync records a durable claim before POST, retries transient reads, and reuses the exact artifact', async () => {

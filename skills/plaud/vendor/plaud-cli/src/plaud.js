@@ -36,6 +36,19 @@ const CAPTURED_HEADER_KEYS = [
   'edit-from',
 ];
 const API_HOST_RE = /^api(?:[-.][a-z0-9-]+)?\.plaud\.ai$/i;
+const API_DIAGNOSTIC_ROUTE_SEGMENTS = new Set([
+  'api', 'v1', 'v2', 'v3', 'v4', 'auth', 'account', 'user', 'users', 'file', 'files', 'ai',
+  'web', 'simple', 'list', 'me', 'info', 'profile', 'settings', 'login', 'token', 'refresh',
+  'session', 'status', 'sync', 'page', 'permission', 'workspace', 'workspaces', 'team',
+  'folder', 'folders', 'member', 'subscription', 'plan', 'detail', 'get', 'config',
+]);
+
+function diagnosticApiRoute(rawUrl) {
+  try {
+    return '/' + new URL(rawUrl).pathname.split('/').filter(Boolean).slice(0, 5)
+      .map(segment => API_DIAGNOSTIC_ROUTE_SEGMENTS.has(segment) ? segment : '[other]').join('/');
+  } catch { return '/[other]'; }
+}
 const DIRECT_OPUS_EXTS = new Set(['.asr', '.opus']);
 const TRANSCODABLE_EXTS = new Set([
   '.aac',
@@ -1008,6 +1021,12 @@ function requestTimeoutError(timeoutMs) {
   return plaudError('PLAUD_NETWORK_TIMEOUT', `PLAUD 接口读取超时（${Math.max(1, Math.ceil(timeoutMs / 1000))} 秒）。`, { retryable: true });
 }
 
+function chromiumNetworkErrorCode(error) {
+  // Preserve only Chromium's machine code, never its URL or other request data.
+  const message = typeof error === 'string' ? error : String(error?.message || '');
+  return message.match(/\b(?:net::)?(ERR_[A-Z0-9_]{1,64})\b/)?.[1] || '';
+}
+
 function boundedDeadline(client, options = {}, fallbackMs = 30000, now = Date.now) {
   const timeoutMs = Math.max(1, Number(options.timeoutMs) || fallbackMs);
   return Math.min(now() + timeoutMs, Number(options.deadlineAt) || Infinity,
@@ -1057,6 +1076,14 @@ function retryAfterMilliseconds(value) {
 }
 
 async function pageShowsPlaudLogin(page, options = {}) {
+  // Playwright keeps the last committed URL locally. At the end of an auth
+  // budget, an evaluate() round-trip may have only 1 ms left and incorrectly
+  // turn a visible /login page into a generic network/probe failure.
+  try {
+    const current = new URL(page.url?.() || '');
+    if (current.origin === PLAUD_LOGIN_URL
+      && /\/(?:login|sign-in|signin)(?:\/|$)/i.test(current.pathname)) return true;
+  } catch {}
   try {
     return Boolean(await beforeDeadline(() => page.evaluate(() => {
       const pathname = String(window.location?.pathname || '').toLowerCase();
@@ -1082,8 +1109,9 @@ async function waitForPlaudAuthorization(client, options = {}) {
   );
   const now = options.now || Date.now;
   const pauseImpl = options.pause || pause;
-  const totalDeadline = Math.min(now() + totalTimeoutMs, Number(options.deadlineAt) || Infinity,
+  const hardDeadline = Math.min(Number(options.deadlineAt) || Infinity,
     Number(client.operationDeadlineAt) || Infinity);
+  const totalDeadline = Math.min(now() + totalTimeoutMs, hardDeadline);
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     // A cold PLAUD page may need more than half of the authorization budget.
@@ -1099,7 +1127,19 @@ async function waitForPlaudAuthorization(client, options = {}) {
     }
     if (client.recordingAuthorizationError) throw client.recordingAuthorizationError;
     if (client.authorization && client.recordingAuthorizationReady && now() < totalDeadline) return true;
-    if (await pageShowsPlaudLogin(client.page, { timeoutMs: Math.max(1, Math.min(1000, totalDeadline - now())) })) {
+    // The soft auth wait must not starve the final local DOM classification.
+    // Give its CDP round-trip up to a second, while preserving a caller's hard
+    // operation deadline. At zero remaining time only the cached URL fast path
+    // can classify login; no new IPC or remote request is started.
+    const inspectionMs = Math.max(0, Math.min(1000, hardDeadline - now()));
+    const loginShown = await pageShowsPlaudLogin(client.page, {
+      timeoutMs: 1000, deadlineAt: Date.now() + inspectionMs,
+    });
+    if (client.recordingAuthorizationError) throw client.recordingAuthorizationError;
+    // A valid native response may finish while the local snapshot is pending.
+    // That proof wins over a stale login snapshot, within the hard deadline.
+    if (client.authorization && client.recordingAuthorizationReady && now() < hardDeadline) return true;
+    if (loginShown) {
       throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD account sign-in is required in ${client.browserLabel}.`, { retryable: false });
     }
     if (attempt + 1 < attempts && now() < totalDeadline) {
@@ -1145,6 +1185,8 @@ class PlaudClient {
     this.recordingRequestSequence = 0;
     this.acceptedRecordingRequestSequence = 0;
     this.recordingRequests = new WeakMap();
+    this.sessionProbe = { apiRequests: 0, recordingRequests: 0, recordingResponses: 0, routes: [] };
+    this.nativeApiDiagnosticRequests = new WeakMap();
     this.apiRequestPrefix = crypto.randomBytes(8).toString('hex');
     this.context = null;
     this.browser = null;
@@ -1152,6 +1194,7 @@ class PlaudClient {
     this.page = null;
     this.sessionLock = null;
     this.closePromise = null;
+    this.onInitializationError = typeof options.onInitializationError === 'function' ? options.onInitializationError : null;
     this.apiBase = options.apiBase || API_BASE;
     this.authorization = null;
     this.headers = {};
@@ -1168,57 +1211,110 @@ class PlaudClient {
   }
 
   async init() {
+    let errorStage = 'browser-lock';
     try {
       const deadlineAt = Number(this.operationDeadlineAt) || Infinity;
       assertBeforeDeadline(deadlineAt);
       this.sessionLock = await acquireManagedSessionLock(this.profileDir, { timeoutMs: Math.max(1, Math.min(30000, deadlineAt - Date.now())) });
       assertBeforeDeadline(deadlineAt);
+      errorStage = 'browser-start';
       const launched = await this.launchBrowser(this.profileDir, { deadlineAt });
       this.browser = launched.browser;
       this.context = launched.context;
       this.browserProcess = launched.process || null;
       assertBeforeDeadline(deadlineAt);
       this.context.on('request', (req) => this.observeRecordingRequest(req));
+      this.context.on('requestfailed', (req) => this.observeRecordingRequestFailure(req));
       this.context.on('response', (response) => {
         // Event listeners must not surface response bodies or unhandled failures.
         this.observeRecordingResponse(response).catch(() => {});
       });
       const compacted = await beforeDeadline(() => compactManagedPages(this.context), deadlineAt);
       this.page = compacted.page;
+      errorStage = 'page-navigation';
       await navigatePlaudWithRetry(this.page, PLAUD_LOGIN_URL, {
         attempts: this.headless ? 2 : 3,
         timeout: this.headless ? 15000 : 30000,
         deadlineAt,
       });
+      errorStage = 'recording-authorization';
       await waitForPlaudAuthorization(this, { deadlineAt });
       assertBeforeDeadline(deadlineAt);
       return this;
     } catch (error) {
+      if (!error.errorStage) error.errorStage = errorStage;
+      const networkErrorCode = chromiumNetworkErrorCode(error);
+      if (networkErrorCode && !error.networkErrorCode) error.networkErrorCode = networkErrorCode;
+      error.sessionProbe = { ...this.sessionProbe };
+      // The parent must receive the cause before a slow graceful browser exit
+      // consumes its own command timeout. Diagnostics cannot delay cleanup.
+      try { this.onInitializationError?.(error); } catch {}
       await this.close();
       throw error;
     }
   }
 
   observeRecordingRequest(request) {
-    if (!isPlaudApiUrl(request.url()) || request.method() !== 'GET'
-      || new URL(request.url()).pathname !== '/file/simple/web') return;
+    if (!isPlaudApiUrl(request.url())) return;
     const headers = request.headers();
     // Our own fetches must never establish their own authentication readiness.
-    if (!headers.authorization || (this.apiRequestPrefix
-      && String(headers['x-request-id'] || '').startsWith(this.apiRequestPrefix))) return;
+    if (this.apiRequestPrefix && String(headers['x-request-id'] || '').startsWith(this.apiRequestPrefix)) return;
+    this.sessionProbe.apiRequests += 1;
+    const method = ['GET', 'POST', 'HEAD', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'].includes(request.method()) ? request.method() : 'OTHER';
+    const route = diagnosticApiRoute(request.url());
+    let diagnostic = this.sessionProbe.routes.find(entry => entry.method === method && entry.route === route);
+    if (!diagnostic && this.sessionProbe.routes.length < 8) {
+      diagnostic = { method, route, requests: 0 };
+      this.sessionProbe.routes.push(diagnostic);
+    }
+    if (diagnostic) {
+      diagnostic.requests += 1;
+      this.nativeApiDiagnosticRequests.set(request, diagnostic);
+    }
+    if (request.method() !== 'GET' || new URL(request.url()).pathname !== '/file/simple/web') return;
+    this.sessionProbe.recordingRequests += 1;
+    if (!headers.authorization) return;
     const snapshot = { authorization: headers.authorization };
     for (const key of CAPTURED_HEADER_KEYS) {
       if (headers[key]) snapshot[key] = headers[key];
     }
     this.recordingRequests.set(request, { headers: snapshot, origin: plaudApiOrigin(request.url()),
       epoch: this.recordingCredentialEpoch, sequence: ++this.recordingRequestSequence });
+    if (this.recordingAuthorizationError?.code === 'PLAUD_READ_TRANSIENT'
+      || this.recordingAuthorizationError?.code === 'PLAUD_NETWORK_TIMEOUT') {
+      this.recordingAuthorizationError = null;
+    }
+  }
+
+  observeRecordingRequestFailure(request) {
+    const diagnostic = this.nativeApiDiagnosticRequests.get(request);
+    this.nativeApiDiagnosticRequests.delete(request);
+    const networkErrorCode = chromiumNetworkErrorCode(request.failure?.()?.errorText);
+    if (diagnostic && networkErrorCode) diagnostic.networkErrorCode = networkErrorCode;
+    const candidate = this.recordingRequests.get(request);
+    this.recordingRequests.delete(request);
+    if (!candidate || this.closePromise || candidate.epoch !== this.recordingCredentialEpoch
+      || candidate.sequence < this.recordingRequestSequence) return;
+    // Page renewal cancels old requests. A cancellation cannot prove a network
+    // outage, and an older failure cannot reject a newer native login renewal.
+    if (!networkErrorCode || networkErrorCode === 'ERR_ABORTED') return;
+    this.recordingAuthorizationError = plaudError(
+      /TIMED_OUT|TIMEOUT/.test(networkErrorCode) ? 'PLAUD_NETWORK_TIMEOUT' : 'PLAUD_READ_TRANSIENT',
+      `PLAUD 录音列表请求未完成（${networkErrorCode}）；将保留登录并重试读取。`,
+      { retryable: true, networkErrorCode, errorStage: 'recording-authorization' },
+    );
   }
 
   async observeRecordingResponse(response) {
     const request = response.request();
+    const diagnostic = this.nativeApiDiagnosticRequests.get(request);
+    this.nativeApiDiagnosticRequests.delete(request);
+    if (diagnostic) diagnostic.httpStatus = response.status();
     const candidate = this.recordingRequests.get(request);
     this.recordingRequests.delete(request);
     if (!candidate || this.closePromise || candidate.epoch !== this.recordingCredentialEpoch) return;
+    this.sessionProbe.recordingResponses += 1;
+    this.sessionProbe.httpStatus = response.status();
     if (response.status() === 429) {
       const retryAfterMs = retryAfterMilliseconds(response.headers()['retry-after']) ?? 30000;
       this.apiCooldownUntil = Math.max(Number(this.apiCooldownUntil) || 0, Date.now() + retryAfterMs);
@@ -1230,7 +1326,15 @@ class PlaudClient {
     // Service cooldown applies to every request in this session, including an
     // older in-flight request that completes after a newer credential succeeds.
     if (candidate.sequence < this.acceptedRecordingRequestSequence) return;
+    if (response.status() >= 500 && response.status() <= 599) {
+      if (candidate.sequence < this.recordingRequestSequence) return;
+      this.recordingAuthorizationError = plaudError('PLAUD_READ_TRANSIENT',
+        `PLAUD 录音列表服务暂时不可用（HTTP ${response.status()}）。`,
+        { retryable: true, httpStatus: response.status(), status: response.status(), errorStage: 'recording-authorization' });
+      return;
+    }
     if (response.status() === 403) {
+      if (candidate.sequence < this.recordingRequestSequence) return;
       this.recordingAuthorizationError = plaudError('PLAUD_ACCESS_DENIED',
         'PLAUD 暂时拒绝了本次访问；这不代表登录已失效。', { httpStatus: 403, status: 403, retryable: false });
       return;
@@ -1238,6 +1342,8 @@ class PlaudClient {
     if (response.status() !== 200) return;
     const deadlineAt = boundedDeadline(this, {}, this.apiTimeoutMs || 15000);
     const body = await beforeDeadline(() => response.json(), deadlineAt);
+    if (Number.isSafeInteger(body?.status)) this.sessionProbe.apiStatus = body.status;
+    if (diagnostic && Number.isSafeInteger(body?.status)) diagnostic.apiStatus = body.status;
     if (body?.status !== 0 || !Array.isArray(body.data_file_list)
       || this.closePromise || candidate.epoch !== this.recordingCredentialEpoch
       || candidate.sequence < this.acceptedRecordingRequestSequence) return;
@@ -2000,6 +2106,7 @@ module.exports = {
   compactManagedPages,
   connectToDevToolsWithRetry,
   configuredBrowserKind,
+  diagnosticApiRoute,
   fmtMs,
   isTransientPlaudNavigationError,
   launchBackgroundTabbit,
