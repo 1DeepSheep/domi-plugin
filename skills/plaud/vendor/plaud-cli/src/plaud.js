@@ -1109,8 +1109,9 @@ async function waitForPlaudAuthorization(client, options = {}) {
   );
   const now = options.now || Date.now;
   const pauseImpl = options.pause || pause;
-  const totalDeadline = Math.min(now() + totalTimeoutMs, Number(options.deadlineAt) || Infinity,
+  const hardDeadline = Math.min(Number(options.deadlineAt) || Infinity,
     Number(client.operationDeadlineAt) || Infinity);
+  const totalDeadline = Math.min(now() + totalTimeoutMs, hardDeadline);
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     // A cold PLAUD page may need more than half of the authorization budget.
@@ -1126,7 +1127,19 @@ async function waitForPlaudAuthorization(client, options = {}) {
     }
     if (client.recordingAuthorizationError) throw client.recordingAuthorizationError;
     if (client.authorization && client.recordingAuthorizationReady && now() < totalDeadline) return true;
-    if (await pageShowsPlaudLogin(client.page, { timeoutMs: Math.max(1, Math.min(1000, totalDeadline - now())) })) {
+    // The soft auth wait must not starve the final local DOM classification.
+    // Give its CDP round-trip up to a second, while preserving a caller's hard
+    // operation deadline. At zero remaining time only the cached URL fast path
+    // can classify login; no new IPC or remote request is started.
+    const inspectionMs = Math.max(0, Math.min(1000, hardDeadline - now()));
+    const loginShown = await pageShowsPlaudLogin(client.page, {
+      timeoutMs: 1000, deadlineAt: Date.now() + inspectionMs,
+    });
+    if (client.recordingAuthorizationError) throw client.recordingAuthorizationError;
+    // A valid native response may finish while the local snapshot is pending.
+    // That proof wins over a stale login snapshot, within the hard deadline.
+    if (client.authorization && client.recordingAuthorizationReady && now() < hardDeadline) return true;
+    if (loginShown) {
       throw plaudError('PLAUD_AUTH_REQUIRED', `PLAUD account sign-in is required in ${client.browserLabel}.`, { retryable: false });
     }
     if (attempt + 1 < attempts && now() < totalDeadline) {

@@ -823,6 +823,63 @@ test('an explicit PLAUD login route remains recognizable after the probe deadlin
   assert.equal(await pageShowsPlaudLogin({ url: () => 'https://web.plaud.ai.untrusted.invalid/login', evaluate: async () => false }), false);
 });
 
+test('final local login inspection has time for DOM replies after the native auth budget ends', async () => {
+  for (const loginVisible of [true, false]) {
+    let clock = 0, inspected = 0;
+    const client = { headless: true, loginTimeoutMs: 1000, browserLabel: 'Fixture browser',
+      page: { url: () => 'https://web.plaud.ai/', isClosed: () => false,
+        evaluate: async () => {
+          inspected++;
+          assert.equal(clock, 1000, 'a local diagnostic must not cut the native renewal budget short');
+          await new Promise(resolve => setTimeout(resolve, 30));
+          return loginVisible;
+        },
+        reload: async () => { throw new Error('the exhausted auth budget must not start another remote navigation'); },
+      } };
+    await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+      pause: async ms => { clock += ms; } }), error => error.code ===
+        (loginVisible ? 'PLAUD_AUTH_REQUIRED' : 'PLAUD_SESSION_PROBE_INCOMPLETE'));
+    assert.equal(inspected, 1);
+    assert.equal(clock, 1000);
+  }
+  let clock = 0;
+  const ready = { headless: true, loginTimeoutMs: 1000, browserLabel: 'Fixture browser',
+    page: { isClosed: () => false, evaluate: async () => { throw new Error('proven native readiness must win before inspecting login DOM'); } } };
+  assert.equal(await waitForPlaudAuthorization(ready, { now: () => clock,
+    pause: async ms => { clock += ms; markRecordingAuthorization(ready, 'fixture'); } }), true);
+  assert.equal(clock, 500);
+});
+
+test('final login inspection preserves hard deadlines and newer native recording proof', async () => {
+  for (const deadlineSource of ['client', 'option']) {
+    for (const loginRoute of [false, true]) {
+      let clock = 0, inspected = 0;
+      const client = { headless: true, loginTimeoutMs: 30000, browserLabel: 'Fixture browser',
+        ...(deadlineSource === 'client' ? { operationDeadlineAt: 1000 } : {}),
+        page: { url: () => loginRoute ? 'https://web.plaud.ai/login' : 'https://web.plaud.ai/',
+          isClosed: () => false, evaluate: async () => { inspected++; return true; } } };
+      await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
+        ...(deadlineSource === 'option' ? { deadlineAt: 1000 } : {}),
+        pause: async ms => { clock += ms; } }), error => error.code ===
+          (loginRoute ? 'PLAUD_AUTH_REQUIRED' : 'PLAUD_SESSION_PROBE_INCOMPLETE'));
+      assert.equal(clock, 1000);
+      assert.equal(inspected, 0, 'an exhausted hard deadline must not start a DOM round-trip');
+    }
+  }
+  let clock = 0, inspected = 0;
+  const client = { headless: true, loginTimeoutMs: 1000, browserLabel: 'Fixture browser' };
+  client.page = { url: () => 'https://web.plaud.ai/', isClosed: () => false, evaluate: async () => {
+    inspected++;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    markRecordingAuthorization(client, 'fixture');
+    return true;
+  } };
+  assert.equal(await waitForPlaudAuthorization(client, { now: () => clock,
+    pause: async ms => { clock += ms; } }), true);
+  assert.equal(clock, 1000);
+  assert.equal(inspected, 1);
+});
+
 test('PLAUD lets an eight-second cold session finish within the full authorization budget', async () => {
   let clock = 0;
   let navigationStartedAt = 0;
@@ -2002,7 +2059,10 @@ test('recording readiness ignores generic credentials, rejected responses and ex
   }
   client.page.evaluate = async () => true;
   clock = 0;
-  client.operationDeadlineAt = 1000;
+  // This branch tests login classification after a soft auth wait. An expired
+  // hard operation deadline correctly prevents a new DOM round-trip entirely.
+  client.operationDeadlineAt = null;
+  client.loginTimeoutMs = 1000;
   await assert.rejects(waitForPlaudAuthorization(client, { now: () => clock,
     pause: async ms => { clock += ms; } }), error => error.code === 'PLAUD_AUTH_REQUIRED');
 });
