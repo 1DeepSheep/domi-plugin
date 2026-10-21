@@ -1,6 +1,6 @@
 ---
 name: sourcing
-description: Discover potential founders and early teams, run the daily underwater-project radar around labs and existing project/people connections, verify public professional signals, and deduplicate authorized intake into domi's configured project and people repositories. Also supports profiles, public background checks, and relationship management.
+description: Discover potential founders and early teams within user-configured directions, labs, companies and professional relationships; run the daily underwater-project radar, verify public signals, and deduplicate authorized intake into domi's configured project and people repositories. Also supports profiles, public background checks, and relationship management.
 ---
 
 # Sourcing
@@ -18,11 +18,11 @@ When the task reads or writes internal project or people data, first read `../in
 
 Start by identifying the mode. If the request mixes modes, run them in this order: source candidates -> enrich profiles -> plan outreach -> update the current people repository.
 
-For `underwater_discover`, read [daily underwater discovery](references/underwater-discovery.md) and follow its dedicated discovery → identity/deduplication → evidence-based intake → persisted run receipt flow. It handles both people and projects; do not substitute ordinary people-only intake or automatically add investment ratings. The daily schedule and editable source pool belong to the client; this skill executes each claimed run.
+For `underwater_discover`, read [daily underwater discovery](references/underwater-discovery.md) and follow its dedicated discovery → identity/deduplication → evidence-based intake → persisted run receipt flow. It handles both people and projects; do not substitute ordinary people-only intake or automatically add investment ratings. The client owns the daily schedule, editable focus objects (directions, labs, companies and people), relationship filters and source URLs; this skill executes the frozen scope of each claimed run. Direction limits also apply when expanding related people from a lab, company or person. Paused objects and their exclusive sources never become search seeds. snapshot.excludedSourceUrls overrides saved focus URLs: do not visit or submit excluded URLs; check the focus through other valid entrances. Once focus configuration has been saved, pausing or deleting every focus stops discovery; legacy source-only behavior is available only when snapshot.focusConfigured is false, never merely because the focus list is empty.
 
 | Mode | Use for | Typical output |
 |---|---|---|
-| `underwater_discover` | Continuously discover founders, unnamed teams, early products and companies through labs, public lists, and existing project/person connections; refresh the client's 水下项目 section. | Persistent candidates, source coverage and lineage, verified project/person links, and a run receipt. |
+| `underwater_discover` | Continuously discover founders, unnamed teams, early products and companies within saved directions and user-selected lab/company/person relationships, supplemented by source URLs; refresh the client's 水下项目 section. | Persistent candidates, per-focus and source coverage, lineage, verified project/person links, and a run receipt. |
 | `discover` | Find potential founders or founder-like talent for a thesis, sector, geography, school/company alumni pool, or emerging technology area. | Ranked candidate list with evidence and next action. |
 | `profile` | Build a structured profile for one person. | Person profile with identity, career, projects, public signals, relationship path, and confidence. |
 | `background-check` | Verify a person's public track record before meeting, investing, hiring, referencing, or introducing. | Background memo with verified facts, open questions, and risk flags. |

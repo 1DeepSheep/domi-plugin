@@ -31,9 +31,9 @@ function nextDailyAt(now, hour) {
   if (next <= now) next += 86400000;
   return next;
 }
-function emptyLedger() { return { version: 1, settings: { ...DEFAULT_SETTINGS }, candidates: [], sources: [], run: { status: "idle" }, history: [], removedSourceUrls: [] }; }
+function emptyLedger() { return { version: 1, settings: { ...DEFAULT_SETTINGS }, candidates: [], sources: [], focuses: [], focusConfigured: false, run: { status: "idle" }, history: [], removedSourceUrls: [] }; }
 function unavailable(error) {
-  return { ok: false, configured: false, error: error.message || String(error), candidates: [], sources: [], settings: { ...DEFAULT_SETTINGS }, run: { status: "idle" } };
+  return { ok: false, configured: false, error: error.message || String(error), candidates: [], sources: [], focuses: [], focusConfigured: false, excludedSourceUrls: [], settings: { ...DEFAULT_SETTINGS }, run: { status: "idle" } };
 }
 function resolvedConfig() {
   const config = require("./domi-repo.cjs").readConfig();
@@ -64,9 +64,12 @@ function normalizeSource(raw, now, existing, isRun = false) {
   if (!["lab", "person", "project", "event", "open_source", "other"].includes(type)) throw fail("未知的搜索来源类型。");
   const status = raw.status || existing?.status || "pending";
   if (!["pending", "checked", "failed"].includes(status)) throw fail("未知的搜索来源状态。");
+  if (raw.focusIds !== undefined && (!Array.isArray(raw.focusIds) || raw.focusIds.some(id => typeof id !== "string" || !id.trim()))) throw fail("来源 focusIds 必须是非空 ID 的数组。", "sourcing_invalid_source_scope");
+  const focusIds = unique(raw.focusIds === undefined ? existing?.focusIds : raw.focusIds);
   return {
     id: existing?.id || stableId("src", url), name: text(raw.name || existing?.name) || new URL(url).hostname,
     type, url, enabled: raw.enabled === undefined ? existing?.enabled !== false : Boolean(raw.enabled), status,
+    ...(focusIds.length ? { focusIds } : {}),
     ...(existing?.lastCheckedAt ? { lastCheckedAt: existing.lastCheckedAt } : {}),
     ...(isRun && ["checked", "failed"].includes(status) ? { lastCheckedAt: now } : {}),
     ...(raw.detail !== undefined || existing?.detail ? { detail: text(raw.detail ?? existing.detail) } : {})
@@ -85,20 +88,91 @@ function configureSources(current, incoming, now) {
     return source;
   });
 }
-function mergeSources(current, incoming, now, removedSourceUrls = []) {
+function excludedSourceUrls(value) { return unique([...(value.removedSourceUrls || []), ...value.sources.filter(source => !source.enabled).map(source => source.url)]); }
+function focusConfigured(value) { return value.focusConfigured === true || Boolean(value.focuses?.length); }
+function sourceInScope(source, value) {
+  const focuses = (value.focuses || []).filter(focus => focus.enabled);
+  if (focusConfigured(value) && !focuses.length) return false;
+  if (!source.focusIds?.length) return true;
+  return focuses.some(focus => source.focusIds.includes(focus.id) || focus.urls.includes(source.url));
+}
+function mergeSources(current, incoming, now, removedSourceUrls = [], run = {}) {
   const next = [...current];
+  const plan = run.focusPlan || [], activeIds = new Set(plan.map(focus => focus.id));
   for (const raw of incoming || []) {
     const url = httpUrl(raw.url);
     const index = next.findIndex(item => item.url === url);
     const previous = next[index];
-    if (!previous && (removedSourceUrls.includes(url) || next.some(item => raw.id && item.id === raw.id))) continue;
-    // An agent owns scan checkpoints; only configure owns user source settings.
+    if (removedSourceUrls.includes(url) || next.some(item => raw.id && item.id === raw.id && item.url !== url)) throw fail("来源已被删除或改址，本轮不能恢复或提交其检查成果。", "sourcing_source_out_of_scope");
+    if (previous && !previous.enabled) throw fail("来源已暂停，本轮不能提交其检查成果。", "sourcing_source_out_of_scope");
+    if (raw.focusIds !== undefined && (!Array.isArray(raw.focusIds) || raw.focusIds.some(id => typeof id !== "string" || !activeIds.has(id)))) throw fail("来源归属必须使用本轮启用的关注对象 ID。", "sourcing_invalid_source_scope");
+    const configuredIds = plan.filter(focus => focus.urls.includes(url)).map(focus => focus.id);
+    if (configuredIds.length && (raw.focusIds || []).some(id => !configuredIds.includes(id))) throw fail("指定来源网址与申报的关注对象不匹配。", "sourcing_invalid_source_scope");
+    const manual = previous && !previous.focusIds?.length;
+    let focusIds = previous?.focusIds || [];
+    if (run.focusConfigured) {
+      if (previous?.focusIds?.length && !previous.focusIds.some(id => activeIds.has(id)) && !configuredIds.length) throw fail("来源所属关注对象已暂停或删除，本轮不能提交其检查成果。", "sourcing_source_out_of_scope");
+      if (!manual) {
+        if (configuredIds.length) focusIds = unique([...focusIds, ...configuredIds]);
+        else if (previous) {
+          if ((raw.focusIds || []).some(id => !previous.focusIds.includes(id))) throw fail("不能通过运行回执把历史来源改派给其他关注对象。", "sourcing_invalid_source_scope");
+        } else {
+          focusIds = unique(raw.focusIds);
+          if (!focusIds.length) throw fail("新发现来源需要本轮有效的 focusIds 归属。", "sourcing_invalid_source_scope");
+        }
+      }
+    } else if ((raw.focusIds || []).length) throw fail("当前没有已启用关注对象，不能提交关注归属来源。", "sourcing_invalid_source_scope");
+    // Agent writes checkpoints and explicit lineage; user source settings remain authoritative.
     const source = previous
-      ? normalizeSource({ ...previous, status: raw.status, detail: raw.detail }, now, previous, true)
-      : normalizeSource({ ...raw, enabled: true }, now, undefined, true);
+      ? normalizeSource({ ...previous, status: raw.status, detail: raw.detail, focusIds }, now, previous, true)
+      : normalizeSource({ ...raw, enabled: true, focusIds }, now, undefined, true);
     if (index < 0) next.push(source); else next[index] = source;
   }
   return next;
+}
+const FOCUS_TYPES = new Set(["direction", "lab", "company", "person"]);
+const FOCUS_RELATIONS = new Set(["members", "alumni", "founders", "employees", "former_employees", "students", "coauthors", "collaborators"]);
+const focusNameKey = value => text(value).normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
+const focusKey = focus => JSON.stringify({ type: focus.type, name: focusNameKey(focus.name),
+  keywords: focus.keywords.map(focusNameKey).sort(), excludedKeywords: focus.excludedKeywords.map(focusNameKey).sort(),
+  relations: [...focus.relations].sort(), urls: [...focus.urls].sort() });
+function focusStrings(value, previous, label) {
+  if (value === undefined) return [...(previous || [])];
+  if (!Array.isArray(value) || value.some(item => typeof item !== "string")) throw fail(`${label} 必须是字符串数组。`, "sourcing_invalid_focus");
+  return [...new Map(value.map(item => item.trim().normalize("NFKC")).filter(Boolean).map(item => [focusNameKey(item), item])).values()];
+}
+function normalizeFocus(raw, previous) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw fail("关注对象必须是对象。", "sourcing_invalid_focus");
+  const name = raw.name === undefined ? previous?.name : typeof raw.name === "string" ? raw.name.trim().normalize("NFKC") : "";
+  const type = raw.type === undefined ? previous?.type : raw.type;
+  if (!name || name.length > 300 || !FOCUS_TYPES.has(type)) throw fail("关注对象需要有效名称和 direction/lab/company/person 类型。", "sourcing_invalid_focus");
+  const enabled = raw.enabled === undefined ? previous?.enabled ?? true : raw.enabled;
+  if (typeof enabled !== "boolean") throw fail("关注对象 enabled 必须是布尔值。", "sourcing_invalid_focus");
+  const relations = focusStrings(raw.relations, previous?.relations, "关注关系");
+  if (relations.some(relation => !FOCUS_RELATIONS.has(relation))) throw fail("关注关系类型无效。", "sourcing_invalid_focus");
+  if (raw.urls !== undefined && (!Array.isArray(raw.urls) || raw.urls.some(url => typeof url !== "string"))) throw fail("关注对象网址必须是字符串数组。", "sourcing_invalid_focus");
+  const focus = {
+    name, type, enabled,
+    keywords: focusStrings(raw.keywords, previous?.keywords, "关键词"),
+    excludedKeywords: focusStrings(raw.excludedKeywords, previous?.excludedKeywords, "排除关键词"),
+    relations, urls: unique((raw.urls ?? previous?.urls ?? []).map(httpUrl))
+  };
+  return { id: previous?.id || stableId("focus", focusKey(focus)), ...focus };
+}
+function configureFocuses(current, incoming) {
+  const seenKeys = new Set(), seenIds = new Set();
+  return incoming.map(raw => {
+    // Same names are not sufficient identity: only an explicit existing ID edits a focus.
+    const previous = current.find(item => raw?.id && item.id === raw.id);
+    const focus = normalizeFocus(raw, previous), key = focusKey(focus);
+    if (seenKeys.has(key) || seenIds.has(focus.id)) throw fail("关注对象定义或 ID 重复，请保留一条。", "sourcing_duplicate_focus");
+    seenKeys.add(key); seenIds.add(focus.id);
+    return focus;
+  });
+}
+function focusCoverage(outcomes = {}) {
+  const values = Object.values(outcomes).map(result => result.status);
+  return { checked: values.filter(status => status === "checked").length, failed: values.filter(status => status === "failed").length, pending: values.filter(status => status === "pending").length };
 }
 function identityUrl(value, sources) {
   if (!text(value)) return undefined;
@@ -264,7 +338,7 @@ class SourcingLedger {
   read() {
     if (!fs.existsSync(this.ledgerPath)) return emptyLedger();
     const value = JSON.parse(fs.readFileSync(this.ledgerPath, "utf8"));
-    if (value.version !== 1 || !Array.isArray(value.candidates) || !Array.isArray(value.sources) || !value.run || !value.settings) throw fail("水下项目台账格式异常，已停止写入。", "sourcing_corrupt");
+    if (value.version !== 1 || !Array.isArray(value.candidates) || !Array.isArray(value.sources) || (value.focuses !== undefined && !Array.isArray(value.focuses)) || (value.focusConfigured !== undefined && typeof value.focusConfigured !== "boolean") || !value.run || !value.settings) throw fail("水下项目台账格式异常，已停止写入。", "sourcing_corrupt");
     return value;
   }
   write(value) {
@@ -279,7 +353,7 @@ class SourcingLedger {
   }
   snapshot(value = this.read()) {
     const run = { ...value.run };
-    for (const privateKey of ["leaseToken", "receipt", "dayKey", "startedAt", "leaseUntil", "successfulDayKey", "attempts", "attemptDay", "candidateIds", "sourceOutcomes", "entityVersions"]) delete run[privateKey];
+    for (const privateKey of ["leaseToken", "receipt", "dayKey", "startedAt", "leaseUntil", "successfulDayKey", "attempts", "attemptDay", "candidateIds", "sourceOutcomes", "entityVersions", "focusOutcomes", "focusPlan", "focusConfigured"]) delete run[privateKey];
     const now = this.now(), day = dayKey(now);
     const expired = value.run.status === "running" && value.run.leaseUntil <= now;
     if (expired) { run.status = "failed"; run.error = "上轮更新已中断，等待续扫。"; }
@@ -290,7 +364,11 @@ class SourcingLedger {
       else run.nextRunAt = Date.parse(`${day}T${String(value.settings.localHour).padStart(2, "0")}:00:00+08:00`);
     }
     delete run.retryAt;
-    return { ok: true, configured: true, settings: { ...value.settings }, candidates: value.candidates, sources: value.sources, run };
+    if (value.run.focusOutcomes) {
+      run.focusCoverage = focusCoverage(value.run.focusOutcomes);
+      run.focusResults = Object.entries(value.run.focusOutcomes).map(([focusId, result]) => ({ focusId, ...result }));
+    }
+    return { ok: true, configured: true, settings: { ...value.settings }, candidates: value.candidates, sources: value.sources.map(source => ({ ...source, inScope: sourceInScope(source, value) })), focuses: value.focuses || [], focusConfigured: focusConfigured(value), excludedSourceUrls: excludedSourceUrls(value), run };
   }
   transaction(operation) {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
@@ -308,6 +386,12 @@ class SourcingLedger {
         && input.settings?.autoIntake !== undefined && input.settings.autoIntake !== value.settings.autoIntake) {
         throw fail("当前搜索仍在运行，请等待完成或停止后再修改自动入库设置。", "sourcing_settings_busy");
       }
+      if (input.focuses !== undefined) {
+        if (!Array.isArray(input.focuses)) throw fail("focuses 必须是数组。", "sourcing_invalid_focus");
+        if (value.run.status === "running" && value.run.leaseUntil > now) throw fail("当前搜索仍在运行，请等待完成或停止后再修改关注对象。", "sourcing_settings_busy");
+        value.focuses = configureFocuses(value.focuses || [], input.focuses);
+        value.focusConfigured = true;
+      }
       value.settings = normalizeSettings(value.settings, input.settings);
       if (input.sources !== undefined) {
         if (!Array.isArray(input.sources)) throw fail("sources 必须是数组。");
@@ -323,6 +407,7 @@ class SourcingLedger {
       const day = dayKey(now), previous = value.run;
       if (previous.status === "running" && previous.leaseUntil > now) return { started: false, reason: "busy" };
       if (!input.force && !value.settings.enabled) return { started: false, reason: "disabled" };
+      if (focusConfigured(value) && !(value.focuses || []).some(focus => focus.enabled)) return { started: false, reason: value.focuses?.length ? "focuses_paused" : "focuses_empty", error: "当前没有启用的关注对象，请先添加或启用至少一个关注对象。" };
       if (!input.force && previous.successfulDayKey === day) return { started: false, reason: "already_updated" };
       if (!input.force && previous.retryAt > now) return { started: false, reason: "backoff" };
       const dueAt = Date.parse(`${day}T${String(value.settings.localHour).padStart(2, "0")}:00:00+08:00`);
@@ -330,11 +415,20 @@ class SourcingLedger {
       if (!input.force && previous.attemptDay === day && previous.attempts >= MAX_DAILY_ATTEMPTS) return { started: false, reason: "daily_retry_limit" };
       if (previous.runId) value.history = [...(value.history || []), { runId: previous.runId, status: previous.status === "running" ? "failed" : previous.status, lastAttemptAt: previous.lastAttemptAt, error: previous.status === "running" ? "上轮更新租约已过期" : previous.error }].slice(-30);
       const runId = `sourcing_${crypto.randomUUID()}`, leaseToken = crypto.randomUUID();
+      const excluded = new Set(excludedSourceUrls(value));
+      const focusPlan = structuredClone((value.focuses || []).filter(focus => focus.enabled))
+        .map(focus => ({ ...focus, urls: focus.urls.filter(url => !excluded.has(url)) }));
       value.run = {
         status: "running", runId, leaseToken, dayKey: day, startedAt: now, lastAttemptAt: now, leaseUntil: now + LEASE_MS,
         ...(previous.lastSuccessAt ? { lastSuccessAt: previous.lastSuccessAt, successfulDayKey: previous.successfulDayKey } : {}),
         attemptDay: day, attempts: previous.attemptDay === day ? (previous.attempts || 0) + 1 : 1,
-        sourceOutcomes: Object.fromEntries(value.sources.filter(source => source.enabled).map(source => [source.url, "pending"])),
+        sourceOutcomes: Object.fromEntries(unique([
+          ...value.sources.filter(source => source.enabled && sourceInScope(source, value)).map(source => source.url),
+          ...focusPlan.flatMap(focus => focus.urls)
+        ]).filter(url => !excluded.has(url)).map(url => [url, "pending"])),
+        focusConfigured: focusConfigured(value),
+        focusPlan,
+        focusOutcomes: Object.fromEntries((value.focuses || []).filter(focus => focus.enabled).map(focus => [focus.id, { status: "pending" }])),
         entityVersions: entityVersions(this.databasePath)
       };
       return { started: true, runId, leaseToken, ledgerPath: this.ledgerPath };
@@ -367,11 +461,24 @@ class SourcingLedger {
       }
       value.candidates = candidates;
       run.candidateIds = unique([...(run.candidateIds || []), ...ids]);
-      value.sources = mergeSources(value.sources, input.sources, now, value.removedSourceUrls);
+      value.sources = mergeSources(value.sources, input.sources, now, value.removedSourceUrls, run);
       run.sourceOutcomes = { ...(run.sourceOutcomes || {}) };
       for (const source of input.sources) {
         if (!["checked", "failed", "pending"].includes(source.status)) throw fail("本轮来源必须明确标记 checked、failed 或 pending。");
         run.sourceOutcomes[httpUrl(source.url)] = source.status;
+      }
+      if (input.focusResults !== undefined) {
+        if (!Array.isArray(input.focusResults)) throw fail("focusResults 必须是数组。", "sourcing_invalid_focus_result");
+        const seenFocusIds = new Set();
+        for (const result of input.focusResults) {
+          const id = text(result?.focusId);
+          if (!id || !Object.hasOwn(run.focusOutcomes || {}, id) || seenFocusIds.has(id)
+            || !["checked", "failed", "pending"].includes(result.status)
+            || (result.detail !== undefined && typeof result.detail !== "string")
+            || (["checked", "failed"].includes(result.status) && !text(result.detail))) throw fail("关注对象回执必须对应本轮启用 ID、唯一且具有有效状态；checked/failed 需填写非空检查依据。", "sourcing_invalid_focus_result");
+          seenFocusIds.add(id);
+          run.focusOutcomes[id] = { status: result.status, ...(result.detail !== undefined ? { detail: result.detail.trim() } : {}) };
+        }
       }
       if (input.coverage) run.coverage = coverageValue(input.coverage);
       if (input.completed === true) {
@@ -381,7 +488,7 @@ class SourcingLedger {
         if (run.coverage.checked !== outcomes.filter(status => status === "checked").length
           || run.coverage.failed !== outcomes.filter(status => status === "failed").length
           || run.coverage.pending < outcomes.filter(status => status === "pending").length) throw fail("覆盖回执与本轮已持久化的来源检查状态不一致。", "sourcing_invalid_coverage");
-        run.receipt = { mergedAt: now, candidateIds: [...run.candidateIds], coverage: run.coverage };
+        run.receipt = { mergedAt: now, candidateIds: [...run.candidateIds], coverage: run.coverage, focusCoverage: focusCoverage(run.focusOutcomes) };
       } else if (run.receipt) delete run.receipt;
       run.leaseUntil = now + LEASE_MS;
       return { merged: ids.length };
@@ -396,9 +503,10 @@ class SourcingLedger {
         if (!candidate) throw fail("本轮候选回执缺失，无法完成更新。", "sourcing_receipt_missing");
         validateLinks(candidate, run, this.databasePath, path.dirname(this.directory), value.settings.autoIntake);
       }
-      const partial = run.coverage.failed > 0 || run.coverage.pending > 0;
+      const focused = focusCoverage(run.focusOutcomes);
+      const partial = run.coverage.failed > 0 || run.coverage.pending > 0 || focused.failed > 0 || focused.pending > 0;
       run.status = partial ? "partial" : "idle";
-      if (partial) { run.retryAt = now + RETRY_MS; run.error = "部分来源未完成，保留已发现候选并稍后续扫。"; }
+      if (partial) { run.retryAt = now + RETRY_MS; run.error = "部分来源或关注对象未完成，保留已发现候选并稍后续扫。"; }
       else { run.lastSuccessAt = now; run.successfulDayKey = run.dayKey; delete run.retryAt; delete run.error; }
       delete run.leaseToken; delete run.receipt; delete run.leaseUntil;
     });

@@ -7,17 +7,38 @@
 - 采用 `investment-mgmt` 并锁定真实后端。当前客户端账本只支持 `repositoryBackend=local`；旧飞书主库返回不支持时保持原后端，不新建影子本地库。
 - 客户端保存用户明确要求的每日时区、时间、启用状态和 `autoIntake`。已授权“每日搜索、双库查重并入库”即允许在该范围持续处理新线索；不因开放式发现或一天多条再次索要确认。仅要求查看/试搜时不启用自动入库。开启日更不授权联系候选人、发消息、设置日程或改写外部来源。
 - 每日任务由客户端调度并 claim。同一任务使用传入的 `runId`、`leaseToken`、`ledgerPath`，不得另开第二个日更、重置运行状态或伪造 token。手动刷新与日更共用账本和并发锁；一次执行只完成本次 claim。
-- 首次读取账本、配置及来源池；每次从上次可信位置继续。读取失败不能解释为空池或零候选。私有库数据与运行文件存于客户端指定位置，不写入插件、公开仓库或网页查询。
+- 首次读取账本、配置、关注对象及来源池；每次从上次可信位置继续。读取失败不能解释为空池或零候选。私有库数据与运行文件存于客户端指定位置，不写入插件、公开仓库或网页查询。
+
+## 用户关注范围
+
+`focuses` 是用户指定的发现范围，`sources` 是可补充的网页入口；两者不能互相替代。关注对象由客户端添加、编辑、暂停或删除，结构为：
+
+```text
+{id, name, type: 'direction'|'lab'|'company'|'person',
+ keywords: string[], excludedKeywords: string[],
+ relations: ('members'|'alumni'|'founders'|'employees'|'former_employees'|'students'|'coauthors'|'collaborators')[],
+ urls: string[], enabled: boolean}
+```
+
+- **按本轮冻结范围执行。** begin 冻结当时启用的关注对象及其全部字段；每条 query、名单抽取和关系扩展都必须落在该快照内。已暂停对象不检索、不用作种子，也不通过旧来源或历史关联间接恢复。不得把行业动态/新闻雷达的关注领域隐式用作水下范围。仅当可信 snapshot 的 `focusConfigured=false`（历史从未配置）时兼容原有启用 sources 的范围；`focusConfigured=true` 且没有启用对象时，本轮不运行，包括全部暂停、删除全部及首次明确保存空列表，不能退回泛搜或旧 source-only 模式。不能只看 focuses.length 判定是否兼容。读取失败与配置为空是不同状态。
+- **先消歧，再拓展。** 名称可单独保存，不要求用户先找 URL。无 URL 时先以名称、关键词和公开专业上下文找到候选官方入口，核对规范名称、机构、履历或专业账号再使用。用户提供的 URL 是身份线索，也须核对页面实际主体；姓名与链接不一致、同名人物未解或关键入口无法读取时，保留该 focus 的 `pending`/`failed`，写明缺口，不猜测另一个人继续扩展。具名种子本体用于定位，不表示其所有关联人都符合入库条件。
+- **领域与关系同时成立。** 多个启用 direction 可择一命中；lab/company/person 的扩展候选还必须满足其自身关键词、排除条件和所选关系。存在 direction 时，采用“命中至少一个方向 AND 命中该种子与关系范围”，不能将方向和种子用 OR 拼成不限领域的大池。种子消歧可读取必要的范围外上下文，但不将其变成候选范围。无 direction 时以用户启用的具名对象及关系条件为边界；仅配置 direction 时从其主题与关键词内寻找新的公共入口。
+- **每个字段都实际生效。** name 与 keywords 共同表达主题、身份线索和检索词；展开经核验的中英文别名时保留原条件，不能把限定词悄悄丢掉。excludedKeywords 既用于检索排除，也用于候选原文复核，不能只依赖搜索引擎的减号语法。direction 的排除条件随该方向应用于全部关系拓展；具名对象自己的排除条件进一步收窄其分支。`urls` 是该对象的指定入口；排除已暂停/删除的 URL 后，应逐项读取、记录失败与分页缺口。每个启用 focus 中未被排除的指定 URL 属于本轮冻结来源计划，须逐个提交 sources 中的真实检查回执，不能只交一个 focusResults.checked 略过网站。补充来源不能绕开关键词、排除条件或领域限制。
+- **来源暂停优先于已保存入口。** `snapshot.excludedSourceUrls` 是暂停与删除来源 URL 的并集，优先于 focus 中仍保存的 urls。begin 的冻结 focusPlan 和必查来源已经排除这些 URL；代理不得访问，也不得补交其检查回执。本轮不将已排除 URL 计为必查缺口，应从其他有效入口核验该 focus；若仍无法核验身份或范围，则按实际缺口记 pending/failed。原 focus.urls 保留以便恢复，不能把它当作越过暂停的授权；仅用户明确重新启用或添加该来源后才可恢复使用。
+- **关系以证据为准。** 仅沿 `relations` 所选关系拓展：members=当前成员，alumni=已离开实验室/学校的成员，founders=创始人，employees=现员工，former_employees=前员工，students=明确指导/师生关系，coauthors=共同作者，collaborators=有具体合作证据的合作者。具名对象的关系为空时不默认打开全部关系，只核验种子及其直接创业信号；direction 的主题内发现不依赖具名关系字段。现在与过去的关系分别标注日期；共同单位不自动等于前同事，同论文不自动等于私人相识，公开关系不证明能引荐。用户认识某位重要人物也不授权声称其关联人是用户的人脉。
+- **保留边界判断。** 不符合方向、排除词或关系条件的已发现对象保留 `excluded` 与简短理由；身份或关联证据不足的保留 `watching`/`needs_review`。没有可追溯的关系证据不能按“可能认识”入库。来源中的潜在新人仍须满足后续创业/潜在创业信号与双库查重门槛。
+
+每个启用 focus 都须有逐项检查结果。`focusResults[].detail` 记录实际 query（或结构相同的紧凑检索日志）、实际访问的 source URLs、已核验身份入口、所选关系及实际覆盖、关键词/排除词检查、分页或证据缺口；不能只写“已检查”。`checked` 和 `failed` 的 detail 必填且非空，后者写出尝试的 query/入口与具体失败原因；`pending` 可暂留空，已知缺口仍应写明。同时记录通过该对象发现候选的 discoveryPath。范围中没有新候选可以是 `checked`，未能定位正确对象、未被排除的必需 URL 不可读、所选关系名单未查完则必须保留 `pending`/`failed`。`run.focusCoverage` 与来源 coverage 分开计数，一条网页访问不证明多个关注对象都完成。
 
 ## 来源池与覆盖
 
 沿用 sourcing 的 source graph、alias graph、snowball graph 与 Google-style 补漏方法；本节规定它们如何持续执行。
 
-1. **读取真实库种子。** 通过网关分别遍历 project/person `list --fields id,name --limit 200` 的全部分页，保留相同条件并跟随 `nextCursor` 直到 `hasMore=false`。`query_snapshot_changed` 时重取并按 ID 去重；不能只看前 200 条。对与本次方向相关的对象再用 get/batch 取完整记录，读取必要的已索引主页、研究、纪要，以明确的实验室、导师、共同作者、前同事、团队项目和开源组织作为扩展入口。库里的“认识”不等于能引荐；公开的同机构关系也不等于私人关系。
-2. **可编辑固定来源。** 优先用户已指定的重点实验室、个人主页、项目团队、活动、开源组织。初始公共入口可包括清华 AIR、上海 AI Lab、MMLab 等实验室的官方成员/校友/项目页，实际执行前核验对应页面与方向，避免把学院首页当完整名录。不在发布版预置用户的人名、公司名单或私有路径。已暂停/删除的来源不自动恢复；新发现的来源连同发现路径保存到来源池，供客户端查看与调整。
+1. **读取真实库种子。** 通过网关分别遍历 project/person `list --fields id,name --limit 200` 的全部分页，保留相同条件并跟随 `nextCursor` 直到 `hasMore=false`。`query_snapshot_changed` 时重取并按 ID 去重；不能只看前 200 条。完整遍历供双库查重，不将全库自动转成发现种子。仅对符合本轮冻结关注范围的对象再用 get/batch 取完整记录，读取必要的已索引主页、研究、纪要，沿所选且有证据的关系扩展。库里的“认识”不等于能引荐；公开的同机构关系也不等于私人关系。
+2. **可编辑固定来源。** 优先用户已指定的关注对象与其 URLs，再用 sources 补充公共入口；关注模式下，来源不能覆盖或扩大其领域/关系限制。来源的可选 `focusIds` 保存所属关注对象 ID，指定 focus.urls 由后台自动建立归属；仅关联已暂停/删除对象的专属来源不继续扫描，也不能通过删除 focusIds 恢复。历史用户独立添加、未绑定对象的来源不强行归属，但执行时仍服从本轮 focus 边界。本轮在关注模式中新发现的其他 URL 必须填入有事实依据、属于本轮冻结启用对象的 focusIds，再连同发现路径保存；不能用无关 ID 绕过范围校验。初始公共入口可包括与用户方向有关的官方成员/校友/项目页，实际执行前核验对应页面与主体，避免把学院首页当完整名录。发布版不预置用户的人名、公司名单或私有路径。已暂停/删除的来源不自动恢复；新来源供客户端查看与调整，但不得因此新增关注对象或扩大用户范围。
 3. **先抽取完整有界名单，再核验排序。** 对本轮选中的成员/校友页、活动名单、作者列表或产品目录，先枚举该范围内所有条目与分页，保留候选或排除理由；不能读前几个名字就按声望截断。界面展示数量不限制账本保存。遇到无限信息流或预算上限，事先定义有界范围并保存最后页/条目、未查范围和下次续扫位置。
 4. **首次基线，随后增量。** 首次来源回扫现有内容；之后比较上次成功检查的角色、机构、产品、招聘或团队变化。旧网页今天首次发现，只计“新发现”；`signalDate` 取证据日期，未知留空，不能以今天代填创业日期。角色页面要区分现在任职、曾任职、未来计划和未经证实的猜测；旧创业经历不能冒充新创业。
-5. **覆盖按实际完成记账。** 每个来源保留状态、最后成功检查、失败原因、续扫位置与必要内容指纹。以 `detail` 记录这些运行说明及 lineage，`lastCheckedAt` 不掩盖读取失败。客户端 begin 时冻结所有已启用来源作为本轮计划；未处理的来源必须计入 `pending`，不能从结果省略后声称完成。`coverage.checked/failed` 必须等于本轮逐来源检查状态的唯一 URL 计数，`pending` 至少覆盖未检查的冻结来源和已知续扫缺口；分母不能在遇到失败后缩小。部分访问失败、分页未完或必需双库查重未完都必须保留缺口。
+5. **覆盖按实际完成记账。** 每个来源保留状态、最后成功检查、失败原因、续扫位置与必要内容指纹。以 `detail` 记录这些运行说明及 lineage，`lastCheckedAt` 不掩盖读取失败。客户端 begin 冻结可执行来源及启用关注对象：包含有效的启用 focus.urls，排除 excludedSourceUrls 和仅归属暂停/删除对象的来源。对计划内来源做必要的入口核验，仅沿符合本轮范围的条目继续搜索，计划内来源经核验不符合范围时记录实际核验及理由，不通过它泛搜；不能未读取入口就声称已检查。未处理的计划来源必须计入 `pending`，不能从结果省略后声称完成；已明确排除的 URL 不属于本轮必查分母，不能以补交回执重新加入。`coverage.checked/failed` 必须等于本轮逐来源检查状态的唯一 URL 计数，`pending` 至少覆盖未检查的冻结来源和已知续扫缺口；分母不能在遇到失败后缩小。每个冻结启用 focus 另外提交 `focusResults`，不能以 sources 覆盖替代。部分访问失败、分页未完、关系核验未完或必需双库查重未完都必须保留缺口。
 
 来源链至少能回答“从哪条既有项目/人物或哪个实验室/活动入口，沿什么关系，到哪条创业信号”。只把公开可检索的最小身份信息放入搜索词，不把内部纪要、联系方式或投资判断整段发往外部搜索。
 
@@ -61,7 +82,7 @@ node <plugin-root>/scripts/sourcing-ledger.cjs snapshot --json-file <run-context
 node <plugin-root>/scripts/sourcing-ledger.cjs merge --json-file <run-result.json>
 ```
 
-`configure`、`begin` 由客户端处理。configure 的 sources 是完整替换列表；删除或改链接由用户设置生效，改链接清除旧检查进度。merge 只能回填检查状态，不能恢复用户已暂停/删除的来源；运行期间不能变更 autoIntake，暂停日更只影响后续运行。代理只在已 claim 的本轮提交 `merge`；`complete`、`fail` 由客户端根据实际执行结果收尾，代理不得提前调用 `complete` 把任务写成成功。
+`configure`、`begin` 由客户端处理。configure 的 sources 和 focuses 各自是完整替换列表，不能按增量误传一条后删除其他设置；任何 configure.focuses（包括 []）均将 `focusConfigured` 置为 true，删除全部对象不清除此标记。删除或改链接由用户设置生效，改链接清除旧检查进度。运行中禁止修改 focuses，须等本轮完成后保存下轮范围；代理不能通过 configure 改写或逃避本轮冻结范围。merge 只能回填检查状态，不能恢复用户已暂停/删除的关注对象或来源；运行期间不能变更 autoIntake，暂停日更只影响后续运行。代理只在已 claim 的本轮提交 `merge`；`complete`、`fail` 由客户端根据实际执行结果收尾，代理不得提前调用 `complete` 把任务写成成功。
 
 `run-result.json` 使用脚本的真实合同：
 
@@ -72,18 +93,19 @@ node <plugin-root>/scripts/sourcing-ledger.cjs merge --json-file <run-result.jso
   "leaseToken": "客户端传入的 claim token",
   "completed": true,
   "candidates": [],
-  "sources": [{"name":"已实际检查的来源","type":"lab","url":"https://example.org/lab","status":"checked"}],
+  "sources": [{"name":"已实际检查的来源","type":"lab","url":"https://example.org/lab","focusIds":["本轮冻结的真实关注对象 ID"],"status":"checked"}],
+  "focusResults": [{"focusId":"本轮冻结的真实关注对象 ID","status":"checked","detail":"实际 query、身份入口、关系范围、关键词及排除检查、分页完成情况"}],
   "coverage": {"checked": 1, "failed": 0, "pending": 0}
 }
 ```
 
-`completed=true` 仅表示本轮结果已完整提交，并不表示所有来源与入库成功。空结果也必须提交实际来源覆盖；没有搜索不能提交“零新增且成功”。候选字段为：
+`completed=true` 仅表示本轮结果已完整提交，并不表示所有来源、关注对象与入库成功。仅 `focusConfigured=false` 的历史兼容运行提交空 `focusResults`；关注模式有启用 focuses 时逐项提交真实 ID 与 `checked|failed|pending` 状态及所需 detail，不得编造对象或省略未完成项。后端按冻结范围计算 `run.focusCoverage`，任一启用对象未完成都不能报完整成功；代理不手填一个“全查完”的总数代替逐项结果。空候选也必须提交实际来源和关注对象覆盖；没有搜索不能提交“零新增且成功”。候选字段为：
 
 - `id,name,kind,identityUrl?,founders[],summary,domain,tags[],signal,discoveredAt,lastSeenAt,signalDate?,stage,confidence,nextAction`；discoveredAt/lastSeenAt 使用真实毫秒时间戳，signalDate 允许未知。
 - `sources:[{url,title,type}]`，`discoveryPath:[]`，`relatedEntities:[{type:'project'|'person',id,name,relation}]`。
 - `intake:{status:'pending'|'matched'|'created'|'needs_review',projectId?,personIds?,reason?,receipts?:[{entityType:'project'|'person',entityId,receiptPath,manifestPath}]}`；只填真实且回读过的 ID，reason 保留逐项核验与部分完成说明。
-- 来源字段 `id,name,type,url,enabled,lastCheckedAt?,status,detail?`，type 为 `lab|person|project|event|open_source|other`，status 为 `pending|checked|failed`。
+- 来源字段 `id,name,type,url,enabled,focusIds?,lastCheckedAt?,status,detail?`，type 为 `lab|person|project|event|open_source|other`，status 为 `pending|checked|failed`。focusIds 是所属关注对象 ID 数组；关注模式新增非指定 URL 必填有效本轮归属，不用于候选自己的 evidence sources 字段。
 
-merge 后重新 snapshot，核对保存的 runId、候选、真实关联 ID 和 coverage。CLI 非零退出、token 不匹配、资料库回读失败或账本写入失败不能用聊天成功文本替代。可输出 `SOURCING_RESULT` 摘要供展示，但客户端只信任同 runId 的持久提交与随后 complete 的程序回执；未拿到完成回执时只报告“结果已提交，待客户端完成验证”。failed/pending 非零应显示“部分完成”，保留上次成功日期并列出可恢复缺口。每日无新线索属于有效结果，但必须先完成计划内来源和必需查重。
+merge 后重新 snapshot，核对保存的 runId、候选、真实关联 ID、coverage 与 run.focusCoverage，并确认关注对象计数与提交的逐项 focusResults 一致。CLI 非零退出、token 不匹配、资料库回读失败或账本写入失败不能用聊天成功文本替代。可输出 `SOURCING_RESULT` 摘要供展示，但客户端只信任同 runId 的持久提交与随后 complete 的程序回执；未拿到完成回执时只报告“结果已提交，待客户端完成验证”。来源或 focus 的 failed/pending 非零应显示“部分完成”，保留上次成功日期并列出可恢复缺口。每日无新线索属于有效结果，但必须先完成计划内来源、关注对象和必需查重。
 
-面向用户展示：新增线索、新入项目/人物、匹配已有、待核与排除数量，本次覆盖与更新时间，以及每条“做什么、为何现在值得看、怎么找到、证据与库内关系”。状态应区分本轮运行中、已完成、部分完成、失败；未经完成回执验证不能显示“今日已更新”。
+面向用户展示：新增线索、新入项目/人物、匹配已有、待核与排除数量，本次来源和逐对象覆盖、实际搜索边界与更新时间，以及每条“做什么、为何现在值得看、怎么找到、匹配哪个关注对象、证据与库内关系”。状态应区分本轮运行中、已完成、部分完成、失败；未经完成回执验证不能显示“今日已更新”。
