@@ -7,6 +7,7 @@ const { DomiRepository } = require(path.join(plugin, "scripts/domi-repo.cjs"));
 const { SourcingLedger } = require(path.join(plugin, "scripts/sourcing-ledger.cjs"));
 const { artifact, contextBundle, saveManifest, checkpointManifest, finalize } = require(path.join(plugin, "scripts/domi-workflow.cjs"));
 const results = [];
+const noMatch = () => ({ status: "not_found", note: "合成测试：检查项目库、人脉库名称与研究字段后未发现联系或研究关联。", items: [] });
 function fixture(callback) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sourcing-review-"));
   const libraryDir = path.join(root, "library"), databasePath = path.join(root, "repo.sqlite");
@@ -36,7 +37,7 @@ function makeArchivedEntity(f, run, type) {
   const current = type === "project" ? f.repository.getProject(row.id) : f.repository.getPerson(row.id);
   saved = checkpointManifest(manifestPath, { expectedHash: saved.manifestSha256, entityBinding: { [type === "project" ? "projectId" : "personId"]: row.id, ...(type === "project" ? { recordRevision: current.recordRevision, recordHash: current.recordHash } : {}) }, archiveArtifacts: [artifact({ role: "discovery_note", path: doc.path })] });
   finalize(manifestPath, receiptPath, f.repository);
-  return { name, kind: type === "project" ? "company" : "person", identityUrl, sources: [{ url: identityUrl }], intake: { status: "created", ...(type === "project" ? { projectId: row.id } : { personIds: [row.id] }), receipts: [{ entityType: type, entityId: row.id, manifestPath, receiptPath }] } };
+  return { name, kind: type === "project" ? "company" : "person", identityUrl, sources: [{ url: identityUrl }], contactPaths: noMatch(), researchLinks: noMatch(), intake: { status: "created", ...(type === "project" ? { projectId: row.id } : { personIds: [row.id] }), receipts: [{ entityType: type, entityId: row.id, manifestPath, receiptPath }] } };
 }
 for (const type of ["project", "person"]) test(`${type}: actual archive and unchanged next-day scan`, () => fixture(f => {
   f.ledger.configure({ settings: { enabled: true }, sources: [source("lab")] });
@@ -112,4 +113,37 @@ for (const autoIntake of [true, false]) test(`document-only update must honor re
   f.repository.createDocument({ ownerType: "project", ownerId: project.id, kind: "研究", title: "New Synthetic Research", contentFile: f.write("new-research.md", `# Synthetic update\n${identityUrl}\n`) });
   const candidate = { name: project.name, kind: "company", identityUrl, sources: [{ url: identityUrl }], intake: { status: "matched", projectId: project.id } };
   assert.throws(() => f.ledger.merge(result(run, { candidates: [candidate] })), { code: autoIntake ? "sourcing_receipt_missing" : "sourcing_intake_disabled" });
+}));
+
+test("actual repository contact and project research documents support canonical, owner-bound analysis", () => fixture(f => {
+  const person = f.repository.upsertPerson({ name: "Synthetic Connector", organization: "Synthetic Science Lab" }).person;
+  const project = f.repository.upsertProject({ name: "Synthetic Existing Tools", domain: "AI", notes: "Develops scientific simulation tools for materials researchers." }).project;
+  const contactQuote = "The connector and candidate founder appeared in the same public research workshop.";
+  const projectQuote = "The existing product focuses on simulation; the candidate focuses on experiment planning.";
+  const contactDoc = f.repository.createDocument({ ownerType: "person", ownerId: person.id, kind: "研究", title: "Synthetic public overlap", contentFile: f.write("connector.md", `# Synthetic only\n${contactQuote}\n`) }).document;
+  const projectDoc = f.repository.createDocument({ ownerType: "project", ownerId: project.id, kind: "研究", title: "Synthetic comparison", contentFile: f.write("comparison.md", `# Synthetic only\n${projectQuote}\n`) }).document;
+  f.ledger.configure({ settings: { enabled: true, autoIntake: false }, sources: [source("lab")] });
+  const run = f.ledger.begin(), identityUrl = "https://example.org/candidate";
+  const candidate = {
+    name: "Synthetic Candidate", kind: "company", identityUrl, sources: [{ url: identityUrl }, { url: "https://example.org/workshop" }],
+    contactPaths: { status: "found", note: "Synthetic overlap only; an introduction is unconfirmed.", items: [{
+      via: { type: "person", id: person.id, name: "incorrect supplied name" }, chain: [person.name, "Public workshop", "Candidate founder"], basis: "public_overlap", reason: "Shared public workshop listing.", nextStep: "Ask whether the connector knows the founder before requesting an introduction.",
+      evidence: [{ kind: "library", entity: { type: "person", id: person.id, name: "incorrect" }, quote: contactQuote, documentPath: contactDoc.path }, { kind: "web", url: "https://example.org/workshop", quote: "Synthetic shared workshop listing." }]
+    }] },
+    researchLinks: { status: "found", note: "Synthetic product comparison.", items: [{
+      target: { type: "project", id: project.id, name: "incorrect supplied name" }, relation: "complementary", reason: "Different steps within a scientific workflow.", difference: projectQuote,
+      evidence: [{ kind: "library", entity: { type: "project", id: project.id, name: "incorrect" }, quote: projectQuote, documentPath: projectDoc.path }, { kind: "web", url: identityUrl, quote: "Synthetic candidate focuses on experiment planning." }]
+    }] }
+  };
+  f.ledger.merge(result(run, { candidates: [candidate] }));
+  f.ledger.complete(run);
+  assert.equal(f.ledger.snapshot().run.status, "idle");
+  const stored = f.ledger.snapshot().candidates[0];
+  assert.equal(stored.contactPaths.items[0].via.name, person.name);
+  assert.equal(stored.researchLinks.items[0].target.name, project.name);
+  assert.equal(stored.intake.status, "pending");
+  const next = f.ledger.begin({ force: true });
+  const borrowed = structuredClone(candidate); borrowed.researchLinks.items[0].evidence[0].documentPath = contactDoc.path;
+  borrowed.researchLinks.items[0].evidence[0].quote = contactQuote;
+  assert.throws(() => f.ledger.merge(result(next, { candidates: [borrowed] })), { code: "sourcing_invalid_analysis_evidence" });
 }));

@@ -21,12 +21,167 @@ function fixture(t) {
   return { directory, databasePath, database, ledger, now: () => now, advance: ms => now += ms, setNow: value => now = Date.parse(value) };
 }
 function candidate(extra = {}) {
-  return { name: "Early Research", kind: "company", identityUrl: "https://example.org/company", founders: ["Person A"], sources: [{ url: "https://example.org/company", title: "Official", type: "official" }], summary: "Early project", discoveryPath: ["Lab", "Alumni page", "Homepage"], ...extra };
+  return { name: "Early Research", kind: "company", identityUrl: "https://example.org/company", founders: ["Person A"], sources: [{ url: "https://example.org/company", title: "Official", type: "official" }], summary: "Early project", discoveryPath: ["Lab", "Alumni page", "Homepage"], contactPaths: noMatch(), researchLinks: noMatch(), ...extra };
 }
+const noMatch = () => ({ status: "not_found", note: "合成测试：已检查当前项目库和人脉库的名称、团队与研究方向，未发现关联。", items: [] });
 function receipt(run, extra = {}) {
   const focus = run.snapshot?.focusConfigured ? run.snapshot.focuses.find(item => item.enabled) : null;
   return { runId: run.runId, leaseToken: run.leaseToken, candidates: [], sources: [{ name: "Lab", type: "lab", url: "https://example.org/lab", status: "checked", ...(focus ? { focusIds: [focus.id] } : {}) }], completed: true, coverage: { checked: 1, failed: 0, pending: 0 }, ...extra };
 }
+function analysisFixture(t) {
+  const f = fixture(t);
+  f.database.prepare("INSERT INTO projects(id,name,created_at,notes) VALUES(?,?,?,?)").run("related-project", "Existing Scientific Tools", f.now() - 10000, "开发科学计算工具，面向材料研究客户。");
+  f.database.prepare("INSERT INTO people(id,name,created_at,organization) VALUES(?,?,?,?)").run("contact-person", "Existing Researcher", f.now() - 10000, "合成实验室研究员，公开研究方向为科学计算。");
+  f.database.exec("CREATE TABLE documents(id TEXT PRIMARY KEY,owner_type TEXT,owner_id TEXT,path TEXT,updated_at INTEGER)");
+  const documentPath = path.join(f.directory, "contact-research.md");
+  fs.writeFileSync(documentPath, "# Synthetic relationship\n\n与候选创始人共同参加过公开学术研讨。\n");
+  f.database.prepare("INSERT INTO documents VALUES(?,?,?,?,?)").run("contact-note", "person", "contact-person", documentPath, f.now() - 10000);
+  const via = { type: "person", id: "contact-person", name: "Wrong supplied contact name" };
+  const target = { type: "project", id: "related-project", name: "Wrong supplied project name" };
+  return { ...f, documentPath,
+    contact: { via, chain: ["Existing Researcher", "公开研讨", "候选创始人"], basis: "library_record", reason: "库内纪要记载公开活动交集，认识程度仍需确认。", nextStep: "先询问库内联系人是否愿意介绍。", evidence: [{ kind: "library", entity: { ...via }, quote: "与候选创始人共同参加过公开学术研讨。", documentPath }] },
+    link: { target, relation: "same_direction", reason: "同属科学计算工具。", difference: "候选的目标客户和产品形态仍需确认。", evidence: [{ kind: "library", entity: { ...target }, quote: "开发科学计算工具，面向材料研究客户。" }] }
+  };
+}
+const found = item => ({ status: "found", note: "合成测试：已检查公开来源与库内记录。", items: [structuredClone(item)] });
+
+test("contact paths and research links read canonical anchors and verified owned record/document quotes", t => {
+  const f = analysisFixture(t), run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: found(f.contact), researchLinks: found(f.link) })] }));
+  const stored = f.ledger.snapshot().candidates[0];
+  assert.equal(stored.contactPaths.items[0].via.name, "Existing Researcher");
+  assert.equal(stored.contactPaths.items[0].evidence[0].entity.name, "Existing Researcher");
+  assert.equal(stored.researchLinks.items[0].target.name, "Existing Scientific Tools");
+  assert.equal(stored.researchLinks.items[0].evidence[0].entity.name, "Existing Scientific Tools");
+  assert.equal(stored.contactPaths.checkedAt, f.now());
+  f.ledger.complete(run);
+  assert.equal(f.ledger.snapshot().run.status, "idle");
+});
+
+test("analysis rejects invented anchors, borrowed owner documents and nonexistent quotes atomically", t => {
+  const f = analysisFixture(t), run = f.ledger.begin();
+  const fakeAnchor = structuredClone(f.contact); fakeAnchor.via.id = "invented";
+  assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: found(fakeAnchor) })] })), { code: "sourcing_invalid_analysis_link" });
+  const borrowed = structuredClone(f.link); borrowed.evidence = [{ ...f.contact.evidence[0], entity: { ...f.link.target } }];
+  const missingQuote = structuredClone(f.contact); missingQuote.evidence[0].quote = "该联系人承诺直接引荐。";
+  const borrowedIdentity = structuredClone(f.contact); borrowedIdentity.evidence = structuredClone(f.link.evidence);
+  for (const [field, item] of [["researchLinks", borrowed], ["contactPaths", missingQuote], ["contactPaths", borrowedIdentity]]) {
+    assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ [field]: found(item) })] })), { code: "sourcing_invalid_analysis_evidence" });
+  }
+  assert.deepEqual(f.ledger.snapshot().candidates, []);
+});
+
+test("newly added records cannot become historical contact anchors or research comparisons", t => {
+  const f = analysisFixture(t), run = f.ledger.begin();
+  f.database.prepare("INSERT INTO people(id,name,created_at,organization) VALUES(?,?,?,?)").run("new-contact", "New Person", f.now(), "Synthetic research organization");
+  f.database.prepare("INSERT INTO projects(id,name,created_at,notes) VALUES(?,?,?,?)").run("new-project", "New Project", f.now(), "Synthetic scientific tools");
+  const contact = { ...f.contact, via: { type: "person", id: "new-contact", name: "New Person" }, evidence: [{ kind: "library", entity: { type: "person", id: "new-contact" }, quote: "Synthetic research organization" }] };
+  const link = { ...f.link, target: { type: "project", id: "new-project", name: "New Project" }, evidence: [{ kind: "library", entity: { type: "project", id: "new-project" }, quote: "Synthetic scientific tools" }] };
+  for (const extra of [{ contactPaths: found(contact) }, { researchLinks: found(link) }]) {
+    assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate(extra)] })), { code: "sourcing_invalid_analysis_link" });
+  }
+  assert.deepEqual(f.ledger.snapshot().candidates, []);
+});
+
+test("a candidate's matched project cannot serve as its own research comparison", t => {
+  const f = analysisFixture(t);
+  f.database.prepare("UPDATE projects SET notes=notes || ' https://example.org/company' WHERE id=?").run("related-project");
+  const run = f.ledger.begin();
+  assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ name: "Existing Scientific Tools", intake: { status: "matched", projectId: "related-project" }, researchLinks: found(f.link) })] })), { code: "sourcing_invalid_analysis_link" });
+  assert.deepEqual(f.ledger.snapshot().candidates, []);
+});
+
+test("library evidence requires a registered owned text document inside the current library", t => {
+  const f = analysisFixture(t), run = f.ledger.begin();
+  const unregistered = path.join(f.directory, "unregistered.md"); fs.writeFileSync(unregistered, f.contact.evidence[0].quote);
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "sourcing-outside-evidence-"));
+  t.after(() => fs.rmSync(outsideDir, { recursive: true, force: true }));
+  const outside = path.join(outsideDir, "outside.md"); fs.writeFileSync(outside, f.contact.evidence[0].quote);
+  f.database.prepare("INSERT INTO documents VALUES(?,?,?,?,?)").run("outside", "person", "contact-person", outside, f.now());
+  for (const documentPath of [unregistered, outside]) {
+    const item = structuredClone(f.contact); item.evidence[0].documentPath = documentPath;
+    assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: found(item) })] })), { code: "sourcing_invalid_analysis_evidence" });
+  }
+});
+
+test("public overlaps require own library evidence plus a web citation listed in candidate sources", t => {
+  const f = analysisFixture(t), run = f.ledger.begin();
+  const item = { ...structuredClone(f.contact), basis: "public_overlap" };
+  assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: found(item) })] })), { code: "sourcing_invalid_analysis_evidence" });
+  item.evidence.push({ kind: "web", url: "https://example.org/event", quote: "公开嘉宾名单同时列出两人。" });
+  assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: found(item) })] })), { code: "sourcing_invalid_analysis_evidence" });
+  const sources = [...candidate().sources, { url: "https://example.org/event", type: "event", title: "Synthetic event" }];
+  f.ledger.merge(receipt(run, { candidates: [candidate({ sources, contactPaths: found(item) })] }));
+  assert.equal(f.ledger.snapshot().candidates[0].contactPaths.items[0].basis, "public_overlap");
+  const webOnly = { ...structuredClone(f.link), evidence: [item.evidence[1]] };
+  assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ sources, researchLinks: found(webOnly) })] })), { code: "sourcing_invalid_analysis_evidence" });
+});
+
+test("analysis states distinguish pending, substantiated no-match and invalid empty found claims", t => {
+  const f = fixture(t), run = f.ledger.begin();
+  for (const block of [
+    { status: "found", items: [], note: "" }, { status: "not_found", items: [], note: " " },
+    { status: "not_found", items: [{}], note: "checked" }, { status: "done", items: [], note: "checked" }
+  ]) assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: block })] })), { code: "sourcing_invalid_analysis" });
+  f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: undefined, researchLinks: undefined })] }));
+  const stored = f.ledger.snapshot().candidates[0];
+  assert.deepEqual(stored.contactPaths, { status: "pending", note: "", items: [] });
+  assert.deepEqual(stored.researchLinks, { status: "pending", note: "", items: [] });
+  f.ledger.complete(run);
+  assert.equal(f.ledger.snapshot().run.status, "partial");
+  assert.equal(f.ledger.snapshot().run.lastSuccessAt, undefined);
+  assert.match(f.ledger.snapshot().run.error, /候选关联分析/);
+  const retry = f.ledger.begin({ force: true });
+  f.ledger.merge(receipt(retry, { candidates: [candidate({ id: stored.id })] }));
+  f.ledger.complete(retry);
+  assert.equal(f.ledger.snapshot().run.status, "idle");
+});
+
+test("omitted analysis keeps old timestamps but a new run needs explicit rechecking; same-run reuse is valid", t => {
+  const f = fixture(t), first = f.ledger.begin();
+  f.ledger.merge(receipt(first, { candidates: [candidate()] })); f.ledger.complete(first);
+  const old = f.ledger.snapshot().candidates[0], lastSuccess = f.ledger.snapshot().run.lastSuccessAt;
+  f.advance(86400000);
+  const next = f.ledger.begin();
+  f.ledger.merge(receipt(next, { candidates: [candidate({ contactPaths: undefined, researchLinks: undefined })] }));
+  assert.deepEqual(f.ledger.snapshot().candidates[0].contactPaths, old.contactPaths);
+  f.ledger.complete(next);
+  assert.equal(f.ledger.snapshot().run.status, "partial");
+  assert.equal(f.ledger.snapshot().run.lastSuccessAt, lastSuccess);
+  f.advance(1000);
+  const retry = f.ledger.begin({ force: true });
+  f.ledger.merge(receipt(retry, { candidates: [candidate({ contactPaths: { ...noMatch(), checkedAt: 99999999999999 } })], completed: false }));
+  const checked = f.ledger.snapshot().candidates[0].contactPaths.checkedAt;
+  assert.equal(checked, f.now());
+  f.advance(1000);
+  f.ledger.merge(receipt(retry, { candidates: [candidate({ contactPaths: undefined, researchLinks: undefined })] }));
+  assert.equal(f.ledger.snapshot().candidates[0].contactPaths.checkedAt, checked);
+  f.ledger.complete(retry);
+  assert.equal(f.ledger.snapshot().run.status, "idle");
+});
+
+test("completion rechecks analysis evidence and old ledgers expose missing blocks as pending", t => {
+  const f = analysisFixture(t), run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: found(f.contact), researchLinks: found(f.link) })] }));
+  fs.writeFileSync(f.documentPath, "# Deleted relationship evidence\n");
+  assert.throws(() => f.ledger.complete(run), { code: "sourcing_invalid_analysis_evidence" });
+  assert.equal(f.ledger.snapshot().run.lastSuccessAt, undefined);
+  const persisted = f.ledger.read();
+  delete persisted.candidates[0].contactPaths; delete persisted.candidates[0].researchLinks;
+  f.ledger.write(persisted);
+  assert.equal(f.ledger.snapshot().candidates[0].contactPaths.status, "pending");
+  f.ledger.complete(run);
+  assert.equal(f.ledger.snapshot().run.status, "partial");
+});
+
+for (const type of ["person", "project"]) test(`completion rejects a deleted ${type} analysis anchor after merge`, t => {
+  const f = analysisFixture(t), run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate({ contactPaths: found(f.contact), researchLinks: found(f.link) })] }));
+  f.database.prepare(`DELETE FROM ${type === "person" ? "people" : "projects"} WHERE id=?`).run(type === "person" ? "contact-person" : "related-project");
+  assert.throws(() => f.ledger.complete(run), { code: "sourcing_invalid_analysis_link" });
+  assert.equal(f.ledger.snapshot().run.lastSuccessAt, undefined);
+  assert.equal(f.ledger.snapshot().run.status, "running");
+});
 
 test("duplicate discoveries merge, provenance and first discovery remain stable", t => {
   const f = fixture(t), run = f.ledger.begin();

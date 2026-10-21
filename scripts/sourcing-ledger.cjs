@@ -184,6 +184,44 @@ function identityUrl(value, sources) {
   if (/(?:^|\/)(?:team|people|alumni|members|events|program|participants|speakers|list)(?:\.(?:html?|php))?(?:\/index\.(?:html?|php))?\/?$/i.test(new URL(url).pathname)) throw fail("名单页不能作为个人或公司的专属身份链接。", "sourcing_identity_required");
   return url;
 }
+const RESEARCH_RELATIONS = new Set(["similar_product", "same_direction", "competitor", "upstream", "downstream", "complementary", "team_connection"]);
+const pendingAnalysis = () => ({ status: "pending", note: "", items: [] });
+function analysisText(value, label) {
+  if (typeof value !== "string" || !value.trim()) throw fail(`${label}需要非空文字。`, "sourcing_invalid_analysis");
+  return value.trim();
+}
+function analysisAnchor(raw) {
+  if (!raw || !["project", "person"].includes(raw.type) || typeof raw.id !== "string" || !raw.id.trim()) throw fail("联系或研究关联需要真实项目/人脉类型和 ID。", "sourcing_invalid_analysis");
+  return { type: raw.type, id: raw.id.trim(), name: text(raw.name) };
+}
+function normalizeEvidence(raw) {
+  if (!raw || !["library", "web"].includes(raw.kind)) throw fail("关联依据需要 library 或 web 类型。", "sourcing_invalid_analysis");
+  const quote = analysisText(raw.quote, "关联依据引用");
+  if (raw.kind === "web") return { kind: "web", url: httpUrl(raw.url), quote };
+  return { kind: "library", entity: analysisAnchor(raw.entity), quote,
+    ...(raw.documentPath !== undefined ? { documentPath: analysisText(raw.documentPath, "库内依据文档路径") } : {}) };
+}
+function normalizeAnalysis(raw, previous, kind, now) {
+  if (raw === undefined) return previous ? structuredClone(previous) : pendingAnalysis();
+  if (!raw || typeof raw !== "object" || !["pending", "found", "not_found"].includes(raw.status)
+    || (raw.note !== undefined && typeof raw.note !== "string") || !Array.isArray(raw.items)) throw fail("联系路径和研究关联需要有效状态、说明及 items 数组。", "sourcing_invalid_analysis");
+  const note = text(raw.note);
+  if ((raw.status === "found" && !raw.items.length) || (raw.status === "not_found" && (raw.items.length || !note))) throw fail("found 需要实际结果；not_found 需要空结果及具体检索说明。", "sourcing_invalid_analysis");
+  const items = raw.items.map(item => {
+    if (!item || !Array.isArray(item.evidence) || !item.evidence.length) throw fail("联系或研究关联需要至少一条依据。", "sourcing_invalid_analysis");
+    const evidence = item.evidence.map(normalizeEvidence), reason = analysisText(item.reason, "关联理由");
+    if (kind === "contactPaths") {
+      if (!["library_record", "public_overlap"].includes(item.basis) || !Array.isArray(item.chain) || !item.chain.length
+        || item.chain.some(hop => typeof hop !== "string" || !hop.trim())) throw fail("联系路径需要有效依据类型及非空关系链。", "sourcing_invalid_analysis");
+      return { via: analysisAnchor(item.via), chain: item.chain.map(hop => hop.trim()), basis: item.basis, reason,
+        nextStep: analysisText(item.nextStep, "联系下一步"), evidence };
+    }
+    if (!RESEARCH_RELATIONS.has(item.relation)) throw fail("研究关联类型无效。", "sourcing_invalid_analysis");
+    return { target: analysisAnchor(item.target), relation: item.relation, reason, difference: analysisText(item.difference, "关联差异或待核验项"), evidence };
+  });
+  // Only an explicit, revalidated block receives this run's server timestamp.
+  return { status: raw.status, note, items, ...(raw.status !== "pending" ? { checkedAt: now } : {}) };
+}
 function normalizeCandidate(raw, now, existing) {
   const name = text(raw.name);
   if (!name || name.length > 300) throw fail("候选名称不能为空或过长。");
@@ -214,7 +252,9 @@ function normalizeCandidate(raw, now, existing) {
     ...(text(raw.signalDate ?? existing?.signalDate) ? { signalDate: text(raw.signalDate ?? existing?.signalDate) } : {}),
     stage, confidence, sources: mergedSources,
     discoveryPath: unique([...(existing?.discoveryPath || []), ...(raw.discoveryPath || [])]), relatedEntities,
-    intake, nextAction: text(raw.nextAction ?? existing?.nextAction)
+    intake, nextAction: text(raw.nextAction ?? existing?.nextAction),
+    contactPaths: normalizeAnalysis(raw.contactPaths, existing?.contactPaths, "contactPaths", now),
+    researchLinks: normalizeAnalysis(raw.researchLinks, existing?.researchLinks, "researchLinks", now)
   };
 }
 function parseList(value) { try { const list = JSON.parse(value || "[]"); return Array.isArray(list) ? list : []; } catch { return []; } }
@@ -236,6 +276,64 @@ function entityVersions(databasePath) {
 function insideLibrary(file, libraryDir) {
   if (!path.isAbsolute(text(file))) return false;
   try { const root = fs.realpathSync(libraryDir), real = fs.realpathSync(file); return real.startsWith(`${root}${path.sep}`); } catch { return false; }
+}
+function validateAnalysis(candidate, run, databasePath, libraryDir) {
+  const analyses = [candidate.contactPaths, candidate.researchLinks];
+  if (!analyses.some(analysis => analysis?.items?.length)) return;
+  const { DatabaseSync } = require("node:sqlite");
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  const hasDocuments = Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'").get());
+  const normalizeQuote = value => text(value).replace(/\s+/g, " ");
+  const rows = new Map();
+  function readAnchor(anchor) {
+    const key = `${anchor.type}/${anchor.id}`;
+    if (!rows.has(key)) rows.set(key, database.prepare(`SELECT * FROM ${anchor.type === "project" ? "projects" : "people"} WHERE id=?`).get(anchor.id));
+    const row = rows.get(key);
+    if (!row) throw fail(`联系或研究关联档案不存在：${key}`, "sourcing_invalid_analysis_link");
+    anchor.name = row.name;
+    return row;
+  }
+  function validateEvidence(evidence) {
+    if (evidence.kind === "web") {
+      if (!candidate.sources.some(source => source.url === evidence.url)) throw fail("网页关联依据必须列入候选 sources；这里只验证引用，不代替联网核查。", "sourcing_invalid_analysis_evidence");
+      return;
+    }
+    const row = readAnchor(evidence.entity), quote = normalizeQuote(evidence.quote);
+    const fields = ["name", "legal_name", "aliases_json", "domain", "subdomains_json", "notes", "organization", "financing_history", "investors_json", "cities_json", "types_json", "status", "rating"];
+    const files = unique([row.document_path, ...(hasDocuments ? database.prepare("SELECT path FROM documents WHERE owner_type=? AND owner_id=?").all(evidence.entity.type, evidence.entity.id).map(doc => doc.path) : [])]);
+    const isOwned = file => {
+      if (!files.some(owned => path.resolve(owned) === path.resolve(file))) return false;
+      let real;
+      try { real = fs.realpathSync(file); } catch { return false; }
+      return !hasDocuments || !database.prepare("SELECT 1 FROM documents WHERE (path=? OR path=?) AND (owner_type<>? OR owner_id<>?)")
+        .get(path.resolve(file), real, evidence.entity.type, evidence.entity.id);
+    };
+    if (evidence.documentPath && (!path.isAbsolute(evidence.documentPath) || !isOwned(evidence.documentPath))) throw fail("库内依据文档必须已登记在所引用的档案名下。", "sourcing_invalid_analysis_evidence");
+    if (!evidence.documentPath && fields.some(field => typeof row[field] === "string" && normalizeQuote(row[field]).includes(quote))) return;
+    let remaining = 5 * 1024 * 1024;
+    for (const file of evidence.documentPath ? [evidence.documentPath] : files) {
+      if (!isOwned(file) || !insideLibrary(file, libraryDir) || !/\.(?:md|markdown|txt)$/i.test(file)) continue;
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > remaining) continue;
+      const content = fs.readFileSync(file, "utf8"); remaining -= stat.size;
+      if (normalizeQuote(content).includes(quote)) return;
+    }
+    throw fail(`库内依据引用无法在该档案的文字字段或库内已登记文档中找到：${evidence.entity.type}/${evidence.entity.id}`, "sourcing_invalid_analysis_evidence");
+  }
+  try {
+    database.exec("BEGIN");
+    for (const analysis of analyses) for (const item of analysis?.items || []) {
+      const anchor = item.via || item.target;
+      readAnchor(anchor);
+      if (!Object.hasOwn(run.entityVersions || {}, `${anchor.type}/${anchor.id}`)) throw fail("联系入口和研究对照必须是本轮开始前已有的库内档案，不能把新入库候选当作已有关系。", "sourcing_invalid_analysis_link");
+      if (item.target && (anchor.type === "project" ? candidate.intake.projectId === anchor.id : candidate.intake.personIds?.includes(anchor.id))) throw fail("候选自身的匹配档案属于入库查重，不能作为研究对照。", "sourcing_invalid_analysis_link");
+      for (const evidence of item.evidence) validateEvidence(evidence);
+      if (!item.evidence.some(evidence => evidence.kind === "library" && evidence.entity.type === anchor.type && evidence.entity.id === anchor.id)) {
+        throw fail("联系或研究关联必须包含所经由/比较的档案自身的库内依据。", "sourcing_invalid_analysis_evidence");
+      }
+      if (item.basis === "public_overlap" && !item.evidence.some(evidence => evidence.kind === "web")) throw fail("公开交集还需要候选来源中的网页依据。", "sourcing_invalid_analysis_evidence");
+    }
+  } finally { database.close(); }
 }
 function entityCorroborates(candidate, reference, row, database, libraryDir) {
   const expectedNames = reference.type === "project" ? [candidate.name] : candidate.kind === "person" ? [candidate.name] : candidate.founders;
@@ -371,7 +469,7 @@ class SourcingLedger {
       run.focusCoverage = focusCoverage(value.run.focusOutcomes);
       run.focusResults = Object.entries(value.run.focusOutcomes).map(([focusId, result]) => ({ focusId, ...result }));
     }
-    return { ok: true, configured: true, settings: { ...value.settings }, candidates: value.candidates, sources: value.sources.map(source => ({ ...source, inScope: sourceInScope(source, value) })), focuses: value.focuses || [], focusConfigured: focusConfigured(value), excludedSourceUrls: excludedSourceUrls(value), run };
+    return { ok: true, configured: true, settings: { ...value.settings }, candidates: value.candidates.map(candidate => ({ ...candidate, contactPaths: candidate.contactPaths || pendingAnalysis(), researchLinks: candidate.researchLinks || pendingAnalysis() })), sources: value.sources.map(source => ({ ...source, inScope: sourceInScope(source, value) })), focuses: value.focuses || [], focusConfigured: focusConfigured(value), excludedSourceUrls: excludedSourceUrls(value), run };
   }
   transaction(operation) {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
@@ -458,6 +556,7 @@ class SourcingLedger {
         if (previous?.lastSeenAt < run.startedAt && !raw.intake?.receipts) candidate.intake.receipts = [];
         if (!raw.intake && previous?.intake.status === "created" && previous.lastSeenAt < run.startedAt) candidate.intake.status = "matched";
         validateLinks(candidate, run, this.databasePath, path.dirname(this.directory), value.settings.autoIntake);
+        validateAnalysis(candidate, run, this.databasePath, path.dirname(this.directory));
         if (!value.settings.autoIntake && candidate.intake.status === "created") throw fail("自动入库未启用，不能将本轮候选标记为自动新建。", "sourcing_intake_disabled");
         if (index < 0) candidates.push(candidate); else candidates[index] = candidate;
         ids.push(candidate.id);
@@ -501,15 +600,19 @@ class SourcingLedger {
     return this.transaction((value, now) => {
       const run = this.active(value, input, now);
       if (!run.receipt || !run.receipt.mergedAt || !run.receipt.coverage) throw fail("未找到本轮已持久化的搜索回执；不能把任务结束视为更新成功。", "sourcing_receipt_missing");
+      let analysisPending = false;
       for (const id of run.receipt.candidateIds) {
         const candidate = value.candidates.find(item => item.id === id);
         if (!candidate) throw fail("本轮候选回执缺失，无法完成更新。", "sourcing_receipt_missing");
         validateLinks(candidate, run, this.databasePath, path.dirname(this.directory), value.settings.autoIntake);
+        validateAnalysis(candidate, run, this.databasePath, path.dirname(this.directory));
+        if ([candidate.contactPaths, candidate.researchLinks].some(analysis => !["found", "not_found"].includes(analysis?.status)
+          || !Number.isFinite(analysis.checkedAt) || analysis.checkedAt < run.startedAt)) analysisPending = true;
       }
       const focused = focusCoverage(run.focusOutcomes);
-      const partial = run.coverage.failed > 0 || run.coverage.pending > 0 || focused.failed > 0 || focused.pending > 0;
+      const partial = run.coverage.failed > 0 || run.coverage.pending > 0 || focused.failed > 0 || focused.pending > 0 || analysisPending;
       run.status = partial ? "partial" : "idle";
-      if (partial) { run.retryAt = now + RETRY_MS; run.error = "部分来源或关注对象未完成，保留已发现候选并稍后续扫。"; }
+      if (partial) { run.retryAt = now + RETRY_MS; run.error = "部分来源、关注内容或候选关联分析未完成，保留已发现候选并稍后续扫。"; }
       else { run.lastSuccessAt = now; run.successfulDayKey = run.dayKey; delete run.retryAt; delete run.error; }
       delete run.leaseToken; delete run.receipt; delete run.leaseUntil;
     });
