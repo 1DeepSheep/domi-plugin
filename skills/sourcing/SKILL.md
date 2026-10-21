@@ -1,15 +1,15 @@
 ---
 name: sourcing
-description: Investment sourcing workflow for discovering potential founders, mapping founder talent pools, running public-source background checks, planning warm introductions, and managing investor relationship data in domi's currently configured people repository.
+description: Discover potential founders and early teams from the user's natural-language interests, including mixed topics, institutions, companies, people and professional relationships; run the daily underwater-project radar, verify public signals, and deduplicate authorized intake into domi's configured project and people repositories. Also supports profiles, public background checks, and relationship management.
 ---
 
 # Sourcing
 
-Use this skill to turn ad hoc founder leads and relationship notes into a disciplined sourcing system: discover people, verify background signals, map relationship paths, and keep the current domi people repository current.
+Use this skill to discover people and early projects, verify professional signals, map relationship paths, and keep authorized sourcing results traceable in domi.
 
 When the user explicitly asks to send, download, or view an actual sourcing report or profile file, read and follow [cross-client artifact delivery](../domi-router/references/artifact-delivery.md) on demand; a plain path, source link, or serialized internal file directive is not a delivered attachment.
 
-When the task reads or writes internal people data, first read `../investment-mgmt/references/storage-backends.md` and lock the returned backend:
+When the task reads or writes internal project or people data, first read `../investment-mgmt/references/storage-backends.md` and lock the returned backend:
 
 - `repositoryBackend=local`: use the plugin-level `scripts/domi-repo.cjs person search/upsert` commands; Feishu remains an explicit external action only.
 - `repositoryBackend=legacy_feishu_primary`: also read `../investment-mgmt/references/legacy-feishu-primary.md` and use the existing People Base plus its Feishu document chain. Do not call `domi-repo.cjs` or create a parallel local person record.
@@ -18,8 +18,13 @@ When the task reads or writes internal people data, first read `../investment-mg
 
 Start by identifying the mode. If the request mixes modes, run them in this order: source candidates -> enrich profiles -> plan outreach -> update the current people repository.
 
+For `underwater_discover`, read [daily underwater discovery](references/underwater-discovery.md) and follow its dedicated discovery → identity/deduplication → evidence-based intake → persisted run receipt flow. It handles both people and projects; do not substitute ordinary people-only intake or automatically add investment ratings. The client owns the daily schedule, natural-language focus descriptions and source URLs; this skill executes the frozen scope of each claimed run. A freeform description can mix topics, institutions, companies, people, relationships and exclusions: interpret it into temporary search branches, preserve the original text, and do not require the user to classify it. Record the interpretation and actual branch checks in the focus receipt; unresolved identities or ambiguous references stay pending instead of broadening the search. Existing typed focus objects retain their established semantics. Paused objects and their exclusive sources never become search seeds. snapshot.excludedSourceUrls overrides saved URLs and links in the description: do not visit or submit excluded URLs; check the focus through other valid entrances. Once focus configuration has been saved, pausing or deleting every focus stops discovery; legacy source-only behavior is available only when snapshot.focusConfigured is false, never merely because the focus list is empty.
+
+For each underwater candidate processed in a daily run, also check current project/person records and registered research/meeting documents for two separate results: `contactPaths` (evidenced routes through a library person or project; introduction availability still unconfirmed) and `researchLinks` (specific similarities, differences and relationships to library projects or evidenced prior research). Contact via and comparison target anchors must already exist at run start; newly created records cannot stand in for known contacts or prior research, and comparison targets cannot be the candidate's own intake-linked entities. Read all relevant index pages, verify real entity IDs and precise evidence ownership, and distinguish not searched from searched with no result. A record in the library does not prove the user knows that person, public overlap does not prove an introduction is possible, and a similar product is not automatically a duplicate entity. This workflow prepares evidence and next steps; it does not send messages.
+
 | Mode | Use for | Typical output |
 |---|---|---|
+| `underwater_discover` | Continuously discover founders, unnamed teams, early products and companies within the user's natural-language interests and professional relationship boundaries, supplemented by source URLs; refresh the client's 水下项目 section. | Persistent candidates, evidence-based contact paths and research comparisons, per-focus and branch coverage, source lineage, verified project/person links, and a run receipt. |
 | `discover` | Find potential founders or founder-like talent for a thesis, sector, geography, school/company alumni pool, or emerging technology area. | Ranked candidate list with evidence and next action. |
 | `profile` | Build a structured profile for one person. | Person profile with identity, career, projects, public signals, relationship path, and confidence. |
 | `background-check` | Verify a person's public track record before meeting, investing, hiring, referencing, or introducing. | Background memo with verified facts, open questions, and risk flags. |
@@ -33,7 +38,7 @@ Before collecting data, lock the brief:
 1. Define target scope: sector/thesis, stage, geography, role, seniority, company types, time window, and exclusion criteria.
 2. Define purpose: sourcing, meeting prep, reference check, intro planning, portfolio support, or relationship hygiene.
 3. Identify whether the user wants only a chat answer, an update to the current people repository, or both.
-4. Use only public, user-provided, or authorized internal sources. Do not infer or store sensitive personal attributes such as health, religion, ethnicity, political views, family status, or private contact details unless the user explicitly provided them and they are directly needed for the task.
+4. Use only public, user-provided, or authorized internal sources. Do not infer or store sensitive personal attributes such as health, religion, ethnicity, political views, family status, or private contact details unless the user explicitly provided them and they are directly needed for the task. Never infer ethnicity from a name, language, school, or photograph; use the user's business/geographic scope and evidenced professional connections.
 5. Mark every important claim as `verified`, `user-provided`, `inferred`, or `unverified`; include source and date for time-sensitive facts.
 
 ## Step 1: Route Tools
@@ -56,7 +61,7 @@ Read the current backend schema before writing; do not assume obsolete field nam
 1. Search before creating: dedupe by name + current organization + canonical profile URL + authorized email/open_id when available.
 2. Prefer updating an existing person record over creating a duplicate.
 3. If a useful field does not exist, place the information in an existing notes/summary field or ask before extending the current schema.
-4. For bulk writes or uncertain merges, show the proposed changes and wait for confirmation. If the user explicitly asks to update a specific record and the match is unambiguous, proceed.
+4. For bulk writes or uncertain merges, show the proposed changes and wait for confirmation, unless the user has already explicitly authorized recurring automatic intake within a defined scope. In `underwater_discover`, that saved authorization permits qualifying, unambiguous records to be created or enriched without asking again; unresolved matches stay on the candidate watchlist. It does not authorize destructive merging, deleting, overwriting conflicting facts, or changing investment ratings/contact status. If the user explicitly asks to update a specific record and the match is unambiguous, proceed.
 
 Common field concepts to map if present: name, current organization, role/title, location, sector tags, source, canonical profile URL, contact channel, relationship owner, relationship strength, mutual contacts, intro path, touchpoints, last interaction date, next follow-up date, status, background summary, risk flags, confidence, related project/company, and notes.
 
