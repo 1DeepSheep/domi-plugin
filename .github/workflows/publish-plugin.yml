@@ -57,6 +57,7 @@ jobs:
           node scripts/notes-format.test.cjs
           node scripts/notes-coverage.test.cjs
           node scripts/process-lock.test.cjs
+          node --test scripts/sourcing-ledger.test.cjs scripts/sourcing-ledger.integration.test.cjs
           node scripts/asr-notes-skill.test.cjs
           node scripts/financing-fields.test.cjs
           node scripts/intake-time-fields.test.cjs
