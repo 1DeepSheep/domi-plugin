@@ -285,6 +285,62 @@ test("name-only focuses are independent of web sources; partial config preserves
   assert.equal(f.ledger.snapshot().sources.length, 1);
 });
 
+test("freeform scope preserves multiline description without classifying or extracting URLs", t => {
+  const f = fixture(t);
+  const description = `关注ＡＩ科学、重点实验室和相关创业团队。\n  王教授的学生也可以，但不要猜测私人关系。\n指定入口：https://example.org/people\n${"保持用户原文；".repeat(60)}`;
+  f.ledger.configure({ focuses: [{ type: "freeform", name: ` \n${description}\n ` }] });
+  const focus = f.ledger.snapshot().focuses[0];
+  assert.ok(focus.name.length > 300);
+  assert.equal(focus.name, description);
+  assert.equal(focus.type, "freeform");
+  assert.deepEqual(focus.keywords, []);
+  assert.deepEqual(focus.relations, []);
+  assert.deepEqual(focus.urls, []);
+  const run = f.ledger.begin();
+  assert.deepEqual(f.ledger.read().run.focusPlan, [focus]);
+  assert.deepEqual(f.ledger.read().run.sourceOutcomes, {});
+  assert.deepEqual(run.snapshot.run.focusCoverage, { checked: 0, failed: 0, pending: 1 });
+  f.ledger.merge(receipt(run, { focusResults: [{ focusId: focus.id, status: "checked", detail: "已逐项检查描述中的实验室、团队及指定公开入口。" }] }));
+  f.ledger.complete(run);
+  assert.equal(f.ledger.snapshot().run.status, "idle");
+  assert.equal(f.ledger.snapshot().sources[0].focusIds[0], focus.id);
+});
+
+test("freeform accepts 4000 characters and rejects over-limit or empty descriptions atomically", t => {
+  const f = fixture(t);
+  f.ledger.configure({ focuses: [{ type: "freeform", name: "文".repeat(4000) }] });
+  const before = f.ledger.snapshot().focuses;
+  assert.equal(before[0].name.length, 4000);
+  for (const name of ["文".repeat(4001), " \n\t ", 123]) {
+    assert.throws(() => f.ledger.configure({ focuses: [{ type: "freeform", name }] }), { code: "sourcing_invalid_focus" });
+    assert.deepEqual(f.ledger.snapshot().focuses, before);
+  }
+  assert.throws(() => f.ledger.configure({ focuses: [{ type: "lab", name: "文".repeat(301) }] }), { code: "sourcing_invalid_focus" });
+});
+
+test("mixed freeform and legacy focuses preserve existing IDs and typed normalization", t => {
+  const f = fixture(t);
+  f.ledger.configure({ focuses: [
+    { type: "direction", name: " ＡＩ 科学 " }, { type: "lab", name: "重点实验室", relations: ["alumni"] },
+    { type: "company", name: "目标公司" }, { type: "person", name: "王教授", urls: ["https://example.org/profile"] }
+  ] });
+  const legacy = f.ledger.snapshot().focuses;
+  assert.equal(legacy[0].name, "AI 科学");
+  f.ledger.configure({ focuses: [...legacy, { type: "freeform", name: "ＡＩ方向\n  以及上述实验室的新团队。" }] });
+  let mixed = f.ledger.snapshot().focuses;
+  assert.deepEqual(mixed.slice(0, 4), legacy);
+  const freeform = mixed[4];
+  f.ledger.configure({ focuses: [...legacy.map(focus => ({ id: focus.id })), { id: freeform.id, name: "ＡＩ方向\n  只关注公开创业线索。" }] });
+  mixed = f.ledger.snapshot().focuses;
+  assert.deepEqual(mixed.slice(0, 4), legacy);
+  assert.equal(mixed[4].id, freeform.id);
+  assert.equal(mixed[4].type, "freeform");
+  assert.equal(mixed[4].name, "ＡＩ方向\n  只关注公开创业线索。");
+  assert.deepEqual(mixed[4].relations, []);
+  assert.throws(() => f.ledger.configure({ focuses: [mixed[4], { ...mixed[4], id: undefined, name: "AI方向 只关注公开创业线索。" }] }), { code: "sourcing_duplicate_focus" });
+  assert.deepEqual(f.ledger.snapshot().focuses, mixed);
+});
+
 test("focus identity does not collapse same-name people and rejects only duplicate definitions", t => {
   const f = fixture(t);
   const one = { type: "person", name: "Wei Wang", keywords: ["MMLab", "Vision"], urls: ["https://one.example/profile"], relations: ["students", "coauthors"] };

@@ -130,7 +130,7 @@ function mergeSources(current, incoming, now, removedSourceUrls = [], run = {}) 
   }
   return next;
 }
-const FOCUS_TYPES = new Set(["direction", "lab", "company", "person"]);
+const FOCUS_TYPES = new Set(["direction", "lab", "company", "person", "freeform"]);
 const FOCUS_RELATIONS = new Set(["members", "alumni", "founders", "employees", "former_employees", "students", "coauthors", "collaborators"]);
 const focusNameKey = value => text(value).normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
 const focusKey = focus => JSON.stringify({ type: focus.type, name: focusNameKey(focus.name),
@@ -143,9 +143,12 @@ function focusStrings(value, previous, label) {
 }
 function normalizeFocus(raw, previous) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw fail("关注对象必须是对象。", "sourcing_invalid_focus");
-  const name = raw.name === undefined ? previous?.name : typeof raw.name === "string" ? raw.name.trim().normalize("NFKC") : "";
   const type = raw.type === undefined ? previous?.type : raw.type;
-  if (!name || name.length > 300 || !FOCUS_TYPES.has(type)) throw fail("关注对象需要有效名称和 direction/lab/company/person 类型。", "sourcing_invalid_focus");
+  const suppliedName = raw.name === undefined ? previous?.name : raw.name;
+  // Natural-language scope is user-authored data; retain its punctuation and line breaks.
+  const name = typeof suppliedName === "string" ? type === "freeform" ? suppliedName.trim() : suppliedName.trim().normalize("NFKC") : "";
+  const maximumLength = type === "freeform" ? 4000 : 300;
+  if (!name || name.length > maximumLength || !FOCUS_TYPES.has(type)) throw fail(`关注对象需要有效名称和 direction/lab/company/person/freeform 类型；当前类型最多 ${maximumLength} 字符。`, "sourcing_invalid_focus");
   const enabled = raw.enabled === undefined ? previous?.enabled ?? true : raw.enabled;
   if (typeof enabled !== "boolean") throw fail("关注对象 enabled 必须是布尔值。", "sourcing_invalid_focus");
   const relations = focusStrings(raw.relations, previous?.relations, "关注关系");
