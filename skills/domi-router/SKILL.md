@@ -61,6 +61,7 @@ PLAUD 原生会议信息卡片可在正式模型任务之前，以精确 `fileId
 | 产品叫什么／属于谁／还有哪些产品等单点事实 | 直接执行下方「简短事实查证」 | 不加载完整项目／人物研究链路 |
 | “同步这条／处理这条录音”或处理 PLAUD 未生成录音／同步录音并入库 | 先锁定 single／all 范围，再执行 `plaud → asr-notes → 条件判断 → investment-review → investment-mgmt` | [PLAUD 投资录音](references/plaud-investment-recording-workflow.md) |
 | 查看某领域最新新闻／动态／融资 | `investment-radar scan` | [行业新闻雷达](references/industry-news-radar-workflow.md) |
+| 水下项目／每日发现创始人和创业团队／围绕重点实验室及已有项目人脉持续搜寻并查重入库 | `sourcing underwater_discover → investment-mgmt`；按已明确授权的自动入库范围执行 | [水下项目持续发现](../sourcing/references/underwater-discovery.md) |
 | 添加或管理新闻／RSS／公众号／播客信源 | `investment-radar sources` | [播客与信源](references/podcast-ingestion-workflow.md) |
 | 下载公开播客并转纪要 | `investment-radar podcast → plaud → asr-notes → investment-mgmt` | [播客与信源](references/podcast-ingestion-workflow.md) |
 | “查一下／研究一下／看看项目” | 项目 `research`：`desk-research`，交付后询问是否继续评级并入库 | [项目工作流](references/project-intake-workflow.md) |
@@ -78,6 +79,8 @@ PLAUD 原生会议信息卡片可在正式模型任务之前，以精确 `fileId
 只读取命中工作流所列的 reference；不要预加载其他工作流。任何多阶段工作流都必须完整读取 [无损交接合同](references/lossless-handoff.md)。命中不唯一时，先读取所有可能命中的工作流 reference 比较授权和停止条件；仍有实质歧义再向用户确认，不能为节省上下文猜测。
 
 ### 项目与人物消歧
+
+“水下项目”模式同时发现人物、团队、产品和公司，优先进入上述专用链路。用户已明确授权的每日自动入库不再套用普通开放式人物 intake 的二次确认，也不自动套用项目 intake 的评级阶段；仅证据充分且唯一匹配的对象可写，歧义保留候选。这一持续授权只覆盖已配置范围，不授权删除、合并、改变评级/接触状态或联系他人。
 
 按最终交付目标判断：公司／项目投资判断、项目文档或项目库走项目工作流；候选名单、人物画像、公开背调、引荐路径、关系维护或人脉库走人物工作流。人物只是项目线索时仍走项目；公司只是人物履历背景时仍走人物。只按姓名／邮箱解析飞书身份时使用 `lark-contact`，不要扩张成人物 intake。
 
