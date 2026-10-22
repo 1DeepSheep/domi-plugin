@@ -10,6 +10,8 @@ const DEFAULT_SETTINGS = Object.freeze({ enabled: false, localHour: 9, timeZone:
 const LEASE_MS = 2 * 60 * 60 * 1000;
 const RETRY_MS = 30 * 60 * 1000;
 const MAX_DAILY_ATTEMPTS = 3;
+const REVIEW_DISPOSITIONS = new Set(["none", "follow_up", "not_interested"]);
+const REVIEW_HISTORY_LIMIT = 20;
 const fail = (message, code = "sourcing_invalid") => Object.assign(new Error(message), { code });
 const text = (value) => String(value ?? "").trim();
 const unique = (values) => [...new Set((Array.isArray(values) ? values : []).map(text).filter(Boolean))];
@@ -253,6 +255,8 @@ function normalizeCandidate(raw, now, existing) {
     stage, confidence, sources: mergedSources,
     discoveryPath: unique([...(existing?.discoveryPath || []), ...(raw.discoveryPath || [])]), relatedEntities,
     intake, nextAction: text(raw.nextAction ?? existing?.nextAction),
+    // Discovery output cannot create, clear or replace the user's review decisions.
+    ...(existing?.userState ? { userState: structuredClone(existing.userState) } : {}),
     contactPaths: normalizeAnalysis(raw.contactPaths, existing?.contactPaths, "contactPaths", now),
     researchLinks: normalizeAnalysis(raw.researchLinks, existing?.researchLinks, "researchLinks", now)
   };
@@ -409,7 +413,10 @@ function validateLinks(candidate, run, databasePath, libraryDir, autoIntake) {
       if (!row) throw fail(`关联档案不存在：${reference.type}/${reference.id}`, "sourcing_invalid_link");
       const key = `${reference.type}/${row.id}`;
       if (intakeKeys.has(key)) {
-        entityCorroborates(candidate, reference, row, database, libraryDir);
+        const confirmed = candidate.userState?.sameEntity;
+        // A user can resolve aliases that automated name/URL evidence cannot. This
+        // does not waive proof for any actual repository write below.
+        if (!confirmed || confirmed.type !== reference.type || confirmed.id !== reference.id) entityCorroborates(candidate, reference, row, database, libraryDir);
         const isNew = !Object.hasOwn(run.entityVersions || {}, key) && Number(row.created_at) >= run.startedAt;
         const changed = !Object.hasOwn(run.entityVersions || {}, key) || entityVersion(database, reference.type, row) !== run.entityVersions[key];
         if (isNew) newlyCreated = true;
@@ -422,6 +429,25 @@ function validateLinks(candidate, run, databasePath, libraryDir, autoIntake) {
   } finally { database.close(); }
   if (candidate.intake.status === "created" && !newlyCreated) throw fail("标记为新入库的档案并非本轮创建；请使用已匹配。", "sourcing_invalid_link");
   if (candidate.intake.status === "matched" && newlyCreated) throw fail("本轮新建档案不能借用 matched 状态跳过入库核验。", "sourcing_invalid_link");
+}
+function currentLibraryEntity(databasePath, type, id) {
+  if (!["project", "person"].includes(type) || typeof id !== "string" || !id.trim() || id.length > 300) throw fail("请选择项目库或人脉库中的真实条目。", "sourcing_invalid_review_entity");
+  if (!fs.existsSync(databasePath)) throw fail("当前本地资料库不可读，无法确认关联档案。", "sourcing_library_unavailable");
+  const { DatabaseSync } = require("node:sqlite");
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = database.prepare(`SELECT id,name FROM ${type === "project" ? "projects" : "people"} WHERE id=?`).get(id.trim());
+    if (!row) throw fail("所选档案已不存在，请重新搜索后选择。", "sourcing_invalid_review_entity");
+    return { type, id: row.id, name: row.name };
+  } finally { database.close(); }
+}
+function validateReviewIntake(raw, previous) {
+  const confirmed = previous?.userState?.sameEntity;
+  if (!confirmed) return;
+  if ((raw.kind || previous.kind) === "person" ? confirmed.type !== "person" : confirmed.type !== "project") throw fail("候选类型与用户确认的同一实体不一致。", "sourcing_review_identity_conflict");
+  if (!raw.intake) return;
+  const ids = confirmed.type === "project" ? unique([raw.intake.projectId]) : unique(raw.intake.personIds);
+  if (ids.some(id => id !== confirmed.id)) throw fail("入库目标与用户确认的同一实体不一致；请复用人工确认的档案，不自动改写或新建重复记录。", "sourcing_review_identity_conflict");
 }
 function coverageValue(raw) {
   if (!raw || !["checked", "failed", "pending"].every(key => Number.isSafeInteger(raw[key]) && raw[key] >= 0)) throw fail("必须提供非负整数的 checked/failed/pending 覆盖回执。");
@@ -480,6 +506,66 @@ class SourcingLedger {
       this.write(value);
       return { ok: true, snapshot: this.snapshot(value), ...extra };
     } finally { release(); }
+  }
+  review(input = {}) {
+    if (!input || typeof input !== "object" || Array.isArray(input) || typeof input.candidateId !== "string" || !input.candidateId.trim()) throw fail("请选择要处理的线索。", "sourcing_invalid_review");
+    const supported = ["candidateId", "read", "disposition", "note", "sameEntity"];
+    if (Object.keys(input).some(key => !supported.includes(key)) || !supported.slice(1).some(key => Object.hasOwn(input, key))) throw fail("没有可保存的线索处理内容。", "sourcing_invalid_review");
+    if (Object.hasOwn(input, "read") && typeof input.read !== "boolean") throw fail("已读状态必须是布尔值。", "sourcing_invalid_review");
+    if (Object.hasOwn(input, "disposition") && !REVIEW_DISPOSITIONS.has(input.disposition)) throw fail("未知的线索处理状态。", "sourcing_invalid_review");
+    if (Object.hasOwn(input, "note") && (typeof input.note !== "string" || input.note.length > 4000)) throw fail("处理备注最多填写 4,000 个字符。", "sourcing_invalid_review");
+    return this.transaction((value, now) => {
+      const candidate = value.candidates.find(item => item.id === input.candidateId.trim());
+      if (!candidate) throw fail("该线索已不存在，请刷新列表。", "sourcing_candidate_missing");
+      const state = { disposition: "none", note: "", ...(candidate.userState ? structuredClone(candidate.userState) : {}) };
+      const changes = {};
+      if (Object.hasOwn(input, "sameEntity")) {
+        if (input.sameEntity === null) {
+          if (state.sameEntity) { delete state.sameEntity; changes.sameEntity = null; }
+        } else {
+          const reference = input.sameEntity;
+          const type = candidate.kind === "person" ? "person" : "project";
+          if (!reference || typeof reference !== "object" || Array.isArray(reference) || reference.type !== type) throw fail(type === "person" ? "人物线索请选择人脉库中的同一人物。" : "项目线索请选择项目库中的同一项目。", "sourcing_invalid_review_entity");
+          const entity = currentLibraryEntity(this.databasePath, reference.type, reference.id);
+          if (!state.sameEntity || state.sameEntity.type !== entity.type || state.sameEntity.id !== entity.id || state.sameEntity.name !== entity.name) {
+            state.sameEntity = { ...entity, confirmedAt: now };
+            changes.sameEntity = { ...state.sameEntity };
+          }
+        }
+      }
+      if (Object.hasOwn(input, "disposition") && state.disposition !== input.disposition) changes.disposition = state.disposition = input.disposition;
+      if (Object.hasOwn(input, "note") && state.note !== input.note.trim()) changes.note = state.note = input.note.trim();
+      if (Object.hasOwn(input, "read")) {
+        if (input.read) state.readAt = now;
+        else delete state.readAt;
+      }
+      if (Object.keys(changes).length) state.history = [...(state.history || []), { at: now, changes }].slice(-REVIEW_HISTORY_LIMIT);
+      state.updatedAt = Math.max(now, Number.isFinite(candidate.userState?.updatedAt) ? candidate.userState.updatedAt + 1 : 0);
+      candidate.userState = state;
+    });
+  }
+  searchLibrary(input = {}) {
+    if (!input || typeof input !== "object" || Array.isArray(input) || !["project", "person"].includes(input.type)
+      || typeof input.query !== "string" || !input.query.trim() || input.query.length > 200) throw fail("请选择资料库并填写 1–200 个字符的名称。", "sourcing_invalid_library_query");
+    const query = normalized(input.query);
+    if (!query) throw fail("请填写项目或人物名称。", "sourcing_invalid_library_query");
+    if (!fs.existsSync(this.databasePath)) throw fail("当前本地资料库不可读，无法搜索档案。", "sourcing_library_unavailable");
+    const { DatabaseSync } = require("node:sqlite");
+    const database = new DatabaseSync(this.databasePath, { readOnly: true });
+    try {
+      database.function("domi_normalize", normalized);
+      const isProject = input.type === "project";
+      const where = isProject
+        ? "instr(domi_normalize(name), ?) > 0 OR instr(domi_normalize(legal_name), ?) > 0 OR EXISTS (SELECT 1 FROM json_each(aliases_json) alias WHERE instr(domi_normalize(alias.value), ?) > 0)"
+        : "instr(domi_normalize(name || ' ' || COALESCE(organization,'')), ?) > 0";
+      const parameters = isProject ? [query, query, query, query] : [query, query];
+      const rows = database.prepare(`SELECT * FROM ${isProject ? "projects" : "people"} WHERE ${where} ORDER BY CASE WHEN domi_normalize(name)=? THEN 0 ELSE 1 END, name COLLATE NOCASE, id LIMIT 20`).all(...parameters);
+      const matches = rows.map(row => {
+        const summary = text(isProject ? [row.domain, row.legal_name !== row.name ? row.legal_name : ""].filter(Boolean).join(" · ") : row.organization).slice(0, 240);
+        return { type: input.type, id: row.id, name: row.name, ...(summary ? { summary } : {}) };
+      });
+      return { ok: true, snapshot: this.snapshot(), matches };
+    } finally { database.close(); }
   }
   configure(input = {}) {
     return this.transaction((value, now) => {
@@ -552,6 +638,7 @@ class SourcingLedger {
           index = candidates.findIndex(item => item.kind === raw.kind && normalized(item.name) === normalized(raw.name) && item.identityUrl === identity);
         }
         const previous = candidates[index];
+        validateReviewIntake(raw, previous);
         const candidate = normalizeCandidate(raw, now, previous);
         if (previous?.lastSeenAt < run.startedAt && !raw.intake?.receipts) candidate.intake.receipts = [];
         if (!raw.intake && previous?.intake.status === "created" && previous.lastSeenAt < run.startedAt) candidate.intake.status = "matched";
@@ -636,8 +723,9 @@ function main(argv = process.argv.slice(2)) {
     const input = index >= 0 ? JSON.parse(fs.readFileSync(args[index + 1], "utf8")) : {};
     let result;
     if (command === "snapshot") result = { ok: true, snapshot: ledger.snapshot() };
-    else if (["configure", "begin", "merge", "complete", "fail"].includes(command)) result = ledger[command](input);
-    else throw fail("用法：sourcing-ledger.cjs snapshot|configure|begin|merge|complete|fail [--json-file FILE]");
+    else if (command === "search-library") result = ledger.searchLibrary(input);
+    else if (["configure", "review", "begin", "merge", "complete", "fail"].includes(command)) result = ledger[command](input);
+    else throw fail("用法：sourcing-ledger.cjs snapshot|configure|review|search-library|begin|merge|complete|fail [--json-file FILE]");
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     let snapshot;
