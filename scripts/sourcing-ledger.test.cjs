@@ -739,3 +739,188 @@ test("a globally paused shared URL is excluded from every enabled focus plan", t
   assert.deepEqual(Object.keys(f.ledger.read().run.sourceOutcomes), []);
   assert.deepEqual(run.snapshot.excludedSourceUrls, [url]);
 });
+
+test("read state persists across reopen and daily merges without changing discovery facts", t => {
+  const f = fixture(t), run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate()] }));
+  const original = f.ledger.snapshot().candidates[0];
+  assert.equal(original.userState, undefined);
+  f.advance(1000);
+  f.ledger.review({ candidateId: original.id, read: true });
+  const loaded = new SourcingLedger({ libraryDir: f.directory, databasePath: f.databasePath, now: f.now });
+  const read = loaded.snapshot().candidates[0];
+  assert.equal(read.userState.readAt, f.now());
+  assert.equal(read.userState.updatedAt, f.now());
+  assert.equal(read.userState.history, undefined);
+  assert.equal(read.lastSeenAt, original.lastSeenAt);
+  assert.deepEqual(read.intake, original.intake);
+  f.ledger.complete(run);
+  f.advance(86400000);
+  const next = f.ledger.begin();
+  f.ledger.merge(receipt(next, { candidates: [candidate({ id: original.id, userState: { readAt: 1, note: "Forged discovery overwrite" } })] }));
+  f.ledger.complete(next);
+  assert.deepEqual(f.ledger.snapshot().candidates[0].userState, read.userState);
+  f.ledger.review({ candidateId: original.id, read: false });
+  assert.equal(f.ledger.snapshot().candidates[0].userState.readAt, undefined);
+  assert.equal(f.ledger.snapshot().candidates[0].userState.history, undefined);
+});
+
+test("user notes and dispositions retain bounded meaningful history, not view events", t => {
+  const f = fixture(t), run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate()] }));
+  const id = f.ledger.snapshot().candidates[0].id;
+  f.ledger.review({ candidateId: id, read: true, note: "  Ask about retention.  ", disposition: "follow_up" });
+  const initial = f.ledger.snapshot().candidates[0].userState;
+  assert.equal(initial.note, "Ask about retention.");
+  assert.deepEqual(initial.history, [{ at: f.now(), changes: { disposition: "follow_up", note: "Ask about retention." } }]);
+  f.ledger.review({ candidateId: id, read: true, note: initial.note, disposition: "follow_up" });
+  assert.deepEqual(f.ledger.snapshot().candidates[0].userState.history, initial.history);
+  assert.equal(f.ledger.snapshot().candidates[0].userState.updatedAt, initial.updatedAt + 1);
+  f.ledger.review({ candidateId: id, read: false });
+  assert.equal(f.ledger.snapshot().candidates[0].userState.updatedAt, initial.updatedAt + 2);
+  for (let i = 0; i < 23; i++) { f.advance(1); f.ledger.review({ candidateId: id, note: `Synthetic note ${i}` }); }
+  const final = f.ledger.snapshot().candidates[0].userState;
+  assert.equal(final.history.length, 20);
+  assert.equal(final.history[0].changes.note, "Synthetic note 3");
+  assert.equal(final.history.at(-1).changes.note, "Synthetic note 22");
+  f.ledger.review({ candidateId: id, disposition: "not_interested", note: "" });
+  assert.equal(f.ledger.snapshot().candidates[0].userState.disposition, "not_interested");
+  assert.equal(f.ledger.snapshot().candidates[0].userState.note, "");
+  f.ledger.review({ candidateId: id, disposition: "none" });
+  assert.equal(f.ledger.snapshot().candidates[0].userState.disposition, "none");
+});
+
+test("manual same-entity confirmation uses canonical current library IDs and never merges records", t => {
+  const f = fixture(t);
+  f.database.prepare("INSERT INTO projects(id,name,created_at,notes) VALUES(?,?,?,?)").run("canonical", "Canonical Brand", f.now() - 1000, "Unchanged private notes");
+  f.database.prepare("INSERT INTO people(id,name,created_at) VALUES(?,?,?)").run("person", "Existing Person", f.now() - 1000);
+  const before = f.database.prepare("SELECT * FROM projects ORDER BY id").all();
+  const run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate()] }));
+  const id = f.ledger.snapshot().candidates[0].id;
+  f.ledger.review({ candidateId: id, sameEntity: { type: "project", id: "canonical", name: "Invented name", confirmedAt: 1 }, note: "Same company under its former brand." });
+  const state = f.ledger.snapshot().candidates[0].userState;
+  assert.deepEqual(state.sameEntity, { type: "project", id: "canonical", name: "Canonical Brand", confirmedAt: f.now() });
+  assert.deepEqual(state.history[0].changes.sameEntity, state.sameEntity);
+  assert.equal(f.ledger.snapshot().candidates[0].intake.status, "pending");
+  assert.deepEqual(f.database.prepare("SELECT * FROM projects ORDER BY id").all(), before);
+  const saved = fs.readFileSync(f.ledger.ledgerPath, "utf8");
+  for (const sameEntity of [{ type: "project", id: "missing" }, { type: "person", id: "person" }, [], false, {}]) {
+    assert.throws(() => f.ledger.review({ candidateId: id, sameEntity, note: "Must not save" }), { code: "sourcing_invalid_review_entity" });
+    assert.equal(fs.readFileSync(f.ledger.ledgerPath, "utf8"), saved);
+  }
+  f.ledger.complete(run);
+  f.ledger.review({ candidateId: id, sameEntity: null });
+  assert.equal(f.ledger.snapshot().candidates[0].userState.sameEntity, undefined);
+  assert.equal(f.ledger.snapshot().candidates[0].userState.history.at(-1).changes.sameEntity, null);
+  assert.deepEqual(f.database.prepare("SELECT * FROM projects ORDER BY id").all(), before);
+});
+
+test("review during a live run survives stale discovery output and completion", t => {
+  const f = fixture(t);
+  f.database.prepare("INSERT INTO projects(id,name,created_at,notes) VALUES(?,?,?,?)").run("original", "Early Research", f.now() - 1000, "https://example.org/company");
+  f.database.prepare("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)").run("corrected", "Renamed Entity", f.now() - 1000);
+  const run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate({ intake: { status: "matched", projectId: "original" } })] }));
+  const stale = f.ledger.snapshot().candidates[0];
+  f.ledger.review({ candidateId: stale.id, read: true, disposition: "follow_up", note: "The original auto-match is wrong.", sameEntity: { type: "project", id: "corrected" } });
+  const review = f.ledger.snapshot().candidates[0].userState;
+  f.ledger.complete(run);
+  assert.deepEqual(f.ledger.snapshot().candidates[0].userState, review);
+  assert.equal(f.ledger.snapshot().candidates[0].intake.projectId, "original");
+  f.advance(86400000);
+  const next = f.ledger.begin();
+  assert.throws(() => f.ledger.merge(receipt(next, { candidates: [{ ...stale, userState: { disposition: "none" } }] })), { code: "sourcing_review_identity_conflict" });
+  const { intake, ...withoutIntake } = stale;
+  f.ledger.merge(receipt(next, { candidates: [{ ...withoutIntake, userState: { note: "Pretend this was the user's correction" } }] }));
+  assert.deepEqual(f.ledger.snapshot().candidates[0].userState, review);
+  f.ledger.merge(receipt(next, { candidates: [{ ...stale, intake: { status: "matched", projectId: "corrected" } }] }));
+  f.ledger.complete(next);
+  assert.equal(f.ledger.snapshot().candidates[0].intake.projectId, "corrected");
+  assert.deepEqual(f.ledger.snapshot().candidates[0].userState, review);
+});
+
+test("manual identity resolves alias evidence but does not bypass real write receipt verification", t => {
+  const f = fixture(t);
+  f.database.prepare("INSERT INTO projects(id,name,created_at,updated_at) VALUES(?,?,?,?)").run("canonical", "Different Canonical Brand", f.now() - 1000, f.now() - 1000);
+  const first = f.ledger.begin();
+  f.ledger.merge(receipt(first, { candidates: [candidate()] }));
+  const id = f.ledger.snapshot().candidates[0].id;
+  f.ledger.review({ candidateId: id, sameEntity: { type: "project", id: "canonical" } });
+  f.ledger.complete(first);
+  f.advance(86400000);
+  const run = f.ledger.begin();
+  f.database.prepare("UPDATE projects SET updated_at=? WHERE id=?").run(f.now(), "canonical");
+  assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ id, intake: { status: "matched", projectId: "canonical" } })] })), { code: "sourcing_receipt_missing" });
+  assert.equal(f.ledger.snapshot().candidates[0].intake.status, "pending");
+  assert.equal(f.ledger.snapshot().candidates[0].userState.sameEntity.id, "canonical");
+});
+
+test("person identity confirmation rejects projects and conflicting people intake", t => {
+  const f = fixture(t);
+  for (const id of ["person-a", "person-b"]) f.database.prepare("INSERT INTO people(id,name,created_at) VALUES(?,?,?)").run(id, `Canonical ${id}`, f.now() - 1000);
+  const run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate({ kind: "person", name: "Public Alias" })] }));
+  const id = f.ledger.snapshot().candidates[0].id;
+  assert.throws(() => f.ledger.review({ candidateId: id, sameEntity: { type: "project", id: "person-a" } }), { code: "sourcing_invalid_review_entity" });
+  f.ledger.review({ candidateId: id, sameEntity: { type: "person", id: "person-a" } });
+  assert.throws(() => f.ledger.merge(receipt(run, { candidates: [candidate({ id, kind: "person", intake: { status: "matched", personIds: ["person-a", "person-b"] } })] })), { code: "sourcing_review_identity_conflict" });
+  f.ledger.merge(receipt(run, { candidates: [candidate({ id, kind: "person", intake: { status: "matched", personIds: ["person-a"] } })] }));
+  f.ledger.complete(run);
+  assert.deepEqual(f.ledger.snapshot().candidates[0].intake.personIds, ["person-a"]);
+});
+
+test("automated output cannot invent user state, and invalid reviews are atomic", t => {
+  const f = fixture(t), run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate({ userState: { readAt: 1, sameEntity: { type: "project", id: "fake" }, note: "Forged" } })] }));
+  const id = f.ledger.snapshot().candidates[0].id;
+  assert.equal(f.ledger.snapshot().candidates[0].userState, undefined);
+  const before = fs.readFileSync(f.ledger.ledgerPath, "utf8");
+  for (const extra of [{}, { read: 1 }, { note: "x".repeat(4001) }, { note: null }, { disposition: "done" }, { read: true, updatedAt: 1 }, { readAt: 1 }]) {
+    assert.throws(() => f.ledger.review({ candidateId: id, ...extra }), { code: "sourcing_invalid_review" });
+    assert.equal(fs.readFileSync(f.ledger.ledgerPath, "utf8"), before);
+  }
+  assert.throws(() => f.ledger.review({ candidateId: "missing", read: true }), { code: "sourcing_candidate_missing" });
+  assert.equal(fs.readFileSync(f.ledger.ledgerPath, "utf8"), before);
+});
+
+test("library search is bounded, canonical and read-only with aliases and organization matching", t => {
+  const f = fixture(t);
+  for (let i = 0; i < 25; i++) f.database.prepare("INSERT INTO projects(id,name,created_at,legal_name,aliases_json,notes) VALUES(?,?,?,?,?,?)").run(`project-${i}`, `Synthetic Brand ${i}`, f.now() - 1000, `Synthetic Legal ${i}`, JSON.stringify([`Legacy Name ${i}`]), "Unrelated private notes never returned");
+  f.database.prepare("INSERT INTO people(id,name,created_at,organization) VALUES(?,?,?,?)").run("person", "Synthetic Person", f.now() - 1000, "Synthetic Public Lab");
+  const before = fs.readFileSync(f.ledger.ledgerPath, "utf8");
+  const broad = f.ledger.searchLibrary({ type: "project", query: "Synthetic" });
+  assert.equal(broad.matches.length, 20);
+  assert.ok(broad.snapshot.configured);
+  const exact = f.ledger.searchLibrary({ type: "project", query: "Synthetic Brand 1" }).matches;
+  assert.equal(exact[0].id, "project-1");
+  const alias = f.ledger.searchLibrary({ type: "project", query: "Legacy Name 24" }).matches;
+  assert.deepEqual(alias, [{ type: "project", id: "project-24", name: "Synthetic Brand 24", summary: "Synthetic Legal 24" }]);
+  assert.equal(f.ledger.searchLibrary({ type: "project", query: "Synthetic Legal 24" }).matches[0].id, "project-24");
+  assert.deepEqual(f.ledger.searchLibrary({ type: "person", query: "Public Lab" }).matches, [{ type: "person", id: "person", name: "Synthetic Person", summary: "Synthetic Public Lab" }]);
+  assert.deepEqual(f.ledger.searchLibrary({ type: "project", query: "' OR 1=1 --" }).matches, []);
+  assert.equal(JSON.stringify(broad).includes("Unrelated private notes"), false);
+  for (const input of [{ query: "Synthetic" }, { type: "project", query: "" }, { type: "project", query: "  " }, { type: "person", query: "?" }, { type: "all", query: "Synthetic" }, { type: "project", query: "x".repeat(201) }]) assert.throws(() => f.ledger.searchLibrary(input), { code: "sourcing_invalid_library_query" });
+  assert.equal(fs.readFileSync(f.ledger.ledgerPath, "utf8"), before);
+});
+
+test("CLI review and library search return persisted synthetic results through supported commands", t => {
+  const f = fixture(t), configPath = path.join(f.directory, "review-local.json"), requestPath = path.join(f.directory, "review-request.json");
+  fs.writeFileSync(configPath, JSON.stringify({ storageBackend: "local", localRepositoryDir: f.directory, localDatabasePath: f.databasePath }));
+  f.database.prepare("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)").run("canonical", "Synthetic Canonical", f.now() - 1000);
+  const run = f.ledger.begin();
+  f.ledger.merge(receipt(run, { candidates: [candidate()] }));
+  const id = f.ledger.snapshot().candidates[0].id;
+  function command(name, input) {
+    fs.writeFileSync(requestPath, JSON.stringify(input));
+    const result = spawnSync(process.execPath, [path.join(__dirname, "sourcing-ledger.cjs"), name, "--json-file", requestPath], { encoding: "utf8", env: { ...process.env, DOMI_CONFIG_PATH: configPath } });
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+    return JSON.parse(result.stdout);
+  }
+  assert.equal(command("search-library", { type: "project", query: "Canonical" }).matches[0].id, "canonical");
+  const review = command("review", { candidateId: id, read: true, note: "Synthetic CLI note", sameEntity: { type: "project", id: "canonical" } });
+  assert.equal(review.snapshot.candidates[0].userState.note, "Synthetic CLI note");
+  assert.equal(review.snapshot.candidates[0].userState.sameEntity.name, "Synthetic Canonical");
+  assert.ok(review.snapshot.candidates[0].userState.readAt);
+  assert.equal(f.ledger.snapshot().candidates[0].userState.note, "Synthetic CLI note");
+});

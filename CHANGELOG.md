@@ -1,5 +1,10 @@
 # Changelog
 
+## 7.0.18 — 2026-10-22
+
+- Persist read status, follow-up decisions and freeform notes for underwater sourcing candidates, including a bounded history of user edits. Daily discovery preserves these decisions.
+- Search existing project/person records and confirm the same entity without merging or deleting library records. Preserve manual identity decisions while retaining archive receipt checks for actual writes.
+
 ## 7.0.17 — 2026-10-21
 
 - Add persistent underwater project and founder sourcing with a daily schedule, exclusive run leases, bounded retries, source coverage, and verified project/person intake receipts.
