@@ -24,15 +24,52 @@ function canonicalUrl(value) {
 
 function fundingRound(title) {
   const text = String(title || "").normalize("NFKC").toUpperCase().replace(/[‐‑‒–—−]/g, "-");
-  if (!/融资|FUNDING|FINANCING|RAISE[DS]?\b/.test(text)) return null;
-  // A/A+, several rounds and historical comparisons need semantic review, not guesses.
-  if (/多轮|数轮|连续|[A-Z](?:-?\d+)?\+?\s*[、/及与和]\s*[A-Z]/.test(text)) return null;
+  const financingIndex = text.search(/融资|FUNDING|FINANCING|RAISE[DS]?\b/);
+  if (financingIndex < 0) return null;
+  const financingLead = text.slice(0, financingIndex);
+  // Historical comparisons, planned rounds and slash alternatives are not joint announcements.
+  if (/此前|曾经|去年|上轮|历史|对比|相比|[A-Z]\+?\s*\/\s*[A-Z]/.test(text)
+    || /计划|拟|将|继|\b(?:PLANS?|PLANNED|INTENDS?|WILL)\b/.test(financingLead)) return null;
+  const token = "(?:PRE[\\s-]*)?[A-Z](?:-?\\d{1,2})?\\+{0,2}";
+  const jointPattern = new RegExp(`(?:^|[^A-Z0-9])(${token}(?:\\s*轮)?(?:\\s*[及与和、]\\s*${token}(?:\\s*轮)?)+\\s*(?:两轮|三轮|轮))`, "g");
+  const joint = [...text.matchAll(jointPattern)];
   const rounds = [...text.matchAll(/(?:^|[^A-Z0-9])((?:PRE[\s-]*)?[A-Z](?:-?\d{1,2})?\+{0,2})\s*轮/g),
     ...text.matchAll(/\bSERIES\s+((?:PRE[\s-]*)?[A-Z](?:-?\d{1,2})?\+{0,2})(?![A-Z0-9+-])/g)]
     .map(match => match[1].replace(/[\s-]+/g, ""));
+  if (joint.length) {
+    if (joint.length !== 1 || /系列|多轮|数轮/.test(financingLead)) return null;
+    const explicit = [...new Set(joint[0][1].match(new RegExp(token, "g"))
+      .map(round => round.replace(/[\s-]+/g, "")))].sort();
+    // A partial list plus another round elsewhere may be a recap of different transactions.
+    if (explicit.length < 2 || rounds.some(round => !explicit.includes(round))) return null;
+    return `${explicit.join("&")}:combined`;
+  }
+  if (/多轮|数轮|连续/.test(financingLead)
+    || /轮\s*[及与和、]|[A-Z](?:-?\d+)?\+?\s*[、/及与和]\s*[A-Z]/.test(text)) return null;
+  // Unparsed English combinations must not degrade to the first Series label alone.
+  if (new RegExp(`\\bSERIES\\s+${token}\\s*(?:AND|&)\\s*(?:SERIES\\s+)?${token}(?![A-Z0-9+-])`).test(text)) return null;
   const unique = [...new Set(rounds)];
   if (unique.length !== 1) return null;
   return `${unique[0]}${/轮\s*系列|系列\s*融资/.test(text) ? ":series" : ":single"}`;
+}
+
+function fundingSubject(title) {
+  // Read the literal leading subject; never infer a short name from a legal entity.
+  const text = String(title || "").normalize("NFKC").trim();
+  const match = text.match(/^(.{2,60}?)(?:宣布(?:连续)?完成|连续完成|完成|获得|获)(?=.{0,60}融资)/);
+  if (!match || /[，,。:：;；、/\n]|及|与|和/.test(match[1])) return "";
+  const quoted = match[1].trim();
+  const pairs = { '"': '"', "'": "'", "“": "”", "‘": "’", "「": "」", "『": "』" };
+  const subject = normalized(pairs[quoted[0]] === quoted.at(-1) ? quoted.slice(1, -1) : quoted);
+  return /^(?:(?:该|这家|一家|本|某|某家).{0,20})?(?:公司|企业|项目|团队|厂商)$/.test(subject) ? "" : subject;
+}
+
+function articleUrl(value) {
+  try {
+    const url = new URL(value);
+    // A feed/home page can contain many changing announcements.
+    return !/^\/(?:index\.(?:html?|php))?$/i.test(url.pathname);
+  } catch { return false; }
 }
 
 function duplicateReason(input, existing) {
@@ -43,9 +80,13 @@ function duplicateReason(input, existing) {
   const round = fundingRound(input.title), previousRound = fundingRound(existing.title);
   // One article may report multiple transactions. Different explicit rounds remain separate.
   if (round && previousRound && round !== previousRound) return null;
-  if (url && url === canonicalUrl(existing.url) && (sameEntities
+  const subject = round && round === previousRound ? fundingSubject(input.title) : "";
+  const sameFundingSubject = subject && subject === fundingSubject(existing.title);
+  if (url && articleUrl(input.url) && url === canonicalUrl(existing.url) && (sameEntities || sameFundingSubject
     || (!currentEntities.length && !previousEntities.length && sameTitle))) return "same_source";
-  return sameEntities && round && round === previousRound ? "same_entity_funding_round" : null;
+  if (sameEntities && round && round === previousRound) return "same_entity_funding_round";
+  // Equal literal headline subjects are review candidates, not proof that legal names are aliases.
+  return sameFundingSubject ? "same_subject_funding_round" : null;
 }
 
 function assertNoDuplicateNews(database, input, eventId, publishedAt) {

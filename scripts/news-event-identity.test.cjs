@@ -78,11 +78,93 @@ test("different explicit rounds, different entities, and distant announcements r
   await upsert(repository, event({ eventId: "evt_other", companies: "杭州另一材料有限公司", title: "另一材料完成A轮融资" }));
   await upsert(repository, event({ eventId: "evt_later", title: "示例材料完成A轮融资", publishedAt: "2026-12-22T10:00:00+08:00", url: "https://first.example.com/later-event" }));
   assert.equal(repository.database.prepare("SELECT COUNT(*) count FROM news_events").get().count, 7);
-  assert.equal(fundingRound("示例材料完成A、A+两轮融资"), null);
+  assert.equal(fundingRound("示例材料完成A、A+两轮融资"), "A&A+:combined");
   assert.equal(fundingRound("示例材料完成多轮融资"), null);
   assert.equal(fundingRound("Anonymous raises Series A-1 funding"), "A1:single");
   assert.equal(fundingRound("示例材料完成Pre–A轮融资"), "PREA:single");
   assert.notEqual(fundingRound("Anonymous raises Series A-1 funding"), fundingRound("Anonymous raises Series A funding"));
+});
+
+test("explicit joint rounds share one identity without collapsing into either individual round", async t => {
+  const { repository } = fixture(t);
+  const first = event({ title: "示例机器人完成近10亿元C+及D轮融资", companies: "示例机器人" });
+  await upsert(repository, first);
+  for (const [index, title] of [
+    "示例机器人完成C+轮及D轮累计近10亿元融资",
+    "示例机器人连续完成D轮与C+轮融资，扩建产线",
+    "示例机器人完成C+、D两轮融资"
+  ].entries()) {
+    assert.equal(fundingRound(title), "C+&D:combined");
+    await assert.rejects(upsert(repository, { ...first, eventId: `evt_joint_${index}`, title,
+      url: `https://second.example.com/article/${index}` }), { code: "DOMI_NEWS_POSSIBLE_DUPLICATE" });
+  }
+  for (const round of ["C+", "D", "D+", "C+及E"]) {
+    await upsert(repository, { ...first, eventId: `evt_separate_${round}`, title: `示例机器人完成${round}轮融资` });
+  }
+  assert.equal(repository.database.prepare("SELECT COUNT(*) count FROM news_events").get().count, 5);
+});
+
+test("same article and literal financing subject catch alternate company fields", async t => {
+  const { repository } = fixture(t);
+  const first = event({ title: "示例机器人完成C+及D轮融资", companies: "示例机器人" });
+  await upsert(repository, first);
+  for (const companies of ["示例（杭州）机器人有限公司", "示例（杭州）机器人有限公司（示例机器人）"]) {
+    await assert.rejects(upsert(repository, { ...first, eventId: "evt_alias", companies,
+      title: "示例机器人完成近10亿元C+轮及D轮融资，扩建产线" }), error =>
+      error.code === "DOMI_NEWS_POSSIBLE_DUPLICATE" && error.duplicateCandidates[0].reason === "same_source");
+  }
+  await upsert(repository, { ...first, eventId: "evt_other_entity", companies: "另一机器人有限公司",
+    title: "另一机器人完成C+及D轮融资" });
+  assert.equal(repository.database.prepare("SELECT COUNT(*) count FROM news_events").get().count, 2);
+});
+
+test("one canonical announcement still blocks cross-publisher headline matches with different company labels", async t => {
+  const { repository } = fixture(t);
+  const first = event({ title: "示例机器人完成近10亿元C+及D轮融资，资金将用于扩产", companies: "示例机器人" });
+  const saved = await upsert(repository, first);
+  for (const companies of ["示例（杭州）机器人有限公司", "示例（杭州）机器人有限公司（示例机器人）"]) {
+    await assert.rejects(upsert(repository, { ...first, eventId: "evt_needs_review", companies,
+      title: "“示例机器人”完成C+轮及D轮融资，拟升级研发平台",
+      url: "https://another.example.com/story" }), error =>
+      error.code === "DOMI_NEWS_POSSIBLE_DUPLICATE" && error.duplicateCandidates.length === 1
+        && error.duplicateCandidates[0].eventId === first.eventId
+        && error.duplicateCandidates[0].reason === "same_subject_funding_round");
+  }
+  assert.equal(repository.database.prepare("SELECT COUNT(*) count FROM news_events").get().count, 1);
+  assert.equal(repository.getNews(first.eventId).companies, saved.event.companies);
+  await upsert(repository, { ...first, eventId: "evt_later_subject", companies: "示例（杭州）机器人有限公司",
+    publishedAt: "2026-12-22T10:00:00+08:00", url: "https://another.example.com/later-story" });
+});
+
+test("planned uses of completed funding do not erase the explicit funding identity", () => {
+  for (const suffix of ["拟升级研发平台", "计划扩产", "资金将用于产线扩建", "加速ART系列产品研发", "连续两年扩大研发投入"]) {
+    assert.equal(fundingRound(`示例材料完成A轮融资，${suffix}`), "A:single");
+    assert.equal(fundingRound(`示例机器人完成C+及D轮融资，${suffix}`), "C+&D:combined");
+  }
+  assert.equal(fundingRound("Anonymous raises Series A funding and expands production"), "A:single");
+  assert.equal(fundingRound("Anonymous raises Series A funding and plans new products"), "A:single");
+});
+
+test("joint-round parser declines alternatives, history and incomplete round lists", () => {
+  for (const title of [
+    "示例机器人完成C+/D轮融资", "示例机器人完成C+及D轮系列融资",
+    "示例机器人完成多轮融资", "示例机器人连续完成D轮融资",
+    "示例机器人此前完成C+及D轮融资，现完成E轮融资",
+    "示例机器人完成D轮融资，曾经完成C+轮及D轮融资",
+    "示例机器人计划完成C+及D轮融资", "示例机器人完成C+及D轮融资，E轮同步启动",
+    "示例机器人完成天使轮及A轮融资", "Anonymous raises Series C+ and D funding"
+  ]) assert.equal(fundingRound(title), null, title);
+});
+
+test("generic headline subjects and home pages do not create source-only matches", async t => {
+  const { repository } = fixture(t);
+  for (const [index, title] of ["该公司完成C+及D轮融资", "这家机器人公司完成C+及D轮融资"].entries()) {
+    await upsert(repository, event({ eventId: `evt_generic_first_${index}`, companies: `示例甲${index}`, title }));
+    await upsert(repository, event({ eventId: `evt_generic_other_${index}`, companies: `示例乙${index}`, title }));
+  }
+  await upsert(repository, event({ eventId: "evt_home_first", url: "https://feed.example.com/", title: "示例材料发布研发产品" }));
+  await upsert(repository, event({ eventId: "evt_home_second", url: "https://feed.example.com/", title: "示例材料发布另一款研发产品" }));
+  assert.equal(repository.database.prepare("SELECT COUNT(*) count FROM news_events").get().count, 6);
 });
 
 test("ambiguous rounds are not guessed from title similarity", async t => {
@@ -134,7 +216,7 @@ test("failed transactions remove new Markdown and restore existing bytes and row
   await assert.rejects(upsert(repository, event({ summary: "不得持久化" })), /synthetic commit failure/);
   assert.deepEqual(fs.readFileSync(first.event.documentPath), before);
   assert.equal(repository.getNews("evt_first").summary, first.event.summary);
-  await assert.rejects(upsert(repository, event({ eventId: "evt_new", companies: "另一家公司", url: "https://other.example.com/new" })), /synthetic commit failure/);
+  await assert.rejects(upsert(repository, event({ eventId: "evt_new", companies: "另一家公司", title: "另一家公司完成A轮系列融资", url: "https://other.example.com/new" })), /synthetic commit failure/);
   repository.database.exec = exec;
   assert.equal(repository.getNews("evt_new"), null);
   assert.equal(newsFiles(repository).length, 1);
