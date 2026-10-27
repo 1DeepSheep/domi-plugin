@@ -1,10 +1,10 @@
 # Quick Scan 紧凑契约
 
-用于 domi 客户端增量行业雷达。每次调度都在不改变频次、调用方 `followed_domains` 范围、证据门槛和归档质量的前提下执行完整轮次；本契约已包含 quick scan 所需字段、证据、评分、去重和输出规则，不再读取其他 Radar reference。
+客户端增量雷达完整契约。保持频次、`followed_domains`、证据门槛和归档质量，不再读取其他 Radar reference。
 
-## 输入、后端与最小读取
+## 输入与后端
 
-调用方提供 `discovery_from / checked_after / checked_through`；`discovery_from` 默认 `max(checked_after-48h, checked_through-72h)`，缺失时最近 72 小时。重叠窗口用于发现迟发／迟索引事件，水位前发布但此前未收录的内容仍可新增；零新增不得扩大到 7／30 天，也不得跳过下一次调度。
+调用方提供 `discovery_from / checked_after / checked_through`；`discovery_from` 默认 `max(checked_after-48h, checked_through-72h)`，缺失时最近 72 小时。重叠窗口发现迟发／迟索引事件，可新增水位前未收录内容；零新增不得扩大到 7／30 天或跳过下轮。
 
 按已锁定后端执行，绝不切换或双写：
 
@@ -22,7 +22,7 @@
 - 同时覆盖中英文融资、技术／产品、客户／订单／合作、政策、并购、财务、人事、机构动态和产业论点信号。
 - 最多 12 个候选、8 个合格新增；停止扩展前为深度访谈／公开观点保留最多 2 个候选位。
 
-直接使用以下 canonical 父子词表，不为分类读取完整项目库：
+按 canonical 父子词表分类，不读完整项目库：
 
 - AI：AI互动娱乐、AI社交、AI游戏、AI视频、AI图片、AI造物、AI心理、AI语音、AI效率工具、AI Coding、AI营销、AI金融、AI制药、AI医疗、AI招聘、AI健康、Agent、AI数据、模型层、AI基础设施、AI4S、世界模型、AI陪伴、AI搜索、AI 3D、AI教育、AI旅游。
 - 半导体：存储、算力芯片、通信芯片、微处理器、模拟芯片、功率半导体、光电芯片、传感器、晶圆制造、封测、半导体设备、半导体材料、EDA&IP、无源器件。
@@ -41,7 +41,7 @@
 2. 每轮固定执行中文专业科技媒体扫源，至少覆盖 `DeepTech 深科技`，并加入 `对话/访谈/专访/公开观点/趋势判断/roadmap/outlook/interview/prediction`。新闻稿不得提前挤掉预留的论点候选。
    - `DeepTech 深科技` 只在确实发起定向检索／读取后记为 checked。调用方列出的每个已启用重点信源都必须逐个尝试；不可访问可以失败并继续，但不能伪装为已读取。
 3. 宽搜发现重点对象直接信号后，才允许追加一次该对象定向检索；不得逐项目／逐人物搜索。
-4. 必须打开最上游可访问原文，确认主体、事实／原始判断、发布时间、发布者和 URL。搜索／RSS／公众号摘要、数据库、播客标题只能发现，不能单独证明事实。无法访问正文记 `unavailable`，不得绕过登录、付费墙、robots 或读取浏览器 Cookie。
+4. 必须打开最上游可访问原文，确认主体、事实／原始判断、完整年月日、发布者和 URL。禁止用更新／抓取时间代替，或按当前年份补全缺年日期。搜索／RSS／公众号摘要、数据库、播客标题仅用于发现。正文不可访问记 `unavailable`，不得绕过登录、付费墙、robots 或读取浏览器 Cookie。
 5. 只有范围相关、主体可识别、事件或论点具体、时间可确认且原文可访问时才采纳。纯转载、泛泛愿景、标题党、无事实／论点增量或未解决身份歧义不采纳。
 
 访谈／演讲／公开观点需同时满足：人物由姓名 + 组织／角色唯一确认；原文、时间、语境可核验；含技术边界、明确时间表、量级、竞争格局、商业化或工作流等可证伪判断；摘要用“某人判断／预计／认为”明确归因，并分开已发生事实、判断和雷达含义。节目发布本身不是事件。
@@ -50,7 +50,7 @@
 
 ## 事件、评分与归档
 
-事件字段至少包括：`title/domains/subdomains/types/publishedAt/summary/investmentMeaning/url/source/companies/institutions/importance/confidence/evidenceStatus/worthFollowing/action/eventId/batch`；系统时间字段不得由模型覆盖。
+事件字段：`title/domains/subdomains/types/publishedAt/summary/investmentMeaning/url/source/companies/institutions/importance/confidence/evidenceStatus/worthFollowing/action/eventId/batch`；系统时间字段不得由模型覆盖。`publishedAt` 具体时间须带时区。新增或改日期／URL由CLI独立核验原文；日期不明或冲突记 `unverified`，禁止伪造凭证或绕过。窗口外旧闻不当新增。
 
 事件 ID 为 `evt_v1_<SHA-256前20位>`，哈希语义是 `核心实体集合｜信息类型｜不可变事件键`。媒体、URL、标题、披露日期、金额、投资方、评分和批次不得入键。传闻转官宣、金额／投资方／客户／来源补充更新原事件；疑似同事件但无法确认时不自动合并或写入。
 

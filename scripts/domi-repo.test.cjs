@@ -6,6 +6,8 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { DatabaseSync } = require("node:sqlite");
 const test = require("node:test");
+const { verifyNewsSourceDate } = require("./news-source-date.cjs");
+const { mockPublicSource } = require("./test-helpers/news-source-fetch.cjs");
 const {
   defaultConfigPath,
   DomiRepository,
@@ -714,11 +716,17 @@ test("person upsert can persist the full research document in the same intake", 
   assert.equal(fs.existsSync(created.researchDocument.path), true);
 });
 
-test("local news upsert deduplicates by event ID and writes a readable Markdown mirror", (t) => {
+test("local news upsert deduplicates by event ID and writes a readable Markdown mirror", async (t) => {
   const repository = createRepository(t);
   t.after(() => repository.close());
+  const verifiedUpsert = async input => {
+    input.url = "https://news.example.com/article/demo";
+    const source = mockPublicSource(`<head><meta property="article:published_time" content="${input.publishedAt}"></head>`);
+    const dateReceipt = await verifyNewsSourceDate(input, repository.getNews(input.eventId), source.options);
+    return repository.upsertNews(input, { dateReceipt });
+  };
 
-  const first = repository.upsertNews({
+  const first = await verifiedUpsert({
     eventId: "evt_demo",
     title: "示例公司发布新产品",
     domains: ["AI"],
@@ -728,7 +736,7 @@ test("local news upsert deduplicates by event ID and writes a readable Markdown 
     importance: 8,
     confidence: 9
   });
-  const second = repository.upsertNews({
+  const second = await verifiedUpsert({
     eventId: "evt_demo",
     title: "示例公司发布新产品",
     domains: ["AI"],
@@ -744,7 +752,7 @@ test("local news upsert deduplicates by event ID and writes a readable Markdown 
   assert.equal(repository.listNews({ to: Date.parse("2026-07-25T00:00:00+08:00") }).length, 1);
   assert.match(fs.readFileSync(second.event.documentPath, "utf8"), /补充了客户信息/);
 
-  const consumer = repository.upsertNews({
+  const consumer = await verifiedUpsert({
     eventId: "evt_consumer",
     title: "示例消费品牌发布新品",
     domains: ["消费科技"],

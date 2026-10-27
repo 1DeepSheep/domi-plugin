@@ -9,6 +9,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { installQueryVersion, queryRecords } = require("./repository-query.cjs");
 const { checkNotesFormat } = require("./notes-format.cjs");
 const { normalizedProjectName, assertProjectBrandName, projectNameAliases } = require("./project-name-policy.cjs");
+const { verifyNewsSourceDate, assertNewsSourceDate } = require("./news-source-date.cjs");
 
 const { refreshRepositoryIndustryOverviews, repairProjectHomepage, projectMaterialLinks, refreshProjectMaterials } = require("./industry-overview.cjs");
 const CANONICAL_PROJECT_TAXONOMY = require("./investment-taxonomy.json");
@@ -404,6 +405,14 @@ class DomiRepository {
       );
       CREATE INDEX IF NOT EXISTS idx_news_events_published
         ON news_events(published_at DESC, event_id);
+      CREATE TABLE IF NOT EXISTS news_source_date_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        verified_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_news_source_date_evidence_event
+        ON news_source_date_evidence(event_id, verified_at DESC);
       CREATE TABLE IF NOT EXISTS documents (
         id TEXT PRIMARY KEY,
         owner_type TEXT NOT NULL,
@@ -1119,10 +1128,12 @@ ${event.action || "继续关注。"}
     return filePath;
   }
 
-  upsertNews(input) {
+  upsertNews(input, { dateReceipt } = {}) {
     const title = String(input.title || "").trim();
     if (!title) throw new Error("行业事件写入缺少 title。");
-    const publishedAt = toEpochMs(input.publishedAt, Date.now());
+    const explicitId = String(input.eventId || input.id || "");
+    const previous = explicitId ? this.getNews(explicitId) : null;
+    const { publishedAt, evidence } = assertNewsSourceDate(input, previous, dateReceipt);
     const eventId = String(
       input.eventId || input.id || stableId("evt", `${normalizedName(title)}:${publishedAt}`)
     );
@@ -1188,6 +1199,17 @@ ${event.action || "继续关注。"}
     this.database.prepare(
       "DELETE FROM repository_tombstones WHERE entity_type = 'news' AND entity_key = ?"
     ).run(eventId);
+    if (evidence) {
+      const evidenceId = stableId("news_date", `${eventId}:${evidence.url}:${evidence.contentHash}:${evidence.publishedAt}`);
+      this.database.prepare(`
+        INSERT OR IGNORE INTO news_source_date_evidence (evidence_id, event_id, evidence_json, verified_at)
+        VALUES (?, ?, ?, ?)
+      `).run(evidenceId, eventId, JSON.stringify(evidence), evidence.verifiedAt);
+    }
+    const publicationEvidence = this.database.prepare(`
+      SELECT evidence_id, evidence_json FROM news_source_date_evidence
+      WHERE event_id = ? ORDER BY verified_at DESC, evidence_id DESC LIMIT 1
+    `).get(eventId);
     return {
       ok: true,
       action: existing ? "updated" : "created",
@@ -1198,6 +1220,9 @@ ${event.action || "继续关注。"}
         documentUri: pathToFileURL(documentPath).href,
         recordVerified: Boolean(this.getNews(eventId)),
         documentVerified: fs.existsSync(documentPath),
+        publicationDateEvidence: publicationEvidence
+          ? { evidenceId: publicationEvidence.evidence_id, ...JSON.parse(publicationEvidence.evidence_json) }
+          : null,
         status: "archived"
       },
       event: this.getNews(eventId)
@@ -1373,7 +1398,7 @@ function queryFlags(flags) {
     createdFrom: flags["created-from"], createdTo: flags["created-to"], rating: flags.rating, status: flags.status };
 }
 
-function main() {
+async function main() {
   const { positional, flags } = parseArguments(process.argv.slice(2));
   const [resource = "config", action = "get"] = positional;
   const config = readConfig();
@@ -1442,7 +1467,10 @@ function main() {
     } else if (resource === "news" && action === "get") {
       result = { ok: true, event: repository.getNews(flags.id || positional[2]) };
     } else if (resource === "news" && action === "upsert") {
-      result = repository.upsertNews(readPayload(flags));
+      const input = readPayload(flags);
+      const existing = input.eventId || input.id ? repository.getNews(input.eventId || input.id) : null;
+      const dateReceipt = await verifyNewsSourceDate(input, existing);
+      result = repository.upsertNews(input, { dateReceipt });
     } else if (resource === "document" && action === "repair-attachment-name") {
       result = require("./attachment-name-repair.cjs").repairAttachmentName(repository, readPayload(flags));
     } else if (resource === "document" && action === "create") {
@@ -1457,15 +1485,13 @@ function main() {
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     fail(
       error instanceof Error ? error.message : String(error),
       error?.code || "repository_error",
       { ...(error?.storageReceipt ? { storageReceipt: error.storageReceipt } : {}), ...(error?.repairJournalPath ? { repairJournalPath: error.repairJournalPath } : {}) }
     );
-  }
+  });
 }
 
 module.exports = {
