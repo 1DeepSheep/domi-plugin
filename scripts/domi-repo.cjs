@@ -10,6 +10,8 @@ const { installQueryVersion, queryRecords } = require("./repository-query.cjs");
 const { checkNotesFormat } = require("./notes-format.cjs");
 const { normalizedProjectName, assertProjectBrandName, projectNameAliases } = require("./project-name-policy.cjs");
 const { verifyNewsSourceDate, assertNewsSourceDate } = require("./news-source-date.cjs");
+const { assertNoDuplicateNews } = require("./news-event-identity.cjs");
+const { acquireProcessLock } = require("./process-lock.cjs");
 
 const { refreshRepositoryIndustryOverviews, repairProjectHomepage, projectMaterialLinks, refreshProjectMaterials } = require("./industry-overview.cjs");
 const CANONICAL_PROJECT_TAXONOMY = require("./investment-taxonomy.json");
@@ -281,10 +283,13 @@ function replaceManagedBlock(existing, block) {
   return existing.trim() ? `${managed}\n\n${existing.trim()}\n` : `${managed}\n`;
 }
 
-function writeManagedMarkdown(filePath, block) {
-  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+function writeManagedMarkdown(filePath, block, rollbackFiles) {
+  const previous = fs.existsSync(filePath) ? fs.readFileSync(filePath) : null;
+  const existing = previous ? previous.toString("utf8") : "";
   const next = replaceManagedBlock(existing, block);
-  const temporaryPath = `${filePath}.tmp`;
+  const temporaryPath = rollbackFiles ? `${filePath}.${crypto.randomUUID()}.tmp` : `${filePath}.tmp`;
+  rollbackFiles?.push({ filePath, temporaryPath, previous, next: Buffer.from(next),
+    mode: previous ? fs.statSync(filePath).mode : undefined });
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(temporaryPath, next, "utf8");
   fs.renameSync(temporaryPath, filePath);
@@ -1088,7 +1093,7 @@ rating: ${yamlValue(person.rating || "")}
       });
   }
 
-  newsPage(event) {
+  newsPage(event, rollbackFiles) {
     const published = new Date(event.publishedAt);
     const directory = path.join(
       this.libraryDir,
@@ -1124,11 +1129,65 @@ ${event.investmentMeaning || "待研判。"}
 
 ${event.action || "继续关注。"}
 `;
-    writeManagedMarkdown(filePath, block);
+    writeManagedMarkdown(filePath, block, rollbackFiles);
     return filePath;
   }
 
   upsertNews(input, { dateReceipt } = {}) {
+    // SQLite may automatically roll back (and unlock) on SQLITE_FULL/IOERR.
+    // A separate process lock must also cover document compensation.
+    const key = crypto.createHash("sha256").update(fs.realpathSync(this.databasePath)).digest("hex");
+    // Account home comes from the OS, not per-process HOME/TMPDIR overrides.
+    const lockPath = path.join(os.userInfo().homedir, ".domi", "locks", "news", `${key}.lock`);
+    const deadline = performance.now() + 5000;
+    let release;
+    while (!release) {
+      try { release = acquireProcessLock(lockPath); }
+      catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        if (performance.now() >= deadline) {
+          throw Object.assign(new Error("另一项新闻归档正在写入；本次未修改数据，请稍后重试。"), { code: "DOMI_NEWS_WRITE_BUSY" });
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+    }
+    try { return this.upsertNewsWithLock(input, { dateReceipt }); }
+    finally { release(); }
+  }
+
+  upsertNewsWithLock(input, { dateReceipt }) {
+    const rollbackFiles = [];
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.writeNewsInTransaction(input, { dateReceipt, rollbackFiles });
+      this.database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { for (const file of rollbackFiles.reverse()) {
+        try {
+          if (fs.existsSync(file.temporaryPath)) fs.unlinkSync(file.temporaryPath);
+          const current = fs.existsSync(file.filePath) ? fs.readFileSync(file.filePath) : null;
+          if (current?.equals(file.next)) {
+            if (file.previous) {
+              fs.writeFileSync(file.temporaryPath, file.previous, { mode: file.mode });
+              fs.renameSync(file.temporaryPath, file.filePath);
+            } else fs.unlinkSync(file.filePath);
+          } else if (!(current === null && file.previous === null) && !(file.previous && current?.equals(file.previous))) {
+            throw new Error("新闻文件在回滚前已被其他操作修改，未覆盖该文件。");
+          }
+        } catch (rollbackError) {
+          error.message += ` ${rollbackError.message}`;
+        }
+      } } finally {
+        // Keep the writer lock until file compensation finishes: a newer writer
+        // must not commit its document while this failed operation restores it.
+        try { this.database.exec("ROLLBACK"); } catch {}
+      }
+      throw error;
+    }
+  }
+
+  writeNewsInTransaction(input, { dateReceipt, rollbackFiles }) {
     const title = String(input.title || "").trim();
     if (!title) throw new Error("行业事件写入缺少 title。");
     const explicitId = String(input.eventId || input.id || "");
@@ -1137,6 +1196,7 @@ ${event.action || "继续关注。"}
     const eventId = String(
       input.eventId || input.id || stableId("evt", `${normalizedName(title)}:${publishedAt}`)
     );
+    assertNoDuplicateNews(this.database, input, eventId, publishedAt);
     const existing = this.database.prepare(
       "SELECT event_id, created_at FROM news_events WHERE event_id = ?"
     ).get(eventId);
@@ -1162,7 +1222,7 @@ ${event.action || "继续关注。"}
       action: String(input.action || "").trim(),
       worthFollowing: input.worthFollowing === false ? 0 : 1
     };
-    const documentPath = this.newsPage(event);
+    const documentPath = this.newsPage(event, rollbackFiles);
     this.database.prepare(`
       INSERT INTO news_events (
         event_id, title, domains_json, subdomains_json, types_json, published_at,
@@ -1489,7 +1549,7 @@ if (require.main === module) {
     fail(
       error instanceof Error ? error.message : String(error),
       error?.code || "repository_error",
-      { ...(error?.storageReceipt ? { storageReceipt: error.storageReceipt } : {}), ...(error?.repairJournalPath ? { repairJournalPath: error.repairJournalPath } : {}) }
+      { ...(error?.storageReceipt ? { storageReceipt: error.storageReceipt } : {}), ...(error?.repairJournalPath ? { repairJournalPath: error.repairJournalPath } : {}), ...(error?.duplicateCandidates ? { duplicateCandidates: error.duplicateCandidates } : {}) }
     );
   });
 }
