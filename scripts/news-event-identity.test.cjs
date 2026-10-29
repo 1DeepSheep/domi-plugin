@@ -85,6 +85,58 @@ test("different explicit rounds, different entities, and distant announcements r
   assert.notEqual(fundingRound("Anonymous raises Series A-1 funding"), fundingRound("Anonymous raises Series A funding"));
 });
 
+test("named rounds, first rounds and every plus sign keep distinct financing identities", async t => {
+  const { repository } = fixture(t);
+  const cases = [
+    ["天使", "ANGEL"], ["天使+", "ANGEL+"], ["天使++", "ANGEL++"], ["天使+++", "ANGEL+++"],
+    ["种子", "SEED"], ["首", "FIRST"], ["Pre-A++", "PREA++"], ["Pre-A+++", "PREA+++"], ["A+++", "A+++"],
+  ];
+  for (const [index, [round, identity]] of cases.entries()) {
+    const title = `示例材料完成${round}轮融资`;
+    assert.equal(fundingRound(title), `${identity}:single`);
+    await upsert(repository, event({ eventId: `evt_round_${index}`, title,
+      url: `https://first.example.com/article/${index}` }));
+    await assert.rejects(upsert(repository, event({ eventId: `evt_repost_${index}`,
+      title: `示例材料完成${round}轮融资，资金将用于研发`, url: `https://second.example.com/report/${index}` })), error =>
+      error.code === "DOMI_NEWS_POSSIBLE_DUPLICATE"
+        && error.duplicateCandidates.length === 1 && error.duplicateCandidates[0].eventId === `evt_round_${index}`);
+  }
+  assert.equal(repository.database.prepare("SELECT COUNT(*) count FROM news_events").get().count, cases.length);
+  assert.equal(newsFiles(repository).length, cases.length);
+  assert.equal(fundingRound("Anonymous raises Series Pre-A+++ funding"), "PREA+++:single");
+  assert.equal(fundingRound("示例材料完成天使轮及Pre-A轮融资"), "ANGEL&PREA:combined");
+  assert.equal(fundingRound("示例材料完成Pre-A+++及A++++轮融资"), "A++++&PREA+++:combined");
+  assert.equal(fundingRound("示例材料完成天使+/种子轮融资"), null);
+});
+
+test("same article and a strict literal subject detect unknown-round reposts without conflating entities", async t => {
+  const { repository } = fixture(t);
+  const first = event({ title: "示例材料完成千万元融资", companies: "示例材料",
+    url: "https://first.example.com/article/one?utm_source=a#top" });
+  await upsert(repository, first);
+  await assert.rejects(upsert(repository, { ...first, eventId: "evt_unknown_repost",
+    title: "“示例材料”完成千万元融资，扩建产线", companies: "杭州示例材料有限公司",
+    url: "https://first.example.com/article/one?from=feed" }), error =>
+    error.code === "DOMI_NEWS_POSSIBLE_DUPLICATE" && error.duplicateCandidates[0].reason === "same_source");
+  await upsert(repository, { ...first, eventId: "evt_other_subject", title: "另一材料完成千万元融资",
+    companies: "另一材料有限公司" });
+  for (const [index, companies] of ["匿名甲公司", "匿名乙公司"].entries()) {
+    await upsert(repository, { ...first, eventId: `evt_generic_${index}`, title: "该公司完成千万元融资", companies });
+  }
+  for (const [index, url] of ["https://feed.example.com/", "https://feed.example.com/news", "https://feed.example.com/tag/materials"].entries()) {
+    await upsert(repository, { ...first, eventId: `evt_collection_${index}`, url,
+      title: "示例材料完成千万元融资", companies: "杭州示例材料有限公司" });
+    await upsert(repository, { ...first, eventId: `evt_collection_again_${index}`, url,
+      title: "示例材料完成千万元融资，扩建产线", companies: "示例材料" });
+  }
+  // Amounts and institutions are unstructured: neither proves two different articles describe one transaction.
+  await upsert(repository, { ...first, eventId: "evt_unknown_source_a", title: "示例材料完成1亿元融资",
+    institutions: "匿名基金", url: "https://first.example.com/report/two" });
+  await upsert(repository, { ...first, eventId: "evt_unknown_source_b", title: "示例材料完成1亿元融资，扩建产线",
+    institutions: "匿名基金", url: "https://second.example.com/report/two" });
+  assert.equal(repository.database.prepare("SELECT COUNT(*) count FROM news_events").get().count, 12);
+});
+
 test("explicit joint rounds share one identity without collapsing into either individual round", async t => {
   const { repository } = fixture(t);
   const first = event({ title: "示例机器人完成近10亿元C+及D轮融资", companies: "示例机器人" });
@@ -152,7 +204,7 @@ test("joint-round parser declines alternatives, history and incomplete round lis
     "示例机器人此前完成C+及D轮融资，现完成E轮融资",
     "示例机器人完成D轮融资，曾经完成C+轮及D轮融资",
     "示例机器人计划完成C+及D轮融资", "示例机器人完成C+及D轮融资，E轮同步启动",
-    "示例机器人完成天使轮及A轮融资", "Anonymous raises Series C+ and D funding"
+    "示例机器人完成未披露轮次融资", "Anonymous raises Series C+ and D funding"
   ]) assert.equal(fundingRound(title), null, title);
 });
 

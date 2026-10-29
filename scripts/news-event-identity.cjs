@@ -27,25 +27,28 @@ function fundingRound(title) {
   const financingIndex = text.search(/融资|FUNDING|FINANCING|RAISE[DS]?\b/);
   if (financingIndex < 0) return null;
   const financingLead = text.slice(0, financingIndex);
+  const token = "(?:PRE[\\s-]*)?(?:天使|种子|首|[A-Z](?:-?\\d{1,2})?)\\+*";
+  const roundIdentity = round => round.replace(/[\s-]+/g, "")
+    .replace("天使", "ANGEL").replace("种子", "SEED").replace("首", "FIRST");
   // Historical comparisons, planned rounds and slash alternatives are not joint announcements.
-  if (/此前|曾经|去年|上轮|历史|对比|相比|[A-Z]\+?\s*\/\s*[A-Z]/.test(text)
+  if (/此前|曾经|去年|上轮|历史|对比|相比/.test(text)
+    || new RegExp(`${token}\\s*/\\s*${token}`).test(text)
     || /计划|拟|将|继|\b(?:PLANS?|PLANNED|INTENDS?|WILL)\b/.test(financingLead)) return null;
-  const token = "(?:PRE[\\s-]*)?[A-Z](?:-?\\d{1,2})?\\+{0,2}";
   const jointPattern = new RegExp(`(?:^|[^A-Z0-9])(${token}(?:\\s*轮)?(?:\\s*[及与和、]\\s*${token}(?:\\s*轮)?)+\\s*(?:两轮|三轮|轮))`, "g");
   const joint = [...text.matchAll(jointPattern)];
-  const rounds = [...text.matchAll(/(?:^|[^A-Z0-9])((?:PRE[\s-]*)?[A-Z](?:-?\d{1,2})?\+{0,2})\s*轮/g),
-    ...text.matchAll(/\bSERIES\s+((?:PRE[\s-]*)?[A-Z](?:-?\d{1,2})?\+{0,2})(?![A-Z0-9+-])/g)]
-    .map(match => match[1].replace(/[\s-]+/g, ""));
+  const rounds = [...text.matchAll(new RegExp(`(?:^|[^A-Z0-9])(${token})\\s*轮`, "g")),
+    ...text.matchAll(new RegExp(`\\bSERIES\\s+(${token})(?![A-Z0-9+-])`, "g"))]
+    .map(match => roundIdentity(match[1]));
   if (joint.length) {
     if (joint.length !== 1 || /系列|多轮|数轮/.test(financingLead)) return null;
     const explicit = [...new Set(joint[0][1].match(new RegExp(token, "g"))
-      .map(round => round.replace(/[\s-]+/g, "")))].sort();
+      .map(roundIdentity))].sort();
     // A partial list plus another round elsewhere may be a recap of different transactions.
     if (explicit.length < 2 || rounds.some(round => !explicit.includes(round))) return null;
     return `${explicit.join("&")}:combined`;
   }
   if (/多轮|数轮|连续/.test(financingLead)
-    || /轮\s*[及与和、]|[A-Z](?:-?\d+)?\+?\s*[、/及与和]\s*[A-Z]/.test(text)) return null;
+    || /轮\s*[及与和、]/.test(text) || new RegExp(`${token}\\s*[、/及与和]\\s*${token}`).test(text)) return null;
   // Unparsed English combinations must not degrade to the first Series label alone.
   if (new RegExp(`\\bSERIES\\s+${token}\\s*(?:AND|&)\\s*(?:SERIES\\s+)?${token}(?![A-Z0-9+-])`).test(text)) return null;
   const unique = [...new Set(rounds)];
@@ -68,7 +71,9 @@ function articleUrl(value) {
   try {
     const url = new URL(value);
     // A feed/home page can contain many changing announcements.
-    return !/^\/(?:index\.(?:html?|php))?$/i.test(url.pathname);
+    return !/^\/(?:index\.(?:html?|php))?$/i.test(url.pathname)
+      && !/^\/(?:news|feed|rss|search)(?:\.(?:xml|rss|html?))?\/?$/i.test(url.pathname)
+      && !/^\/(?:tags?|categor(?:y|ies)|archives?)(?:\/|$)/i.test(url.pathname);
   } catch { return false; }
 }
 
@@ -80,13 +85,13 @@ function duplicateReason(input, existing) {
   const round = fundingRound(input.title), previousRound = fundingRound(existing.title);
   // One article may report multiple transactions. Different explicit rounds remain separate.
   if (round && previousRound && round !== previousRound) return null;
-  const subject = round && round === previousRound ? fundingSubject(input.title) : "";
+  const subject = fundingSubject(input.title);
   const sameFundingSubject = subject && subject === fundingSubject(existing.title);
   if (url && articleUrl(input.url) && url === canonicalUrl(existing.url) && (sameEntities || sameFundingSubject
     || (!currentEntities.length && !previousEntities.length && sameTitle))) return "same_source";
   if (sameEntities && round && round === previousRound) return "same_entity_funding_round";
   // Equal literal headline subjects are review candidates, not proof that legal names are aliases.
-  return sameFundingSubject ? "same_subject_funding_round" : null;
+  return sameFundingSubject && round && round === previousRound ? "same_subject_funding_round" : null;
 }
 
 function assertNoDuplicateNews(database, input, eventId, publishedAt) {

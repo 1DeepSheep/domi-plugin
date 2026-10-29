@@ -1,5 +1,10 @@
 # Changelog
 
+## 7.0.20 — 2026-10-29
+
+- Detect repeated financing announcements with angel, seed and first-round labels while preserving Pre modifiers and every plus sign as distinct round identities.
+- Flag same-article financing reports with the same explicit headline subject even when company fields differ. Keep different subjects, rounds and collection pages separate; unknown rounds across different articles still require review.
+
 ## 7.0.18 — 2026-10-22
 
 - Persist read status, follow-up decisions and freeform notes for underwater sourcing candidates, including a bounded history of user edits. Daily discovery preserves these decisions.
