@@ -86,6 +86,39 @@ test("real-file delivery uses the Codex deliverable marker and a binary channel 
   assert.match(artifactDelivery, /只有附件 API 返回成功并能以回执确认目标会话中的真实文件时/);
 });
 
+test("document previews stay separate from attachment delivery and link examples are complete", () => {
+  const previewRoute = router.split("\n").find(line => line.startsWith("| 查看／打开已生成文档 |"));
+  assert.ok(previewRoute, "existing documents need a local preview route");
+  assert.match(previewRoute, /可点击的文档链接/);
+  assert.doesNotMatch(previewRoute, /原生文件通道|发送|下载/);
+  assert.match(artifactDelivery, /本机预览入口不等于附件已发送/);
+  assert.match(artifactDelivery, /不能读取本机文件的渠道不能用本地链接代替附件/);
+  assert.match(artifactDelivery, /未归档时可链接已验证的工作区文件/);
+  assert.match(artifactDelivery, /不要猜路径或把暂存结果说成已入库/);
+  const openings = [...artifactDelivery.matchAll(/\[[^\]\n]+\]\(</g)];
+  const examples = [...artifactDelivery.matchAll(/\[[^\]\n]+\]\(<[^<>\n`]+>\)/g)].map(match => match[0]);
+  assert.ok(examples.length >= 3, "local preview examples must include notes and transcript links");
+  assert.equal(examples.length, openings.length, "all angle-bracket link examples must close with >)");
+  for (const example of examples) {
+    assert.match(example, /^\[[^\]\n]+\]\(<\/[^<>\n]+>\)/, "angle-bracket paths must close with >) before prose");
+  }
+  assert.ok(examples.some(example => /纪要 \(修订\)\.md>\)/.test(example)), "keep a valid example with spaces and parentheses");
+});
+
+test("recording completion links artifacts without exposing recovery state or successful QA", () => {
+  const completion = recordingWorkflow.split("## 九、最终报告")[1];
+  assert.ok(completion);
+  assert.match(completion, /artifact-delivery\.md/);
+  assert.match(completion, /纪要和已有完整文字稿的可点击入口/);
+  assert.match(completion, /不把状态迁移、证据索引、QA、哈希、回读日志或更新时间逐项列入正常完成反馈/);
+  assert.match(completion, /实际未完成的入库或发送必须如实说明/);
+  assert.match(artifactDelivery, /`context_ready`、`notes_non_project`、`managed`/);
+  assert.match(artifactDelivery, /`score\/projectId\/recordId`/);
+  assert.match(artifactDelivery, /用户明确索要审计／排障时再提供相关内容/);
+  assert.match(artifactDelivery, /不因此额外生成精修逐字稿/);
+  assert.match(read("skills/asr-notes/references/delivery-rules.md"), /domi-router\/references\/artifact-delivery\.md/);
+});
+
 test("artifact-producing Skills defer explicit file requests to the shared contract", () => {
   const relatedSkills = [
     "asr-notes",

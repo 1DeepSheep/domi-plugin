@@ -73,7 +73,8 @@ PLAUD 原生会议信息卡片可在正式模型任务之前，以精确 `fileId
 | 同步／查看待办事项 | `todo`，按锁定后端维护唯一账本 | `domi:todo` |
 | 读取或显式交付飞书资源 | `investment-mgmt` 守卫后采用相应 `lark-*` Skill | `feishu-knowledge-extension.md`／`delivery-channels.md` |
 | 约日程／发送 Outlook 邀请 | `schedule`，核对主题、时间、地点、参会人、发送账号与时区；仅在用户明确要求时检查冲突 | `domi:schedule` |
-| 发送／下载／查看已生成的真实文件或附件 | 校验现有 artifact，再由当前客户端的原生文件通道交付；不得重做研究来代替发送 | [真实附件交付](references/artifact-delivery.md) |
+| 查看／打开已生成文档 | 校验现有 artifact，在支持本机文件的桌面宿主给可点击的文档链接 | [文档预览与附件交付](references/artifact-delivery.md) |
+| 发送／下载已生成的真实文件或附件 | 校验现有 artifact，再由当前客户端的原生文件通道交付；不得重做研究来代替发送 | [真实附件交付](references/artifact-delivery.md) |
 | 用户明确指定“X 完成后使用 Y” | 按用户顺序编排，逐阶段验证 | 对应 Skills 与 [无损交接合同](references/lossless-handoff.md) |
 
 只读取命中工作流所列的 reference；不要预加载其他工作流。任何多阶段工作流都必须完整读取 [无损交接合同](references/lossless-handoff.md)。命中不唯一时，先读取所有可能命中的工作流 reference 比较授权和停止条件；仍有实质歧义再向用户确认，不能为节省上下文猜测。
@@ -102,7 +103,7 @@ PLAUD 原生会议信息卡片可在正式模型任务之前，以精确 `fileId
 6. 上一步未满足完成标准不得进入下一步。失败时保存 checkpoint，从失败阶段恢复；先查询回执再决定是否重试，禁止重复生成、重复建档或重复外发。
 7. 用户未要求暂停时在同一任务连续执行。任何外部写入仍按当前工作流执行查重、字段校验、授权检查和写后回读。
 
-最终答复按命中工作流报告实际完成的产物、判断、质量状态、写入结果和必要缺口。默认不展示本机绝对路径、内部记录 ID、文档 URI、Base／Wiki 标识、manifest 或逐字段审计明细；这些只用于内部恢复或用户明确要求的排障。用户要求实际文件时按 `artifact-delivery.md` 输出客户端可消费的文件引用，不把绝对路径或内部协议文本直接展示给用户。
+最终答复报告实际结果和必要缺口；有文档产物时按 [文档预览与完成反馈](references/artifact-delivery.md) 给可点击入口，发送／下载另走其真实附件流程。默认不展示本机绝对路径、内部记录 ID、文档 URI、Base／Wiki 标识、manifest 或逐字段审计明细；路径可在链接目标中使用，不裸露在正文。质量检查仍完整执行，正常通过的 QA、状态迁移和空字段不进入默认完成反馈。
 
 ## 新增工作流
 
