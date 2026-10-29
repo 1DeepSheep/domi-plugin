@@ -4,6 +4,7 @@
 
 - Detect repeated financing announcements with angel, seed and first-round labels while preserving Pre modifiers and every plus sign as distinct round identities.
 - Flag same-article financing reports with the same explicit headline subject even when company fields differ. Keep different subjects, rounds and collection pages separate; unknown rounds across different articles still require review.
+- Ignore dynamic publication meta dates from 36kr. Verify article-ID-bound state or structured article dates, and reject entries without reliable publication evidence.
 
 ## 7.0.18 — 2026-10-22
 

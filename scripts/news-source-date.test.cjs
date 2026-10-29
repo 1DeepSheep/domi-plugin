@@ -11,6 +11,11 @@ const url = "https://news.example.com/articles/one";
 const meta = date => `<html><head><meta property="article:published_time" content="${date}"></head><body>示例报道</body></html>`;
 const article = epoch => `<section class="content"><div class="article-main"><h1>示例公司融资</h1><div class="article-detail"><div class="info" data-article-publish-time="${epoch}"></div></div></div></section>`;
 const jsonld = data => `<script type="application/ld+json">${JSON.stringify(data)}</script>`;
+const publisherUrl = "https://www.36kr.com/p/1000000000000001";
+const publisherState = (itemId, publishTime) => `<script>window.initialState=${JSON.stringify({
+  articleDetail: { articleDetailData: { data: { itemId, publishTime, widgetTitle: "匿名报道" } },
+    articleRecommendData: { nextItem: { itemId: "1000000000000002", publishTime: Date.parse("2026-10-29T12:00:00+08:00") } } }
+})};</script>`;
 const event = (extra = {}) => ({ eventId: "evt_anonymous", title: "示例公司融资", publishedAt: "2025-10-23", url, summary: "历史融资事件。", ...extra });
 
 function repositoryFixture(t) {
@@ -53,6 +58,54 @@ test("equivalent offset timestamps and publisher epoch dates agree across UTC mi
   const epoch = Date.parse("2025-10-23T00:15:00+08:00") / 1000;
   assert.equal(extractPublishedDate(article(epoch), ["https://m.jiemian.com/article/100001.html"]).day, "2025-10-23");
   assert.throws(() => extractPublishedDate(meta("2025-10-23") + jsonld({ "@type": "NewsArticle", url, datePublished: "2026-10-23" }), [url]), /冲突/);
+});
+
+test("dynamic publisher meta needs URL-bound article evidence instead of a render-time date", () => {
+  const dynamicMeta = meta("2026-10-29T10:25:12+08:00");
+  const epoch = Date.parse("2026-10-24T18:50:23.717+08:00");
+  const stateScript = publisherState("1000000000000001", epoch);
+  const assignment = stateScript.replace(/^<script>|<\/script>$/g, "");
+  for (const html of [dynamicMeta, '<head><meta itemprop="datePublished" content="2026-10-29"></head>',
+    dynamicMeta + publisherState("1000000000000002", epoch),
+    dynamicMeta + `<!-- ${publisherState("1000000000000001", epoch)} -->`,
+    dynamicMeta + '<script>window.initialState={articleDetail:readCurrentDate()};</script>',
+    dynamicMeta + `<script>/*\n${assignment}\n*/</script>`,
+    dynamicMeta + '<script>const example = `\n' + assignment + '\n`;</script>',
+    dynamicMeta + stateScript.replace('<script>', '<script type="application/json">'),
+    dynamicMeta + stateScript.replace('<script>', '<script src="https://scripts.example.com/runtime.js">'),
+    dynamicMeta + stateScript.replace('<script>', '<script src>'),
+    dynamicMeta + `<script>${assignment}window.initialState.articleDetail.articleDetailData.data.publishTime=Date.now();</script>`]) {
+    assert.throws(() => extractPublishedDate(html, [publisherUrl]), { code: "DOMI_NEWS_DATE_UNVERIFIED" });
+  }
+  const verified = extractPublishedDate(dynamicMeta + publisherState("1000000000000001", epoch), [publisherUrl]);
+  assert.equal(verified.day, "2026-10-24");
+  assert.equal(verified.epoch, epoch);
+  assert.equal(verified.offset, 480);
+  assert.equal(verified.method, "36kr:article-state:publishTime");
+  const withGateway = stateScript.replace('<script>', '<script async>window.__GATEWAY_SIGN__="anonymous";');
+  assert.equal(extractPublishedDate(dynamicMeta + withGateway, [publisherUrl]).day, "2026-10-24");
+  assert.equal(extractPublishedDate(dynamicMeta + jsonld({ "@type": "NewsArticle", url: publisherUrl,
+    datePublished: "2026-10-24T18:50:00+08:00" }), [publisherUrl]).day, "2026-10-24");
+  assert.throws(() => extractPublishedDate(dynamicMeta + publisherState("1000000000000001", epoch)
+    + jsonld({ "@type": "NewsArticle", url: publisherUrl, datePublished: "2026-10-25" }), [publisherUrl]), /冲突/);
+  // The fetched page, not a redirect's original domain, determines the publisher-specific rule.
+  assert.equal(extractPublishedDate(dynamicMeta, [publisherUrl, url]).day, "2026-10-29");
+  assert.throws(() => extractPublishedDate(dynamicMeta, [url, publisherUrl]), { code: "DOMI_NEWS_DATE_UNVERIFIED" });
+});
+
+test("bound publisher state prevents dynamic dates from writing rows or Markdown", async t => {
+  const repository = repositoryFixture(t);
+  const html = meta("2026-10-29T10:25:12+08:00")
+    + publisherState("1000000000000001", Date.parse("2026-10-24T18:50:23.717+08:00"));
+  const input = event({ url: publisherUrl, publishedAt: "2026-10-29" });
+  await assert.rejects(verifyNewsSourceDate(input, null, mockPublicSource(html).options), { code: "DOMI_NEWS_DATE_MISMATCH" });
+  assert.equal(repository.listNews().length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(repository.libraryDir, "2.行业动态")), []);
+  const corrected = { ...input, publishedAt: "2026-10-24" };
+  const receipt = await verifyNewsSourceDate(corrected, null, mockPublicSource(html).options);
+  const saved = repository.upsertNews(corrected, { dateReceipt: receipt });
+  assert.equal(saved.storageReceipt.publicationDateEvidence.method, "36kr:article-state:publishTime");
+  assert.equal(saved.event.publishedAt, Date.parse(corrected.publishedAt));
 });
 
 test("independent source year mismatch and forged receipts never write a row or Markdown", async t => {
