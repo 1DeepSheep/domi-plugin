@@ -174,16 +174,20 @@ for (const relativePath of candidates) inspectCandidate(relativePath, terms);
 
 if (checkHistory) {
   try {
+    const inspectedContents = new Set();
     const commits = execFileSync("git", ["-C", root, "rev-list", "--all"], { encoding: "utf8" })
       .split(/\r?\n/)
       .filter(Boolean);
     for (const commit of commits) {
       const files = execFileSync(
         "git",
-        ["-C", root, "ls-tree", "-r", "--name-only", "-z", commit],
+        ["-C", root, "ls-tree", "-r", "-z", commit],
         { encoding: "utf8" }
       ).split("\0").filter(Boolean);
-      for (const relativePath of files) {
+      for (const entry of files) {
+        const separator = entry.indexOf("\t");
+        const relativePath = entry.slice(separator + 1);
+        const objectId = entry.slice(0, separator).split(" ")[2];
         if (relativePath.split(/[\\/]/).includes("plaud-browser")) {
           fail("Git 历史包含 PLAUD 浏览器 Profile", `${commit.slice(0, 12)}:${relativePath}`);
           continue;
@@ -195,6 +199,10 @@ if (checkHistory) {
           fail("Git 历史包含运行数据、凭据或本地配置", historyPath);
           continue;
         }
+        // Path checks run for every commit. Do not share content exemptions
+        // across renamed files, even when they point to the same Git blob.
+        const contentKey = `${relativePath}\0${objectId}`;
+        if (inspectedContents.has(contentKey)) continue;
         let content;
         try {
           const blob = execFileSync(
@@ -213,6 +221,7 @@ if (checkHistory) {
           terms,
           path.resolve(root, relativePath) === checkerPath
         );
+        inspectedContents.add(contentKey);
       }
     }
   } catch (error) {
