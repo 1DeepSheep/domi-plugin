@@ -158,6 +158,10 @@ function decodeEntities(text) {
 
 function extractPublishedDate(html, sourceUrls = []) {
   const candidates = [];
+  let documentUrl;
+  try { documentUrl = normalizedUrl(sourceUrls.at(-1)); } catch { /* No publisher-specific evidence without a verified URL. */ }
+  // This publisher's head dates can reflect render time, so they cannot prove publication.
+  const dynamicMetaPublisher = documentUrl && /(?:^|\.)36kr\.com$/i.test(documentUrl.hostname);
   const articleUrlMatches = (value) => {
     const values = Array.isArray(value) ? value : [value];
     return values.some(item => {
@@ -179,8 +183,9 @@ function extractPublishedDate(html, sourceUrls = []) {
     if (typeof raw !== "string" && typeof raw !== "number") return;
     try {
       const parsed = parseNewsDate(epoch ? Number(raw) : decodeEntities(raw));
-      // This publisher's epoch attribute represents its China-local article time.
-      if (epoch && sourceUrls.some(url => /(?:^|\.)jiemian\.com$/i.test(new URL(url).hostname))) {
+      // These publisher-bound epoch fields represent China-local article times.
+      if (epoch && (method === "36kr:article-state:publishTime"
+        || sourceUrls.some(url => /(?:^|\.)jiemian\.com$/i.test(new URL(url).hostname)))) {
         parsed.offset = 480;
         parsed.day = new Date(parsed.epoch + parsed.offset * 60_000).toISOString().slice(0, 10);
       }
@@ -205,10 +210,10 @@ function extractPublishedDate(html, sourceUrls = []) {
     if (tokens.includes("article-main")) articleMainCount += 1;
     const property = (attributes.property || attributes.name || attributes.itemprop || "").toLowerCase();
     const inHead = stack.some(entry => entry.tagName === "head");
-    if (inHead && tagName === "meta" && ["article:published_time", "og:published_time", "datepublished", "pubdate", "publication_date", "citation_publication_date", "dc.date.issued"].includes(property)) {
+    if (!dynamicMetaPublisher && inHead && tagName === "meta" && ["article:published_time", "og:published_time", "datepublished", "pubdate", "publication_date", "citation_publication_date", "dc.date.issued"].includes(property)) {
       add(attributes.content, `meta:${property}`);
     }
-    if (inHead && property === "datepublished") add(attributes.datetime || attributes.content, "itemprop:datePublished");
+    if (!dynamicMetaPublisher && inHead && property === "datepublished") add(attributes.datetime || attributes.content, "itemprop:datePublished");
     const ancestors = stack.flatMap(entry => entry.tokens);
     const recommended = [...ancestors, ...tokens].some(token => /(?:recommend|related|suggest|latest|sidebar)/.test(token));
     if (attributes["data-article-publish-time"] && tokens.includes("info")
@@ -220,6 +225,25 @@ function extractPublishedDate(html, sourceUrls = []) {
     }
   }
   if (articleMainCount === 1 && bodyCandidates.length === 1) add(bodyCandidates[0], "article-main:data-article-publish-time", true);
+  const publisherArticleId = dynamicMetaPublisher && documentUrl.pathname.match(/^\/p\/(\d+)\/?$/)?.[1];
+  if (publisherArticleId) {
+    for (const script of uncommented.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+      const type = script[1].match(/(?:^|\s)type\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+      const mime = (type?.[1] ?? type?.[2] ?? type?.[3] ?? "").trim().toLowerCase();
+      if ((mime && !["text/javascript", "application/javascript"].includes(mime)) || /(?:^|\s)src(?:\s|=|$)/i.test(script[1])) continue;
+      const source = script[2].trim();
+      const prefix = source.match(/^(?:window\.__GATEWAY_SIGN__\s*=\s*"(?:[^"\\]|\\.)*"\s*;\s*)?window\.initialState\s*=\s*(?=\{)/);
+      if (!prefix) continue;
+      try {
+        // Accept only the observed pure JSON assignment; no comments, templates or trailing code.
+        const state = JSON.parse(source.slice(prefix[0].length).replace(/;\s*$/, ""));
+        const article = state?.articleDetail?.articleDetailData?.data;
+        if (String(article?.itemId) === publisherArticleId && Number.isSafeInteger(article?.publishTime) && article.publishTime > 0) {
+          add(article.publishTime, "36kr:article-state:publishTime", true);
+        }
+      } catch { /* Unbound or invalid state cannot prove a publication date. */ }
+    }
+  }
   for (const script of uncommented.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script\s*>/gi)) {
     try {
       const visit = (value, depth = 0) => {
