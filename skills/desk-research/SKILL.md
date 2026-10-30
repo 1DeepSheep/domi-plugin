@@ -11,6 +11,8 @@ description: 一级市场（VC/PE）和二级市场（公开股票）投资的�
 
 形成或改写面向用户的研究正文前，完整读取[专业投研正文与必要归因](../domi-router/references/professional-investment-writing.md)；本任务已读过同一版本时复用。单纯检索、取数或维护内部账本时不额外加载。该规范只调整表达，不降低所选 depth 的检索、模型、全量抽取和证据门槛，也不把纪要整理扩展成研究或新增交付物。
 
+已有项目的后续补充或第三方评价，完整读取[项目补充信息](../investment-mgmt/references/project-updates.md)。以实际新增业务内容呈现，不默认重跑完整研究或重新评级；需要入库时采用 investment-mgmt。
+
 ## Codex 运行说明
 
 在 Codex 中执行时，用当前可用的联网、浏览器、金融数据和 lark-* / lark-cli 能力替代旧 Claude 工具名；任何最新新闻、上市公司数据、融资动态、法律/政策变化都必须联网核验并标注来源日期。飞书写操作遵循对应 lark skill 的权限和确认规则。
