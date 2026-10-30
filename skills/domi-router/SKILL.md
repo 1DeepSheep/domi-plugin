@@ -58,6 +58,7 @@ PLAUD 原生会议信息卡片可在正式模型任务之前，以精确 `fileId
 
 | 用户目标 | 模式与主链路 | 按需读取 |
 |---|---|---|
+| 已有项目补充信息／第三方评价／后续认知记录 | `investment-mgmt`；需要分析时叠加对应研究 Skill | [项目补充信息](../investment-mgmt/references/project-updates.md)；直接显示业务内容，不套用过程栏目 |
 | 产品叫什么／属于谁／还有哪些产品等单点事实 | 直接执行下方「简短事实查证」 | 不加载完整项目／人物研究链路 |
 | “同步这条／处理这条录音”或处理 PLAUD 未生成录音／同步录音并入库 | 先锁定 single／all 范围，再执行 `plaud → asr-notes → 条件判断 → investment-review → investment-mgmt` | [PLAUD 投资录音](references/plaud-investment-recording-workflow.md) |
 | 查看某领域最新新闻／动态／融资 | `investment-radar scan` | [行业新闻雷达](references/industry-news-radar-workflow.md) |

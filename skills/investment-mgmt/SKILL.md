@@ -16,6 +16,8 @@ description: |
 - 本地主库连接飞书不切换资料库、不自动迁移结构化表，也不要求用户手工填写 Base Token、Table ID 或固定 Wiki Space ID；但连接授权仍完整保留 Base、Wiki、Docs、Drive、IM、Contact 能力。
 - `local` 下飞书已连接时，项目／人物／PLAUD／研究工作流可围绕当前实体窄范围只读搜索 Wiki、Docs、Base 作为参考；执行前完整读取 [references/feishu-knowledge-extension.md](references/feishu-knowledge-extension.md)。创建、编辑或发送仍须本轮用户明确指令；已有 `delivery_only=feishu_doc|feishu_dm` 继续兼容，只有获得该指令时才完整读取 [references/delivery-channels.md](references/delivery-channels.md)。
 
+已有项目的补充信息、第三方评价、客户反馈和后续认知更新，先完整读取[项目补充信息](references/project-updates.md)。直接呈现新增业务内容，按授权维护既有项目摘要及唯一跟踪文档。
+
 ## 本机配置
 
 真实路径、飞书账号与文档标识属于用户运行数据，禁止写入 Skill、Git、研究正文、公开日志或诊断包。默认配置路径：
