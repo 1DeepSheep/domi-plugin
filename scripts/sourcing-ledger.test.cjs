@@ -924,3 +924,14 @@ test("CLI review and library search return persisted synthetic results through s
   assert.ok(review.snapshot.candidates[0].userState.readAt);
   assert.equal(f.ledger.snapshot().candidates[0].userState.note, "Synthetic CLI note");
 });
+
+test("deterministic input size failures do not retry unchanged inputs automatically", t => {
+  const f = fixture(t), run = f.ledger.begin();
+  f.ledger.fail({ ...run, error: "Input exceeds the maximum length of 1048576 characters." });
+  f.advance(3 * 86400000);
+  assert.equal(f.ledger.begin().reason, "input_requires_update");
+  assert.equal(f.ledger.snapshot().run.retryBlocked, true);
+  const manual = f.ledger.begin({ force: true });
+  assert.equal(manual.started, true);
+  assert.equal(manual.snapshot.run.retryBlocked, undefined);
+});

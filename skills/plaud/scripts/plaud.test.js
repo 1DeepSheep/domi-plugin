@@ -2958,3 +2958,42 @@ test('blocked recovery records cannot consume the count ahead of an eligible pre
   assert.deepEqual(reads, ['eligible']);
   assert.equal(result.results[0].outcome, 'ready');
 });
+
+test('person meeting archive verifies the actual owner, registered notes and hashes without investment scoring', () => {
+  const { DomiRepository } = require('../../../scripts/domi-repo.cjs');
+  const { artifact } = require('../../../scripts/domi-workflow.cjs');
+  const libraryDir = path.join(sandbox, 'person-archive-library');
+  const databasePath = path.join(sandbox, 'person-archive.sqlite3');
+  const config = fs.readFileSync(process.env.DOMI_CONFIG_PATH);
+  const repository = new DomiRepository({ backend: 'local', libraryDir, databasePath });
+  try {
+    fs.writeFileSync(process.env.DOMI_CONFIG_PATH, JSON.stringify({ storageBackend: 'local', localRepositoryDir: libraryDir, localDatabasePath: databasePath }));
+    const id = 'person-meeting-archive';
+    const notesPath = path.join(sandbox, `${id}.md`);
+    const quality = makeNotesQuality(id, notesPath);
+    __test.updateRecord(__test.loadState(), id, { stage: 'context_ready', transcriptPath: quality.transcriptPath });
+    __test.mark(id, 'notes_non_project', notesPath, JSON.stringify({ notesQuality: quality }));
+    const person = repository.upsertPerson({ name: '合成人物甲', organization: '示例组织' }).person;
+    const doc = repository.createDocument({ ownerType: 'person', ownerId: person.id, kind: '交流纪要',
+      canonicalDocumentId: `plaud:${id}:notes`, title: '20260101-行业交流', content: fs.readFileSync(notesPath, 'utf8') }).document;
+    const storageReceipt = { backend: 'local', entityType: 'person', personId: person.id,
+      documentUri: require('node:url').pathToFileURL(doc.path).href, libraryPath: path.dirname(person.documentPath),
+      artifacts: [artifact({ role: 'notes', path: doc.path })], recordVerified: true, documentVerified: true, filesVerified: true };
+    assert.throws(() => __test.mark(id, 'documented', '-', JSON.stringify({ storageReceipt: { ...storageReceipt, personId: 'missing' } })), /does not exist/);
+    assert.equal(__test.loadState().records[id].stage, 'notes_non_project');
+    __test.mark(id, 'documented', '-', JSON.stringify({ storageReceipt }));
+    __test.mark(id, 'managed', '-', '{}');
+    const record = __test.loadState().records[id];
+    assert.equal(record.personId, person.id);
+    assert.equal(record.score, null);
+    assert.equal(record.projectId, null);
+    const verified = spawnSync(process.execPath, [scriptPath, 'verify', id], { encoding: 'utf8', env: process.env });
+    assert.equal(verified.status, 0, verified.stderr + verified.stdout);
+    assert.equal(JSON.parse(verified.stdout).checks.notesAudit, 'passed');
+    fs.appendFileSync(doc.path, '\nchanged');
+    assert.throws(() => __test.mark(id, 'managed', '-', '{}'), /hash|changed|SHA|bytes/i);
+  } finally {
+    repository.close();
+    fs.writeFileSync(process.env.DOMI_CONFIG_PATH, config);
+  }
+});

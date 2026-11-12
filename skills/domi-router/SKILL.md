@@ -69,6 +69,7 @@ PLAUD 原生会议信息卡片可在正式模型任务之前，以精确 `fileId
 | “研究并入库／完整处理项目” | 项目 `intake`：`desk-research → investment-review → investment-mgmt` | [项目工作流](references/project-intake-workflow.md) |
 | “更新项目／补充资料或评级” | 项目 `update`：定位既有实体后只处理增量 | [项目工作流](references/project-intake-workflow.md) |
 | 创建、更新、重做、修复或美化 Slides／PPT／deck／演示文稿（包括编辑已有 PPTX） | 保留并完成对应内容 Skill，再叠加 `domi:slides`；默认生成 Morgan Stanley 投行风格 HTML + PDF，只有用户明确要求可编辑 PowerPoint／PPTX 时才额外交付 PPTX；保留原模板时仍执行 Slides 内容、字体、密度和视觉 QA | `domi:slides` 与其 `references/investment-banking-slides.md` |
+| 与已确认人物交流的纪要归档／把交流记到某人档案 | 人物纪要归档，复用人脉并登记交流文档 | [PLAUD 人物归档](references/plaud-investment-recording-workflow.md#五点一人物交流纪要归档) |
 | 找人／人物画像／公开背调 | 人物 `research`：`sourcing discover/profile`；明确要求背调才用 `background-check` | [人物工作流](references/people-intake-workflow.md) |
 | 找人并入库／更新关系与互动 | 人物 `intake/update/relationship`，开放式或批量写入先确认精确变更计划 | [人物工作流](references/people-intake-workflow.md) |
 | 同步／查看待办事项 | `todo`，按锁定后端维护唯一账本 | `domi:todo` |
