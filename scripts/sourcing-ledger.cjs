@@ -485,7 +485,8 @@ class SourcingLedger {
     const expired = value.run.status === "running" && value.run.leaseUntil <= now;
     if (expired) { run.status = "failed"; run.error = "上轮更新已中断，等待续扫。"; }
     if (value.settings.enabled) {
-      if (value.run.status === "running" && !expired) run.nextRunAt = value.run.leaseUntil;
+      if (value.run.retryBlocked) run.nextRunAt = null;
+      else if (value.run.status === "running" && !expired) run.nextRunAt = value.run.leaseUntil;
       else if (value.run.successfulDayKey === day || (value.run.attemptDay === day && value.run.attempts >= MAX_DAILY_ATTEMPTS)) run.nextRunAt = nextDailyAt(now, value.settings.localHour);
       else if (value.run.retryAt) run.nextRunAt = value.run.retryAt;
       else run.nextRunAt = Date.parse(`${day}T${String(value.settings.localHour).padStart(2, "0")}:00:00+08:00`);
@@ -594,6 +595,7 @@ class SourcingLedger {
       const day = dayKey(now), previous = value.run;
       if (previous.status === "running" && previous.leaseUntil > now) return { started: false, reason: "busy" };
       if (!input.force && !value.settings.enabled) return { started: false, reason: "disabled" };
+      if (!input.force && previous.retryBlocked) return { started: false, reason: "input_requires_update" };
       if (focusConfigured(value) && !(value.focuses || []).some(focus => focus.enabled)) return { started: false, reason: value.focuses?.length ? "focuses_paused" : "focuses_empty", error: "当前没有启用的关注对象，请先添加或启用至少一个关注对象。" };
       if (!input.force && previous.successfulDayKey === day) return { started: false, reason: "already_updated" };
       if (!input.force && previous.retryAt > now) return { started: false, reason: "backoff" };
@@ -708,7 +710,10 @@ class SourcingLedger {
     return this.transaction((value, now) => {
       const run = this.active(value, input, now);
       run.status = "failed"; run.error = text(input.error).slice(0, 2000) || "本轮搜索未完成，请稍后重试。";
-      run.retryAt = now + RETRY_MS;
+      if (/maximum length|安全输入长度|input.{0,30}(too (large|long)|exceed)/i.test(run.error)) {
+        run.retryBlocked = true;
+        delete run.retryAt;
+      } else run.retryAt = now + RETRY_MS;
       delete run.leaseToken; delete run.receipt; delete run.leaseUntil;
     });
   }

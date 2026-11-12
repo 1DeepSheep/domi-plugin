@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { artifact, verifyArtifact, evidenceCheck } = require('../../../scripts/domi-workflow.cjs');
 const { createMeetingContextStore } = require('./meeting-context.cjs');
+const { verifyPersonNotesArchive } = require('../../../scripts/person-notes-archive.cjs');
 
 const {
   BROWSER_SPECS,
@@ -512,15 +513,17 @@ function verify(fileId) {
   }
   const checks = { notesAudit: 'not_required', reviewAudit: 'not_required', discussionAudit: 'not_required' };
   try {
-    if (['notes_project', 'reviewed', 'documented', 'managed'].includes(record.stage)) {
+    const personArchive = record.storageReceipt?.entityType === 'person';
+    if (['notes_project', 'reviewed', 'documented', 'managed'].includes(record.stage) && !personArchive) {
       validateStoredNotesAudit(record);
       checks.notesAudit = record.notesQuality ? 'passed' : 'legacy-unverified';
     }
-    if (record.stage === 'notes_non_project') {
+    if (record.stage === 'notes_non_project' || personArchive) {
       if (record.notesQuality) validateStoredNotesQuality(record);
       checks.notesAudit = record.notesQuality ? 'passed' : 'legacy-unverified';
     }
-    if (['reviewed', 'documented', 'managed'].includes(record.stage)) {
+    if (personArchive && ['documented', 'managed'].includes(record.stage)) verifyPersonNotesArchive(record);
+    if (['reviewed', 'documented', 'managed'].includes(record.stage) && !personArchive) {
       validateStoredReviewAudit(record);
       checks.reviewAudit = 'passed';
     }
@@ -1497,12 +1500,14 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
       oneDrivePath: null,
       recordId: null,
       projectId: null,
+      personId: null,
       storageReceipt: null,
       action: null,
     };
   }
   if (stage === 'notes_non_project') {
-    if (!['context_ready', 'notes_project', 'notes_non_project'].includes(previous.stage)) {
+    if (!['context_ready', 'notes_project', 'notes_non_project'].includes(previous.stage)
+      && !(previous.storageReceipt?.entityType === 'person' && ['documented', 'managed'].includes(previous.stage))) {
       throw new Error(`notes_non_project requires previous stage context_ready, notes_project, or notes_non_project; current stage is ${previous.stage || 'unset'}`);
     }
     resolvedArtifactPath = resolveArtifactFile(artifactPath, stage);
@@ -1522,6 +1527,7 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
       oneDrivePath: null,
       recordId: null,
       projectId: null,
+      personId: null,
       storageReceipt: null,
       action: null,
       archiveError: null,
@@ -1591,10 +1597,19 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
     };
   }
   const candidate = { ...previous, ...metadata, stage };
+  const personArchive = candidate.storageReceipt?.entityType === 'person';
   if (stage === 'documented') {
-    if (!['reviewed', 'documented'].includes(previous.stage)) {
+    if (!['reviewed', 'documented'].includes(previous.stage)
+      && !(personArchive && previous.stage === 'notes_non_project')) {
       throw new Error(`documented requires previous stage reviewed or documented retry; current stage is ${previous.stage || 'unset'}`);
     }
+    if (personArchive) {
+      if (previous.stage !== 'notes_non_project' && previous.storageReceipt?.entityType !== 'person') {
+        throw new Error('Person archive must originate from audited non-project notes');
+      }
+      validateStoredNotesQuality(candidate);
+      metadata = { ...metadata, personId: verifyPersonNotesArchive(candidate), archiveError: null };
+    } else {
     validateStoredNotesAudit(candidate);
     validateStoredReviewAudit(candidate);
     if (candidate.storageReceipt?.backend === 'local') {
@@ -1628,16 +1643,23 @@ function mark(fileId, stage, artifactPath, metadataRaw) {
     } else {
       throw new Error(`documented does not support storageReceipt backend: ${candidate.storageReceipt.backend || 'unset'}`);
     }
+    }
     metadata = { ...metadata, archiveError: null };
   }
   if (stage === 'managed') {
     if (!['documented', 'managed'].includes(previous.stage)) {
       throw new Error(`managed requires previous stage documented or managed retry; current stage is ${previous.stage || 'unset'}`);
     }
+    if (personArchive) {
+      if (previous.storageReceipt?.entityType !== 'person') throw new Error('Person archive binding cannot change during managed');
+      validateStoredNotesQuality(candidate);
+      metadata = { ...metadata, personId: verifyPersonNotesArchive(candidate) };
+    } else {
     validateStoredNotesAudit(candidate);
     validateStoredReviewAudit(candidate);
     if (!candidate.recordId && !candidate.projectId && !candidate.storageReceipt?.projectId) {
       throw new Error('managed requires metadata field: recordId or projectId');
+    }
     }
     metadata = { ...metadata, archiveError: null };
   }

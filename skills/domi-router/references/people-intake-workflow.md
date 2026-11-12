@@ -12,6 +12,8 @@
 - `repositoryBackend=legacy_feishu_primary`：完整读取 `investment-mgmt/references/legacy-feishu-primary.md`，按“人脉库与交流文档”分支使用既有人脉 Base 与飞书交流文档；本文件中所有本地网关写入和目录创建均跳过；
 - `research` mode 在两个分支都保持零内部写入。
 
+交流纪要归档遵循 [PLAUD 人物归档](plaud-investment-recording-workflow.md#五点一人物交流纪要归档)。已确认的实际交流人在纪要归档授权内可以复用或创建最小人脉档案，保存纪要与互动事实；不套用开放式找人或公开背景研究的二次确认流程。用户身份确认和同名消歧要求仍有效。
+
 ## 一、模式与授权边界
 
 | Mode | 触发 | 允许动作 |
