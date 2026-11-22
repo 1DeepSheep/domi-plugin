@@ -2004,6 +2004,73 @@ function recordingClient() {
     terminateBrowser: async () => {} });
 }
 
+const workspaceRecordings = '/file-app/v4/recordings/all';
+
+async function workspaceListClient() {
+  const client = recordingClient();
+  const request = recordingRequest({}, workspaceRecordings);
+  client.observeRecordingRequest(request);
+  await client.observeRecordingResponse(recordingResponse(request, { status: 0, data: { items: [], next_cursor: null } }));
+  assert.equal(client.recordingAuthorizationReady, true);
+  return client;
+}
+
+test('workspace list uses recording dates, preserves status and follows cursors across overlapping pages', async () => {
+  const client = await workspaceListClient();
+  const row = (id, status) => ({ file_id: id, name: id, created_at_show_ms: 10000, updated_at_show_ms: 20000,
+    duration_ms: 3000, file_transcription_status: status });
+  const rows = [row('a', -1800010), row('b', 1), row('c', null), row('d', 0)];
+  const cursors = [];
+  client.api = async pathname => {
+    const url = new URL(pathname, 'https://example.invalid');
+    assert.equal(url.pathname, workspaceRecordings);
+    assert.equal(url.searchParams.get('sort_by'), 'created');
+    assert.equal(url.searchParams.get('sort_order'), 'desc');
+    const cursor = url.searchParams.get('cursor');
+    cursors.push(cursor);
+    return { status: 200, body: { status: 0, data: cursor
+      ? { items: rows.slice(1), next_cursor: null } : { items: rows.slice(0, 2), next_cursor: 'next' } } };
+  };
+  const files = await client.listFiles({ skip: 1, limit: 3 });
+  assert.deepEqual(cursors, [null, 'next']);
+  assert.deepEqual(files.map(f => [f.id, f.is_trans, f.wait_pull]), [['b', true, false], ['c', false, false], ['d', false, true]]);
+  assert.equal(files[0].start_time, 10000);
+  assert.equal(files[0].edit_time, 20);
+  assert.equal(files[0].duration, 3000);
+});
+
+test('workspace list rejects unrelated data, malformed pages and stalled cursors', async () => {
+  const client = recordingClient();
+  for (const route of [workspaceRecordings, '/some/other/list']) {
+    const req = recordingRequest({}, route);
+    client.observeRecordingRequest(req);
+    await client.observeRecordingResponse(recordingResponse(req, { status: 0, data: { items: [{name: 'no id'}] } }));
+    assert.equal(client.recordingAuthorizationReady, false);
+  }
+  const ready = await workspaceListClient();
+  for (const data of [{items: null}, {items: [], next_cursor: 'same'}]) {
+    ready.api = async () => ({ status: 200, body: { status: 0, data } });
+    await assert.rejects(ready.listFiles(), { code: 'PLAUD_RESPONSE_INVALID' });
+  }
+});
+
+test('workspace transcript recovery binds the exact recording and selects its original transcript', async () => {
+  const client = await workspaceListClient();
+  const detail = { meta: { file_id: 'meeting', duration: 60000 }, node: { name: 'Fixture' },
+    objects: [{object_type: 'AUDIO'}, {object_type: 'POLISHED_TRANSCRIPT'},
+      {object_type: 'TRANSCRIPT', content_url: 'https://example.invalid/transcript', task_status: 1}],
+    task: {in_progress_tasks: []} };
+  client.api = async pathname => {
+    assert.equal(pathname, '/file-app/v4/files/detail/meeting');
+    return {status: 200, body: {status: 0, data: detail}};
+  };
+  const result = await client.getFileDetail('meeting');
+  assert.equal(result.file_name, 'Fixture');
+  assert.deepEqual(result.content_list.map(o => [o.data_type, o.data_link]), [['transaction', 'https://example.invalid/transcript']]);
+  detail.meta.file_id = 'other';
+  await assert.rejects(client.getFileDetail('meeting'), {code: 'PLAUD_RESPONSE_INVALID'});
+});
+
 test('real init waits for a successful native recording response and adopts its complete context', async () => {
   const context = new EventEmitter();
   let navigated, finishRecording;

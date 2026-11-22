@@ -35,6 +35,18 @@ const CAPTURED_HEADER_KEYS = [
   'app-platform',
   'edit-from',
 ];
+const LEGACY_RECORDING_LIST = '/file/simple/web';
+const WORKSPACE_RECORDING_LIST = '/file-app/v4/recordings/all';
+
+function validRecordingListResponse(pathname, body) {
+  if (body?.status !== 0) return false;
+  if (pathname === LEGACY_RECORDING_LIST) return Array.isArray(body.data_file_list);
+  if (pathname !== WORKSPACE_RECORDING_LIST) return false;
+  const items = body.data?.items;
+  return Array.isArray(items) && items.every(file => typeof file?.file_id === 'string' && file.file_id.length > 0
+    && typeof file.name === 'string');
+}
+
 const API_HOST_RE = /^api(?:[-.][a-z0-9-]+)?\.plaud\.ai$/i;
 const API_DIAGNOSTIC_ROUTE_SEGMENTS = new Set([
   'api', 'v1', 'v2', 'v3', 'v4', 'auth', 'account', 'user', 'users', 'file', 'files', 'ai',
@@ -1271,7 +1283,8 @@ class PlaudClient {
       diagnostic.requests += 1;
       this.nativeApiDiagnosticRequests.set(request, diagnostic);
     }
-    if (request.method() !== 'GET' || new URL(request.url()).pathname !== '/file/simple/web') return;
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' || (pathname !== LEGACY_RECORDING_LIST && pathname !== WORKSPACE_RECORDING_LIST)) return;
     this.sessionProbe.recordingRequests += 1;
     if (!headers.authorization) return;
     const snapshot = { authorization: headers.authorization };
@@ -1344,12 +1357,13 @@ class PlaudClient {
     const body = await beforeDeadline(() => response.json(), deadlineAt);
     if (Number.isSafeInteger(body?.status)) this.sessionProbe.apiStatus = body.status;
     if (diagnostic && Number.isSafeInteger(body?.status)) diagnostic.apiStatus = body.status;
-    if (body?.status !== 0 || !Array.isArray(body.data_file_list)
+    if (!validRecordingListResponse(new URL(request.url()).pathname, body)
       || this.closePromise || candidate.epoch !== this.recordingCredentialEpoch
       || candidate.sequence < this.acceptedRecordingRequestSequence) return;
     assertBeforeDeadline(deadlineAt);
     // A successful native recording response proves this exact credential,
     // origin and header context. Generic account requests cannot overwrite it.
+    this.recordingListPath = new URL(request.url()).pathname;
     this.headers = candidate.headers;
     this.authorization = candidate.headers.authorization;
     this.apiBase = candidate.origin;
@@ -1809,8 +1823,53 @@ class PlaudClient {
     }
   }
 
-  async listFiles({ limit = 20, skip = 0, sortBy = 'edit_time', desc = true, isTrash = 0, ...options } = {}) {
-    const query = `?skip=${skip}&limit=${limit}&is_trash=${isTrash}&sort_by=${sortBy}&is_desc=${desc ? 'true' : 'false'}`;
+  async listWorkspaceRecordings(limit, skip, sortBy, desc, options) {
+    const deadlineAt = boundedDeadline(this, options, this.readTimeoutMs || 30000);
+    const files = new Map();
+    const cursors = new Set();
+    let cursor = '';
+    do {
+      assertBeforeDeadline(deadlineAt);
+      const query = new URLSearchParams({
+        sort_by: sortBy,
+        sort_order: desc ? 'desc' : 'asc',
+        page_size: '300',
+      });
+      if (cursor) query.set('cursor', cursor);
+      const res = await this.api(WORKSPACE_RECORDING_LIST + '?' + query, { ...options, deadlineAt });
+      if (res.status !== 200 || res.body?.status !== 0) throw plaudApiError('List recordings failed', res);
+      if (!validRecordingListResponse(WORKSPACE_RECORDING_LIST, res.body)) {
+        throw plaudError('PLAUD_RESPONSE_INVALID', 'PLAUD 录音列表格式未能确认。', { retryable: false });
+      }
+      for (const file of res.body.data.items) {
+        files.set(file.file_id, {
+          id: file.file_id,
+          filename: file.name,
+          duration: file.duration_ms,
+          start_time: file.created_at_show_ms,
+          edit_time: Number.isFinite(file.updated_at_show_ms) ? Math.floor(file.updated_at_show_ms / 1000) : null,
+          is_trans: file.file_transcription_status === 1,
+          is_summary: file.is_summary === true,
+          wait_pull: file.file_transcription_status === 0,
+        });
+      }
+      cursor = res.body.data.next_cursor;
+      if (!cursor || files.size >= skip + limit) break;
+      if (typeof cursor !== 'string' || cursors.has(cursor)) {
+        throw plaudError('PLAUD_RESPONSE_INVALID', 'PLAUD 录音列表翻页未前进。', { retryable: false });
+      }
+      cursors.add(cursor);
+    } while (cursor);
+    return [...files.values()].slice(skip, skip + limit);
+  }
+
+  async listFiles({ limit = 20, skip = 0, sortBy, desc = true, isTrash = 0, ...options } = {}) {
+    if (this.recordingListPath === WORKSPACE_RECORDING_LIST && !isTrash) {
+      // The workspace's recent-recordings view defaults to recording date.
+      const workspaceSort = ({ edit_time: 'updated', start_time: 'created', create_time: 'created' })[sortBy] || sortBy || 'created';
+      return this.listWorkspaceRecordings(limit, skip, workspaceSort, desc, options);
+    }
+    const query = `?skip=${skip}&limit=${limit}&is_trash=${isTrash}&sort_by=${encodeURIComponent(sortBy || 'edit_time')}&is_desc=${desc ? 'true' : 'false'}`;
     const res = await this.api(`/file/simple/web${query}`, options);
     if (res.status !== 200 || !res.body || res.body.status !== 0) {
       throw plaudApiError('List files failed', res);
@@ -1820,11 +1879,30 @@ class PlaudClient {
   }
 
   async getFileDetail(fileId, options = {}) {
-    const res = await this.api(`/file/detail/${fileId}`, options);
+    const workspace = this.recordingListPath === WORKSPACE_RECORDING_LIST;
+    const endpoint = workspace ? '/file-app/v4/files/detail/' : '/file/detail/';
+    const res = await this.api(endpoint + encodeURIComponent(fileId), options);
     if (res.status !== 200 || !res.body || res.body.status !== 0) {
       throw plaudApiError('Get file detail failed', res);
     }
-    return res.body.data;
+    const detail = res.body.data;
+    if (!workspace) return detail;
+    if (detail?.meta?.file_id !== fileId || typeof detail.node?.name !== 'string' || !Array.isArray(detail.objects)) {
+      throw plaudError('PLAUD_RESPONSE_INVALID', 'PLAUD 录音详情与请求的录音不匹配或格式不完整。', { retryable: false });
+    }
+    const types = { TRANSCRIPT: 'transaction', SUMMARY: 'auto_sum_note' };
+    return {
+      file_id: fileId,
+      file_name: detail.node.name,
+      duration: detail.meta.duration,
+      wait_pull: detail.task?.in_progress_tasks?.length ? 1 : 0,
+      content_list: detail.objects.filter(o => o && Object.hasOwn(types, o.object_type)).map(o => ({
+        data_type: types[o.object_type],
+        data_link: o.content_url,
+        task_status: o.task_status,
+        extra: o.extra,
+      })),
+    };
   }
 
   async listTags(options = {}) {
@@ -1937,6 +2015,12 @@ class PlaudClient {
   }
 
   async listStatuses({ limit = 20, skip = 0 } = {}) {
+    if (this.recordingListPath === WORKSPACE_RECORDING_LIST) {
+      const files = await this.listFiles({ limit, skip });
+      const statuses = [];
+      for (const file of files) statuses.push(this.summarizeStatus(await this.getFileDetail(file.id)));
+      return statuses;
+    }
     const [files, tags, tasks] = await Promise.all([
       this.listFiles({ limit, skip }),
       this.listTags(),
@@ -1976,6 +2060,9 @@ class PlaudClient {
       error.code = 'PLAUD_TRANSCRIPT_NOT_READY';
       error.remoteProcessing = Boolean(detail.wait_pull || detail.content_list.some(item => item.task_status === 0));
       throw error;
+    }
+    if (!transcriptMeta.data_link) {
+      throw plaudError('PLAUD_TRANSCRIPT_EMPTY', 'PLAUD 已列出文字稿，下载链接尚未就绪。', { retryable: true });
     }
     // The same budget covers headers and the complete response body. A
     // stalled external transcript URL must not outlive the sync deadline.
